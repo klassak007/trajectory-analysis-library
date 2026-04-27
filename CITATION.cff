@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use TAL in your work, please cite it as below."
+title: "TAL: Trajectory Analysis Library"
+authors:
+  - family-names: "Lassak"
+    given-names: "Kyle"
+version: "0.1.0"
+date-released: "2026-04-26"
+license: "Apache-2.0"
+repository-code: "https://github.com/klassak007/trajectory-analysis-library"
+abstract: "TAL is a Python library for semantic analysis of trajectory-shaped data, with support for batch, sequence, core dimensions, parametric coordinates, spatial types, and frame-aware workflows."

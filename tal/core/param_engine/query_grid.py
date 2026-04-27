@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+
+import numpy as np
+import xarray as xr
+from tal.utils.xarray_namespace import dataarray_namespace_names, rename_dims_collision_safe, unique_temp_dim
+
+from .types import QueryGrid
+
+
+def _assert_query_dim_namespace_safe(
+    query: xr.DataArray,
+    *,
+    query_dim: str,
+    owner: str,
+) -> None:
+    if query_dim in query.coords and query_dim not in query.dims:
+        raise ValueError(
+            f"{owner}: query input has scalar coordinate {query_dim!r} that collides with query_dim. "
+            "Drop or rename that coordinate before param query operations."
+        )
+
+
+def _stack_to_query_dim(
+    query: xr.DataArray,
+    *,
+    query_dim: str,
+    dims: tuple[str, ...],
+) -> xr.DataArray:
+    if len(dims) == 1:
+        dim = dims[0]
+        return query if dim == query_dim else query.rename({dim: query_dim})
+    names = set(dataarray_namespace_names(query))
+    temp_dim = unique_temp_dim(f"{query_dim}__stack", taken_dims=tuple(sorted(names)))
+    names.add(temp_dim)
+    stacked = query.stack({temp_dim: list(dims)})
+    if query_dim in stacked.coords:
+        level_name = unique_temp_dim(
+            f"{query_dim}__level",
+            taken_dims=dataarray_namespace_names(stacked),
+        )
+        stacked = stacked.rename({query_dim: level_name})
+    return rename_dims_collision_safe(
+        stacked,
+        mapping={temp_dim: query_dim},
+        temp_prefix=f"{query_dim}__tmp__",
+    )
+
+
+def _as_query_dataarray(
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    *,
+    query_dim: str,
+) -> tuple[xr.DataArray, tuple[str, ...] | None]:
+    owner = "normalize_query_grid"
+    if isinstance(query, xr.DataArray):
+        _assert_query_dim_namespace_safe(
+            query,
+            query_dim=query_dim,
+            owner=owner,
+        )
+        try:
+            q = query.astype("float64")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{owner}: query values must be numeric (coercible to float64)."
+            ) from exc
+        if q.ndim == 0:
+            return q.expand_dims({query_dim: [0]}), None
+        if q.ndim == 1:
+            return q, None
+        return q, None
+    try:
+        arr = np.asarray(query, dtype="float64")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{owner}: query values must be numeric (coercible to float64)."
+        ) from exc
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    elif arr.ndim > 1:
+        raise ValueError(
+            "normalize_query_grid: unlabeled numpy query with ndim > 1 is ambiguous. "
+            "Pass an xr.DataArray with explicit dims."
+        )
+    return xr.DataArray(arr, dims=[query_dim]), None
+
+
+def _normalize_unbatched_query(
+    query: xr.DataArray,
+    *,
+    query_dim: str,
+) -> tuple[xr.DataArray, tuple[str, ...] | None]:
+    if query.ndim == 0:
+        return query.expand_dims({query_dim: [0]}), None
+    dims = tuple(query.dims)
+    return _stack_to_query_dim(query, query_dim=query_dim, dims=dims), (dims if len(dims) > 1 else None)
+
+
+def _check_partial_batch_dims(
+    query: xr.DataArray,
+    *,
+    batch_dims: tuple[str, ...],
+) -> tuple[str, ...]:
+    present = tuple(dim for dim in batch_dims if dim in query.dims)
+    if not present or len(present) == len(batch_dims):
+        return present
+    missing = [dim for dim in batch_dims if dim not in query.dims]
+    raise ValueError(
+        "normalize_query_grid: query includes a partial batch topology; "
+        f"present={list(present)!r}, missing={missing!r}. "
+        "Provide all batch_dims or none."
+    )
+
+
+def _assert_unique_axis_labels(
+    da: xr.DataArray,
+    *,
+    dim: str,
+    owner: str,
+) -> None:
+    if dim not in da.dims:
+        return
+    index = da.get_index(dim)
+    if bool(getattr(index, "is_unique", True)):
+        return
+    raise ValueError(
+        f"{owner}: labels along {dim!r} must be unique. "
+        "Provide unique coordinate labels on query-aligned axes."
+    )
+
+
+def _validate_query_axis_labels(
+    query: xr.DataArray,
+    *,
+    query_dim: str,
+    batch_dims: tuple[str, ...],
+    owner: str,
+) -> None:
+    for dim in (query_dim, *batch_dims):
+        _assert_unique_axis_labels(query, dim=dim, owner=owner)
+
+
+def _validate_batch_indexer_topology(
+    indexer: xr.DataArray,
+    *,
+    dim: str,
+    owner: str,
+) -> None:
+    if tuple(indexer.dims) != (dim,):
+        raise ValueError(
+            f"{owner}: batch_coords[{dim!r}] must be a 1-D DataArray indexed by {dim!r}."
+        )
+    _assert_unique_axis_labels(indexer, dim=dim, owner=owner)
+
+
+def _normalize_batched_query(
+    query: xr.DataArray,
+    *,
+    query_dim: str,
+    batch_dims: tuple[str, ...],
+) -> tuple[xr.DataArray, tuple[str, ...] | None]:
+    if not batch_dims:
+        return _normalize_unbatched_query(query, query_dim=query_dim)
+    present = _check_partial_batch_dims(query, batch_dims=batch_dims)
+    if not present:
+        return _normalize_unbatched_query(query, query_dim=query_dim)
+    qdims = [dim for dim in query.dims if dim not in batch_dims]
+    if not qdims:
+        out = query.expand_dims({query_dim: [0]})
+        return out.transpose(*batch_dims, query_dim), None
+    out = _stack_to_query_dim(query, query_dim=query_dim, dims=tuple(qdims))
+    stacked_dims = tuple(qdims) if len(qdims) > 1 else None
+    return out.transpose(*batch_dims, query_dim), stacked_dims
+
+
+def _reindex_batch_dim(
+    query: xr.DataArray,
+    *,
+    dim: str,
+    batch_coords: Mapping[str, xr.DataArray],
+) -> xr.DataArray:
+    if dim not in query.dims or dim not in batch_coords:
+        return query
+    indexer = batch_coords[dim]
+    if not isinstance(indexer, xr.DataArray):
+        raise ValueError(f"normalize_query_grid: batch_coords[{dim!r}] must be an xr.DataArray.")
+    _validate_batch_indexer_topology(
+        indexer,
+        dim=dim,
+        owner="normalize_query_grid",
+    )
+    return query.reindex({dim: indexer}, fill_value=np.nan)
+
+
+def _apply_batch_coords(
+    query: xr.DataArray,
+    *,
+    batch_dims: tuple[str, ...],
+    batch_coords: Mapping[str, xr.DataArray] | None,
+) -> xr.DataArray:
+    if not batch_coords:
+        return query
+    out = query
+    for dim in batch_dims:
+        out = _reindex_batch_dim(out, dim=dim, batch_coords=batch_coords)
+    return out
+
+
+def normalize_query_grid(
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    *,
+    query_dim: str = "query",
+    batch_dims: Sequence[str] = (),
+    batch_coords: Mapping[str, xr.DataArray] | None = None,
+    enforce_order: bool = True,
+) -> QueryGrid:
+    """Normalize query input to scalar/1d/batched query grid.
+
+    Parameters
+    ----------
+    query : xr.DataArray | np.ndarray | Sequence[float] | float
+        Query coordinate/grid used for parameter evaluation.
+    query_dim : str, optional
+        Dimension name used to resolve labeled array semantics.
+    batch_dims : Sequence[str], optional
+        Optional override for batch dimensions used by temporal semantics.
+    batch_coords : Mapping[str, xr.DataArray] | None, optional
+        Coordinate name/value used by this operation.
+    enforce_order : bool, optional
+        Behavior flag/policy controlling boundary semantics.
+
+    Returns
+    -------
+    QueryGrid
+        Result of applying this operation with TAL semantic constraints preserved.
+
+    Notes
+    -----
+    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    """
+    batch_tuple = tuple(str(dim) for dim in batch_dims)
+    if query_dim in batch_tuple:
+        raise ValueError(
+            "normalize_query_grid: query_dim "
+            f"{query_dim!r} collides with batch_dims {list(batch_tuple)!r}."
+        )
+    base, stacked = _as_query_dataarray(query, query_dim=query_dim)
+    q, batch_stacked = _normalize_batched_query(base, query_dim=query_dim, batch_dims=batch_tuple)
+    stacked_dims = batch_stacked or stacked
+    _validate_query_axis_labels(
+        q,
+        query_dim=query_dim,
+        batch_dims=batch_tuple,
+        owner="normalize_query_grid",
+    )
+    q = _apply_batch_coords(q, batch_dims=batch_tuple, batch_coords=batch_coords)
+    if enforce_order and query_dim in q.dims:
+        lead = [dim for dim in q.dims if dim != query_dim]
+        q = q.transpose(*lead, query_dim)
+    return QueryGrid(values=q, query_dim=query_dim, stacked_dims=stacked_dims)
+
+
+__all__ = ["normalize_query_grid"]

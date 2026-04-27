@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from tal.utils.frame_schema import get_frames
+
+from .frame import is_framed, resolve_bidirectional_tip_tail_frames
+from ..metadata import get_position_intent
+
+if TYPE_CHECKING:
+    from ..position import Position
+
+
+@dataclass(frozen=True)
+class PositionAddPlan:
+    output_parent: str | None
+    output_child: str | None
+
+def _resolve_unframed_intent(
+    left: "Position",
+    right: "Position",
+    *,
+    owner: str,
+) -> PositionAddPlan:
+    left_delta = get_position_intent(left.unsafe_data, owner=owner) == "delta"
+    right_delta = get_position_intent(right.unsafe_data, owner=owner) == "delta"
+    if left_delta == right_delta:
+        raise ValueError(
+            f"{owner}: ambiguous unframed Position addition; mark exactly one operand as displacement via as_delta()."
+        )
+    return PositionAddPlan(output_parent=None, output_child=None)
+
+
+def resolve_position_add_intent(
+    left: "Position",
+    right: "Position",
+    *,
+    owner: str,
+) -> PositionAddPlan:
+    left_parent, left_child = get_frames(left.unsafe_data)
+    right_parent, right_child = get_frames(right.unsafe_data)
+    left_framed = is_framed(left_parent, left_child)
+    right_framed = is_framed(right_parent, right_child)
+
+    if left_framed and right_framed:
+        chained = resolve_bidirectional_tip_tail_frames(
+            left.unsafe_data,
+            right.unsafe_data,
+            owner=owner,
+            what="Position addition",
+        )
+        return PositionAddPlan(output_parent=chained[0], output_child=chained[1])
+    if left_framed:
+        return PositionAddPlan(output_parent=left_parent, output_child=left_child)
+    if right_framed:
+        return PositionAddPlan(output_parent=right_parent, output_child=right_child)
+    return _resolve_unframed_intent(left, right, owner=owner)
+
+
+__all__ = [
+    "PositionAddPlan",
+    "resolve_position_add_intent",
+]

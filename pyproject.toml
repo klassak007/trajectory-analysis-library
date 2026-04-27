@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tal"
+version = "0.1.0"
+description = "Xarray-native trajectory analysis with semantic roles, alignment, spatial frames, events, catalogs, and I/O."
+readme = "README.md"
+authors = [
+    { name = "Kyle Lassak" },
+]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+keywords = ["trajectory", "analysis", "robotics", "neuroscience", "timeseries", "dask", "xarray"]
+
+# Runtime dependencies. Bounds are aligned with the active `tal` conda
+# environment and the packages imported by `tal/`.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "xarray>=2025.10.0",
+    "scipy>=1.13",
+    "dask[array]>=2025.5.0",
+    "zarr>=3.1.0",
+]
+
+[project.urls]
+Homepage = "https://klassak007.github.io/trajectory-analysis-library/"
+Documentation = "https://klassak007.github.io/trajectory-analysis-library/"
+Repository = "https://github.com/klassak007/trajectory-analysis-library"
+Issues = "https://github.com/klassak007/trajectory-analysis-library/issues"
+
+# Optional dependencies
+[project.optional-dependencies]
+frames = [
+    "matplotlib>=3.10",
+    "networkx>=3.4",
+]
+viz = [
+    "holoviews>=1.22",
+    "hvplot>=0.12",
+]
+ros = ["rosbags"]
+netcdf = ["netCDF4>=1.7"]
+notebooks = [
+    "ipykernel>=6.29",
+    "jupyterlab>=4.3",
+    "nbclient>=0.10",
+    "nbformat>=5.10",
+    "matplotlib>=3.10",
+    "tal[frames,viz]",
+]
+docs = [
+    "sphinx>=9.1",
+    "myst-parser>=5.0",
+    "pydata-sphinx-theme>=0.16",
+    "sphinx-copybutton>=0.5",
+    "sphinx-autodoc-typehints>=3.6",
+]
+test = [
+    "pytest>=8.4",
+    "tal[docs,frames,viz]",
+]
+dev = [
+    "build>=1.4",
+    "tal[notebooks,test]",
+]
+full = ["tal[frames,netcdf,notebooks,ros,viz]"]
+
+# Packaging: only ship the `tal` Python package (exclude non-package top-level dirs like `contracts/`).
+[tool.setuptools.packages.find]
+include = ["tal*"]

@@ -1,0 +1,694 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import importlib
+import inspect
+from types import FunctionType
+from typing import Any
+
+
+@dataclass(frozen=True)
+class SymbolRecord:
+    symbol: str
+    kind: str
+    obj: object
+    owner_class: str | None = None
+
+
+CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
+    "core": (
+        "tal.core.analysis_object.AnalysisObject.data",
+        "tal.core.analysis_object.AnalysisObject.unsafe_data",
+        "tal.core.analysis_object.AnalysisObject.param",
+        "tal.core.analysis_object.AnalysisObject.combine",
+        "tal.core.analysis_object.AnalysisObject.events",
+        "tal.core.analysis_object.AnalysisObject.components",
+        "tal.core.analysis_object.AnalysisObject.group",
+        "tal.core.analysis_object.AnalysisObject.from_data",
+        "tal.core.analysis_object.AnalysisObject.as_dataset",
+        "tal.core.analysis_object.AnalysisObject.to_dataarray",
+        "tal.core.analysis_object.AnalysisObject.isel",
+        "tal.core.analysis_object.AnalysisObject.sel",
+        "tal.core.analysis_object.AnalysisObject.where",
+        "tal.core.analysis_object.AnalysisObject.drop_vars",
+        "tal.core.analysis_object.AnalysisObject.rename",
+        "tal.core.analysis_object.AnalysisObject.transpose",
+        "tal.core.analysis_object.AnalysisObject.set_roles",
+        "tal.core.analysis_object.AnalysisObject.set_param_coord",
+        "tal.core.analysis_object.AnalysisObject.set_validity",
+        "tal.core.analysis_object.AnalysisObject.merge_schema",
+        "tal.core.analysis_object.AnalysisObject.validate_schema",
+        "tal.core.analysis_object.AnalysisObject.a",
+        "tal.core.analysis_object.AnalysisObject.b",
+        "tal.core.analysis_object.AnalysisObject.mean",
+        "tal.core.analysis_object.AnalysisObject.sum",
+        "tal.core.analysis_object.AnalysisObject.std",
+        "tal.core.analysis_object.AnalysisObject.var",
+        "tal.core.analysis_object.AnalysisObject.median",
+        "tal.core.analysis_object.AnalysisObject.min",
+        "tal.core.analysis_object.AnalysisObject.max",
+        "tal.core.analysis_object.AnalysisObject.count",
+        "tal.core.analysis_object.AnalysisObject.any",
+        "tal.core.analysis_object.AnalysisObject.all",
+        "tal.core.param_ops.accessor.ParamAccessor.index",
+        "tal.core.param_ops.accessor.ParamAccessor.sel",
+        "tal.core.param_ops.accessor.ParamAccessor.at",
+        "tal.core.param_ops.accessor.ParamAccessor.resample_to",
+        "tal.core.param_ops.accessor.ParamAccessor.interp_like",
+        "tal.core.combine_ops.accessor.CombineAccessor.concat_batch",
+        "tal.core.combine_ops.accessor.CombineAccessor.concat_sequence",
+        "tal.core.combine_ops.accessor.CombineAccessor.merge",
+        "tal.core.combine_ops.accessor.CombineAccessor.align",
+        "tal.core.combine_ops.accessor.CombineAccessor.assemble_core",
+        "tal.core.combine_ops.accessor.CombineAccessor.stack_core",
+        "tal.core.combine_ops.accessor.CombineAccessor.block_core",
+        "tal.core.combine_ops.accessor.CombineAccessor.concat_core",
+        "tal.core.combine_ops.accessor.CombineAccessor.decompose_core",
+        "tal.core.combine_ops.accessor.CombineAccessor.overlay_core",
+        "tal.core.event_ops.accessor.EventsAccessor.mask",
+        "tal.core.event_ops.accessor.EventsAccessor.events",
+        "tal.core.event_ops.accessor.EventsAccessor.intervals",
+        "tal.core.event_ops.accessor.EventsAccessor.at_boundaries",
+        "tal.core.event_ops.accessor.EventsAccessor.when",
+        "tal.core.event_ops.accessor.EventsAccessor.around",
+        "tal.core.component_ops.accessor.ComponentsAccessor.define",
+        "tal.core.component_ops.accessor.ComponentsAccessor.registry",
+        "tal.core.component_ops.accessor.ComponentsAccessor.extract",
+        "tal.core.component_ops.accessor.ComponentsAccessor.patch",
+        "tal.core.component_ops.accessor.ComponentsAccessor.compose",
+        "tal.core.group_ops.accessor.GroupAccessor.groupby",
+        "tal.core.group_ops.accessor.GroupAccessor.groupby_bins",
+        "tal.core.group_ops.accessor.GroupedView.materialize",
+        "tal.core.group_ops.accessor.GroupedView.padded",
+        "tal.core.group_ops.accessor.GroupedView.stacked",
+        "tal.core.group_ops.accessor.GroupedView.mean",
+        "tal.core.group_ops.accessor.GroupedView.sum",
+        "tal.core.group_ops.accessor.GroupedView.std",
+        "tal.core.group_ops.accessor.GroupedView.var",
+        "tal.core.group_ops.accessor.GroupedView.median",
+        "tal.core.group_ops.accessor.GroupedView.min",
+        "tal.core.group_ops.accessor.GroupedView.max",
+        "tal.core.group_ops.accessor.GroupedView.count",
+        "tal.core.group_ops.accessor.GroupedView.any",
+        "tal.core.group_ops.accessor.GroupedView.all",
+    ),
+    "linalg": (
+        "tal.linalg.ops.add.add",
+        "tal.linalg.ops.sub.sub",
+        "tal.linalg.ops.dot.dot",
+        "tal.linalg.ops.norm.norm",
+        "tal.linalg.ops.matmul.matmul",
+        "tal.linalg.ops.solve.solve",
+        "tal.linalg.ops.inv.inv",
+        "tal.linalg.ops.pinv.pinv",
+        "tal.linalg.array.Array.set_core_dims",
+        "tal.linalg.array.Array.set_vector_axis",
+        "tal.linalg.array.Array.set_matrix_axes",
+        "tal.linalg.array.Array.as_core",
+        "tal.linalg.array.Array.axis",
+        "tal.linalg.array.Array.rc",
+        "tal.linalg.array.Array.assemble_core",
+        "tal.linalg.array.Array.stack_core",
+        "tal.linalg.array.Array.block_core",
+        "tal.linalg.array.Array.concat_core",
+        "tal.linalg.array.Array.decompose_core",
+        "tal.linalg.array.Array.overlay_core",
+        "tal.linalg.vector.Vector.dot",
+        "tal.linalg.vector.Vector.norm",
+        "tal.linalg.matrix.Matrix.T",
+        "tal.linalg.matrix.Matrix.solve",
+        "tal.linalg.matrix.Matrix.inv",
+        "tal.linalg.matrix.Matrix.pinv",
+        "tal.linalg.vector3.Vector3.from_xyz",
+        "tal.linalg.vector3.Vector3.x",
+        "tal.linalg.vector3.Vector3.y",
+        "tal.linalg.vector3.Vector3.z",
+    ),
+    "spatial": (
+        "tal.spatial.position.Position.as_delta",
+        "tal.spatial.position.Position.to_frame",
+        "tal.spatial.position.Position.express_in",
+        "tal.spatial.position.Position.differentiate",
+        "tal.spatial.position.Position.smooth",
+        "tal.spatial.rotation.Rotation.to_rep",
+        "tal.spatial.rotation.Rotation.as_quat",
+        "tal.spatial.rotation.Rotation.as_matrix",
+        "tal.spatial.rotation.Rotation.param",
+        "tal.spatial.rotation.Rotation.preferred_interpolator",
+        "tal.spatial.rotation.Rotation.compose",
+        "tal.spatial.rotation.Rotation.inverse",
+        "tal.spatial.rotation.Rotation.apply",
+        "tal.spatial.rotation.Rotation.slerp",
+        "tal.spatial.rotation.Rotation.solve_path_transform",
+        "tal.spatial.rotation.Rotation.express_in",
+        "tal.spatial.pose.Pose.from_components",
+        "tal.spatial.pose.Pose.from_matrix",
+        "tal.spatial.pose.Pose.decompose",
+        "tal.spatial.pose.Pose.to_rep",
+        "tal.spatial.pose.Pose.as_components",
+        "tal.spatial.pose.Pose.as_matrix",
+        "tal.spatial.pose.Pose.param",
+        "tal.spatial.pose.Pose.preferred_interpolator",
+        "tal.spatial.pose.Pose.compose",
+        "tal.spatial.pose.Pose.inverse",
+        "tal.spatial.pose.Pose.apply",
+        "tal.spatial.pose.Pose.solve_path_transform",
+        "tal.spatial.pose.Pose.express_in",
+        "tal.spatial.velocity.LinearVelocity.differentiate",
+        "tal.spatial.velocity.LinearVelocity.integrate",
+        "tal.spatial.velocity.LinearVelocity.smooth",
+        "tal.spatial.velocity.LinearVelocity.to_frame",
+        "tal.spatial.velocity.LinearVelocity.express_in",
+        "tal.spatial.velocity.AngularVelocity.differentiate",
+        "tal.spatial.velocity.AngularVelocity.smooth",
+        "tal.spatial.velocity.AngularVelocity.to_frame",
+        "tal.spatial.velocity.AngularVelocity.express_in",
+        "tal.spatial.velocity.Velocity.from_linear_angular",
+        "tal.spatial.velocity.Velocity.from_vector6",
+        "tal.spatial.velocity.Velocity.to_rep",
+        "tal.spatial.velocity.Velocity.as_components",
+        "tal.spatial.velocity.Velocity.as_vector6",
+        "tal.spatial.velocity.Velocity.linear",
+        "tal.spatial.velocity.Velocity.angular",
+        "tal.spatial.velocity.Velocity.differentiate",
+        "tal.spatial.velocity.Velocity.smooth",
+        "tal.spatial.velocity.Velocity.to_frame",
+        "tal.spatial.velocity.Velocity.express_in",
+        "tal.spatial.acceleration.LinearAcceleration.integrate",
+        "tal.spatial.acceleration.LinearAcceleration.smooth",
+        "tal.spatial.acceleration.LinearAcceleration.to_frame",
+        "tal.spatial.acceleration.LinearAcceleration.express_in",
+        "tal.spatial.acceleration.AngularAcceleration.integrate",
+        "tal.spatial.acceleration.AngularAcceleration.smooth",
+        "tal.spatial.acceleration.AngularAcceleration.to_frame",
+        "tal.spatial.acceleration.AngularAcceleration.express_in",
+        "tal.spatial.acceleration.Acceleration.from_linear_angular",
+        "tal.spatial.acceleration.Acceleration.from_vector6",
+        "tal.spatial.acceleration.Acceleration.to_rep",
+        "tal.spatial.acceleration.Acceleration.as_components",
+        "tal.spatial.acceleration.Acceleration.as_vector6",
+        "tal.spatial.acceleration.Acceleration.linear",
+        "tal.spatial.acceleration.Acceleration.angular",
+        "tal.spatial.acceleration.Acceleration.integrate",
+        "tal.spatial.acceleration.Acceleration.smooth",
+        "tal.spatial.acceleration.Acceleration.to_frame",
+        "tal.spatial.acceleration.Acceleration.express_in",
+        "tal.spatial.temporal.surface.differentiate",
+        "tal.spatial.temporal.surface.integrate",
+        "tal.spatial.temporal.surface.smooth",
+        "tal.spatial.path_solve.solve_pose_path_transform",
+        "tal.spatial.path_solve.solve_rotation_path_transform",
+        "tal.spatial.metadata.frame_motion.get_edge_motion_class",
+        "tal.spatial.metadata.frame_motion.set_edge_motion_class",
+        "tal.spatial.metadata.frame_motion.get_frame_inertial_status",
+        "tal.spatial.metadata.frame_motion.set_frame_inertial_status",
+        "tal.spatial.metadata.frame_motion.propagate_inertial_status",
+    ),
+    "frames": (
+        "tal.frames.registry.FrameGraph.freeze",
+        "tal.frames.registry.FrameGraph.frozen",
+        "tal.frames.registry.FrameGraph.get_frame",
+        "tal.frames.registry.FrameGraph.get_or_create_frame",
+        "tal.frames.registry.FrameGraph.reparent_frame",
+        "tal.frames.registry.FrameGraph.rename_frame",
+        "tal.frames.registry.FrameGraph.remove_frame",
+        "tal.frames.registry.Frame.parent",
+        "tal.frames.registry.Frame.children",
+        "tal.frames.registry.Frame.child",
+        "tal.frames.registry.Frame.reparent",
+        "tal.frames.registry.Frame.rename",
+        "tal.frames.registry.Frame.remove",
+        "tal.frames.topology.find_path",
+        "tal.frames.topology.fold_path",
+        "tal.frames.snapshot.snapshot_from_seeds",
+        "tal.frames.snapshot.render_snapshot_ascii",
+        "tal.frames.snapshot.snapshot_to_networkx",
+        "tal.frames.visualization.draw_frame_graph",
+    ),
+    "io": (
+        "tal.io.csv_logs.read_csv_logs",
+        "tal.io.csv_logs.write_csv_logs",
+        "tal.io.csv_logs.read_csv_logs_catalog",
+        "tal.io.ros_logs.read_ros_logs",
+        "tal.io.ros_logs.read_ros_logs_catalog",
+        "tal.io.surface.AnalysisObjectIOAccessor.to_csv",
+        "tal.io.surface.AnalysisObjectIOAccessor.to_zarr",
+        "tal.io.surface._from_csv",
+        "tal.io.surface._from_zarr",
+    ),
+    "catalog": (
+        "tal.catalog.catalog.Catalog.backend",
+        "tal.catalog.catalog.Catalog.batch_dim",
+        "tal.catalog.catalog.Catalog.group_labels",
+        "tal.catalog.catalog.Catalog.data",
+        "tal.catalog.catalog.Catalog.sel",
+        "tal.catalog.catalog.Catalog.isel",
+        "tal.catalog.catalog.Catalog.head",
+        "tal.catalog.catalog.Catalog.tail",
+        "tal.catalog.catalog.Catalog.query",
+        "tal.catalog.catalog.Catalog.extract",
+    ),
+    "viz": (
+        "tal.viz.surface.line",
+        "tal.viz.surface.scatter",
+        "tal.viz.surface.explorer",
+        "tal.viz.surface.component",
+        "tal.viz.accessor.AnalysisObjectVizAccessor.line",
+        "tal.viz.accessor.AnalysisObjectVizAccessor.scatter",
+        "tal.viz.accessor.AnalysisObjectVizAccessor.explorer",
+        "tal.viz.accessor.AnalysisObjectVizAccessor.component",
+    ),
+    "utils": (
+        "tal.utils.frame_schema.get_frames",
+        "tal.utils.frame_schema.set_frames",
+        "tal.utils.frame_ops.FramesAccessor.ids",
+        "tal.utils.frame_ops.FramesAccessor.retag",
+        "tal.utils.frame_ops.FramesAccessor.remap_ids",
+        "tal.utils.frame_ops.FramesAccessor.bind",
+        "tal.utils.frame_ops.FramesAccessor.rename_frame",
+    ),
+}
+
+CURATED_SCOPE_COUNTS: dict[str, int] = {
+    "core": 74,
+    "linalg": 30,
+    "spatial": 78,
+    "frames": 19,
+    "io": 9,
+    "catalog": 10,
+    "viz": 8,
+    "utils": 7,
+}
+
+SUPPORT_OWNER_SYMBOLS: tuple[str, ...] = (
+    "tal.core.analysis_object.AnalysisObject",
+    "tal.linalg.array.Array",
+    "tal.core.combine_ops.accessor.concat_sequence",
+    "tal.utils.frame_ops.frame_bind",
+    "tal.utils.topology_operation_families.operation_intent_support_for_operation_family",
+    "tal.utils.xarray_namespace.rename_dims_collision_safe",
+)
+
+DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "tal.core.analysis_object.AnalysisObject.from_data": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.analysis_object.AnalysisObject.set_roles": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.analysis_object.AnalysisObject.set_param_coord": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.analysis_object.AnalysisObject.set_validity": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.analysis_object.AnalysisObject.to_dataarray": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.analysis_object.AnalysisObject.b": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.analysis_object.AnalysisObject.a": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.param_ops.accessor.ParamAccessor.sel": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.param_ops.accessor.ParamAccessor.at": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.param_ops.accessor.ParamAccessor.interp_like": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.event_ops.accessor.EventsAccessor.when": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.event_ops.accessor.EventsAccessor.around": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.group_ops.accessor.GroupAccessor.groupby": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.combine_ops.accessor.concat_sequence": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.add.add": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.sub.sub": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.dot.dot": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.norm.norm": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.matmul.matmul": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.solve.solve": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.inv.inv": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.ops.pinv.pinv": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.array.Array": ("Notes",),
+    "tal.linalg.vector.Vector.dot": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.vector.Vector.norm": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.matrix.Matrix.solve": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.vector3.Vector3.from_xyz": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.spatial.position.Position.to_frame": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.spatial.rotation.Rotation.to_rep": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.spatial.pose.Pose.from_components": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.spatial.path_solve.solve_pose_path_transform": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.io.csv_logs.read_csv_logs": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.frames.topology.find_path": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.frames.snapshot.snapshot_from_seeds": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.viz.surface.line": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.catalog.catalog.Catalog.query": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.utils.frame_ops.frame_bind": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.utils.frame_schema.get_frames": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.utils.topology_operation_families.operation_intent_support_for_operation_family": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.utils.xarray_namespace.rename_dims_collision_safe": ("Parameters", "Returns", "Notes", "Examples"),
+}
+
+EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "tal.core.analysis_object.AnalysisObject.from_data": ("CORE-AO-FROM-DATA",),
+    "tal.core.analysis_object.AnalysisObject.set_roles": ("CORE-AO-SET-ROLES",),
+    "tal.core.analysis_object.AnalysisObject.as_dataset": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.isel": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.sel": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.where": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.drop_vars": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.rename": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.transpose": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.validate_schema": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.mean": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.sum": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.std": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.var": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.median": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.min": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.max": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.count": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.any": ("CORE-AO-REDUCERS",),
+    "tal.core.analysis_object.AnalysisObject.all": ("CORE-AO-REDUCERS",),
+    "tal.core.param_ops.accessor.ParamAccessor.at": ("CORE-PARAM-AT",),
+    "tal.core.param_ops.accessor.ParamAccessor.interp_like": ("CORE-PARAM-INTERP-LIKE",),
+    "tal.core.event_ops.accessor.EventsAccessor.when": ("CORE-EVENT-WHEN",),
+    "tal.core.group_ops.accessor.GroupAccessor.groupby": ("CORE-GROUP-GROUPBY",),
+    "tal.core.combine_ops.accessor.concat_sequence": ("CORE-COMBINE-CONCAT-SEQUENCE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.assemble_core": ("CORE-COMBINE-CORE-LAYOUTS",),
+    "tal.core.combine_ops.accessor.CombineAccessor.stack_core": ("CORE-COMBINE-CORE-LAYOUTS",),
+    "tal.core.combine_ops.accessor.CombineAccessor.block_core": ("CORE-COMBINE-CORE-LAYOUTS",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.registry": ("CORE-COMPONENT-REGISTRY",),
+    "tal.linalg.ops.add.add": ("LINALG-ADD",),
+    "tal.linalg.ops.sub.sub": ("LINALG-SUB",),
+    "tal.linalg.ops.dot.dot": ("LINALG-DOT",),
+    "tal.linalg.ops.norm.norm": ("LINALG-NORM",),
+    "tal.linalg.ops.matmul.matmul": ("LINALG-MATMUL",),
+    "tal.linalg.ops.solve.solve": ("LINALG-SOLVE",),
+    "tal.linalg.ops.inv.inv": ("LINALG-INV",),
+    "tal.linalg.ops.pinv.pinv": ("LINALG-PINV",),
+    "tal.linalg.array.Array.set_core_dims": ("LINALG-ARRAY-CORE-DIMS",),
+    "tal.linalg.array.Array.set_vector_axis": ("LINALG-ARRAY-CORE-DIMS",),
+    "tal.linalg.array.Array.set_matrix_axes": ("LINALG-ARRAY-CORE-DIMS",),
+    "tal.linalg.array.Array.as_core": ("LINALG-ARRAY-CORE-DIMS",),
+    "tal.linalg.array.Array.axis": ("LINALG-ARRAY-CORE-DIMS",),
+    "tal.linalg.array.Array.rc": ("LINALG-ARRAY-CORE-DIMS",),
+    "tal.linalg.array.Array.assemble_core": ("CORE-COMBINE-CORE-LAYOUTS",),
+    "tal.linalg.array.Array.stack_core": ("CORE-COMBINE-CORE-LAYOUTS",),
+    "tal.linalg.array.Array.block_core": ("CORE-COMBINE-CORE-LAYOUTS",),
+    "tal.linalg.vector3.Vector3.from_xyz": ("LINALG-VECTOR3-FROM-XYZ",),
+    "tal.spatial.position.Position.as_delta": ("SPATIAL-POSITION-BASIC",),
+    "tal.spatial.position.Position.to_frame": ("SPATIAL-POSITION-TO-FRAME",),
+    "tal.spatial.rotation.Rotation.to_rep": ("SPATIAL-ROTATION-TO-REP",),
+    "tal.spatial.rotation.Rotation.as_quat": ("SPATIAL-ROTATION-BASIC",),
+    "tal.spatial.rotation.Rotation.as_matrix": ("SPATIAL-ROTATION-BASIC",),
+    "tal.spatial.rotation.Rotation.compose": ("SPATIAL-ROTATION-BASIC",),
+    "tal.spatial.rotation.Rotation.inverse": ("SPATIAL-ROTATION-BASIC",),
+    "tal.spatial.rotation.Rotation.apply": ("SPATIAL-ROTATION-BASIC",),
+    "tal.spatial.pose.Pose.from_components": ("SPATIAL-POSE-FROM-COMPONENTS",),
+    "tal.spatial.pose.Pose.from_matrix": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.decompose": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.to_rep": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.as_components": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.as_matrix": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.compose": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.inverse": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.pose.Pose.apply": ("SPATIAL-POSE-BASIC",),
+    "tal.spatial.path_solve.solve_pose_path_transform": ("SPATIAL-PATH-SOLVE-POSE",),
+    "tal.spatial.velocity.Velocity.from_linear_angular": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.from_vector6": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.to_rep": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.as_components": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.as_vector6": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.linear": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.angular": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.from_linear_angular": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.from_vector6": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.to_rep": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.as_components": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.as_vector6": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.linear": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.acceleration.Acceleration.angular": ("SPATIAL-ACCELERATION-COMPONENTS",),
+    "tal.spatial.metadata.frame_motion.get_edge_motion_class": ("SPATIAL-FRAME-MOTION-METADATA",),
+    "tal.spatial.metadata.frame_motion.set_edge_motion_class": ("SPATIAL-FRAME-MOTION-METADATA",),
+    "tal.spatial.metadata.frame_motion.get_frame_inertial_status": ("SPATIAL-FRAME-MOTION-METADATA",),
+    "tal.spatial.metadata.frame_motion.set_frame_inertial_status": ("SPATIAL-FRAME-MOTION-METADATA",),
+    "tal.spatial.metadata.frame_motion.propagate_inertial_status": ("SPATIAL-FRAME-MOTION-METADATA",),
+    "tal.io.csv_logs.read_csv_logs": ("IO-READ-CSV-LOGS",),
+    "tal.frames.registry.FrameGraph.freeze": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.FrameGraph.get_frame": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.FrameGraph.get_or_create_frame": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.FrameGraph.reparent_frame": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.FrameGraph.rename_frame": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.FrameGraph.remove_frame": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.Frame.child": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.Frame.reparent": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.Frame.rename": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.registry.Frame.remove": ("FRAMES-GRAPH-MUTATION",),
+    "tal.frames.topology.find_path": ("FRAMES-FIND-PATH",),
+    "tal.frames.topology.fold_path": ("FRAMES-TOPOLOGY-RENDERING",),
+    "tal.frames.snapshot.snapshot_from_seeds": ("FRAMES-SNAPSHOT-FROM-SEEDS",),
+    "tal.frames.snapshot.render_snapshot_ascii": ("FRAMES-TOPOLOGY-RENDERING",),
+    "tal.frames.snapshot.snapshot_to_networkx": ("FRAMES-TOPOLOGY-RENDERING",),
+    "tal.viz.surface.line": ("VIZ-LINE",),
+    "tal.catalog.catalog.Catalog.query": ("CATALOG-QUERY",),
+    "tal.catalog.catalog.Catalog.sel": ("CATALOG-SELECTORS",),
+    "tal.catalog.catalog.Catalog.isel": ("CATALOG-SELECTORS",),
+    "tal.catalog.catalog.Catalog.head": ("CATALOG-SELECTORS",),
+    "tal.catalog.catalog.Catalog.tail": ("CATALOG-SELECTORS",),
+    "tal.utils.frame_ops.frame_bind": ("UTILS-FRAME-BIND",),
+    "tal.utils.frame_schema.get_frames": ("UTILS-FRAME-SCHEMA-GET",),
+    "tal.utils.frame_schema.set_frames": ("UTILS-FRAME-SCHEMA-SET",),
+    "tal.utils.frame_ops.FramesAccessor.ids": ("UTILS-FRAMES-ACCESSOR",),
+    "tal.utils.frame_ops.FramesAccessor.retag": ("UTILS-FRAMES-ACCESSOR",),
+    "tal.utils.frame_ops.FramesAccessor.remap_ids": ("UTILS-FRAMES-ACCESSOR",),
+    "tal.utils.frame_ops.FramesAccessor.bind": ("UTILS-FRAMES-ACCESSOR",),
+    "tal.utils.frame_ops.FramesAccessor.rename_frame": ("UTILS-FRAMES-ACCESSOR",),
+    "tal.utils.topology_operation_families.operation_intent_support_for_operation_family": (
+        "UTILS-TOPOLOGY-INTENT-SUPPORT",
+    ),
+    "tal.utils.xarray_namespace.rename_dims_collision_safe": ("UTILS-XARRAY-RENAME-DIMS",),
+}
+
+INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "tal.core.analysis_object.AnalysisObject": ("CORE-AO-FROM-DATA",),
+    "tal.core.analysis_object.AnalysisObject.combine": ("CORE-COMBINE-SURFACE",),
+    "tal.core.analysis_object.AnalysisObject.events": ("CORE-EVENT-SURFACE",),
+    "tal.core.analysis_object.AnalysisObject.components": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.analysis_object.AnalysisObject.group": ("CORE-GROUP-SURFACE",),
+    "tal.core.param_ops.accessor.ParamAccessor.index": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.accessor.ParamAccessor.sel": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.accessor.ParamAccessor.at": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.accessor.ParamAccessor.resample_to": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.accessor.ParamAccessor.interp_like": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.sync.synchronize_param": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.sync.synchronize": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.types.ParamSelectOptions": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.types.ParamEvalOptions": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.types.ParamSyncOptions": ("CORE-PARAM-SURFACE",),
+    "tal.core.event_ops.types.Condition": ("CORE-EVENT-SURFACE",),
+    "tal.core.event_ops.accessor.EventsAccessor.mask": ("CORE-EVENT-SURFACE",),
+    "tal.core.event_ops.accessor.EventsAccessor.events": ("CORE-EVENT-SURFACE",),
+    "tal.core.event_ops.accessor.EventsAccessor.intervals": ("CORE-EVENT-SURFACE",),
+    "tal.core.event_ops.accessor.EventsAccessor.at_boundaries": ("CORE-EVENT-SURFACE",),
+    "tal.core.event_ops.accessor.EventsAccessor.when": ("CORE-EVENT-SURFACE",),
+    "tal.core.event_ops.accessor.EventsAccessor.around": ("CORE-EVENT-SURFACE",),
+    "tal.core.group_ops.accessor.GroupAccessor.groupby": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupAccessor.groupby_bins": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.materialize": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.padded": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.stacked": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.mean": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.sum": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.std": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.var": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.median": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.min": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.max": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.count": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.any": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.accessor.GroupedView.all": ("CORE-GROUP-SURFACE",),
+    "tal.core.combine_ops.accessor.concat_batch": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.merge": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.align_many": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.align_pair": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.assemble_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.stack_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.block_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.concat_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.decompose_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.overlay_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.concat_batch": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.concat_sequence": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.merge": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.align": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.concat_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.decompose_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.overlay_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.BatchConcatOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.SequenceConcatOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.MergeOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.AlignOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.CoreConcatOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.CoreDecomposeOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.types.CoreOverlayOptions": ("CORE-COMBINE-SURFACE",),
+    "tal.core.component_ops.registry.define_components": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.registry.read_components": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.extract.extract_components": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.patch.patch_components": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.compose.compose_components": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.define": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.registry": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.extract": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.patch": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.compose": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.types.ComponentSpec": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.types.ComponentRegistryOptions": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.types.ComponentExtractOptions": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.types.ComponentPatchOptions": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.types.ComponentComposeOptions": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.schema.merge_schema": ("CORE-SCHEMA-UFUNCS",),
+    "tal.core.schema.validate_schema": ("CORE-SCHEMA-UFUNCS",),
+    "tal.ufuncs": ("CORE-SCHEMA-UFUNCS",),
+    "tal.linalg.array.Array.concat_core": ("LINALG-LAYOUT-SURFACE",),
+    "tal.linalg.array.Array.decompose_core": ("LINALG-LAYOUT-SURFACE",),
+    "tal.linalg.array.Array.overlay_core": ("LINALG-LAYOUT-SURFACE",),
+    "tal.linalg.matrix.Matrix.solve": ("LINALG-SOLVE",),
+    "tal.linalg.matrix.Matrix.pinv": ("LINALG-PINV",),
+    "tal.linalg.ops.matmul.matmul": ("LINALG-MATMUL",),
+    "tal.linalg.ops.solve.solve": ("LINALG-SOLVE",),
+    "tal.linalg.ops.pinv.pinv": ("LINALG-PINV",),
+    "tal.catalog.catalog.Catalog": ("CATALOG-EXTRACT",),
+    "tal.catalog.catalog.Catalog.query": ("CATALOG-EXTRACT",),
+    "tal.catalog.catalog.Catalog.extract": ("CATALOG-EXTRACT",),
+    "tal.io.csv_logs.read_csv_logs": ("IO-READ-CSV-LOGS",),
+    "tal.io.csv_logs.read_csv_logs_catalog": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.csv_logs.write_csv_logs": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.ros_logs.read_ros_logs": ("IO-ROS-OPTIONAL-SURFACE",),
+    "tal.io.ros_logs.read_ros_logs_catalog": ("IO-ROS-OPTIONAL-SURFACE",),
+    "tal.io.surface.AnalysisObjectIOAccessor.to_csv": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.surface.AnalysisObjectIOAccessor.to_zarr": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.surface._from_csv": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.surface._from_zarr": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.options.CsvIngestOptions": ("IO-READ-CSV-LOGS",),
+    "tal.io.options.CsvExportOptions": ("IO-ROUNDTRIP-SURFACE",),
+    "tal.io.options.RosIngestOptions": ("IO-ROS-OPTIONAL-SURFACE",),
+    "tal.frames.registry.Frame": ("FRAMES-API-SURFACE",),
+    "tal.frames.registry.FrameGraph": ("FRAMES-API-SURFACE",),
+    "tal.frames.registry.get_active_frame_graph": ("FRAMES-API-SURFACE",),
+    "tal.frames.registry.get_or_create_frame": ("FRAMES-API-SURFACE",),
+    "tal.frames.topology.PathStep": ("FRAMES-API-SURFACE",),
+    "tal.frames.topology.FramePath": ("FRAMES-API-SURFACE",),
+    "tal.frames.snapshot.SnapshotIssue": ("FRAMES-API-SURFACE",),
+    "tal.frames.snapshot.FrameSnapshot": ("FRAMES-API-SURFACE",),
+    "tal.frames.visualization.FrameGraphDrawOptions": ("FRAMES-API-SURFACE",),
+    "tal.frames.visualization.draw_frame_graph": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.frame_ids": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.frame_retag": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.frame_remap_ids": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.frame_rename": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.FramesAccessor.ids": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.FramesAccessor.retag": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.FramesAccessor.remap_ids": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.FramesAccessor.bind": ("FRAMES-API-SURFACE",),
+    "tal.utils.frame_ops.FramesAccessor.rename_frame": ("FRAMES-API-SURFACE",),
+    "tal.viz.options.AOVizOptions": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.surface.line": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.surface.scatter": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.surface.explorer": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.surface.component": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.accessor.AnalysisObjectVizAccessor.line": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.accessor.AnalysisObjectVizAccessor.scatter": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.accessor.AnalysisObjectVizAccessor.explorer": ("VIZ-SURFACE-ACCESSORS",),
+    "tal.viz.accessor.AnalysisObjectVizAccessor.component": ("VIZ-SURFACE-ACCESSORS",),
+}
+
+DUUNDER_FAMILY_DOC_OWNER: dict[str, tuple[str, ...]] = {
+    "tal.core.analysis_object.AnalysisObject": (
+        "Operator Families",
+        "xarray",
+        "alignment",
+    ),
+    "tal.linalg.array.Array": (
+        "Operator Families",
+        "xarray",
+        "alignment",
+    ),
+}
+
+
+def _resolve_symbol(symbol: str) -> object:
+    parts = symbol.split(".")
+    for index in range(len(parts), 0, -1):
+        module_name = ".".join(parts[:index])
+        try:
+            obj: object = importlib.import_module(module_name)
+        except Exception:
+            continue
+        try:
+            for part in parts[index:]:
+                obj = getattr(obj, part)
+        except Exception:
+            continue
+        return obj
+    raise ValueError(f"Unable to resolve symbol: {symbol}")
+
+
+def _owner_class_symbol(symbol: str) -> str | None:
+    parts = symbol.split(".")
+    if len(parts) < 3:
+        return None
+    owner = ".".join(parts[:-1])
+    try:
+        obj = _resolve_symbol(owner)
+    except Exception:
+        return None
+    if inspect.isclass(obj):
+        return owner
+    return None
+
+
+def _symbol_kind(obj: object, owner_class: str | None) -> str:
+    if inspect.isclass(obj):
+        return "class"
+    if isinstance(obj, FunctionType):
+        return "method" if owner_class is not None else "function"
+    if isinstance(obj, property):
+        return "property"
+    return "symbol"
+
+
+def iter_curated_public_symbols() -> list[SymbolRecord]:
+    records: list[SymbolRecord] = []
+    for subsystem in CURATED_SCOPE_COUNTS:
+        for symbol in CURATED_SYMBOLS_BY_SUBSYSTEM[subsystem]:
+            obj = _resolve_symbol(symbol)
+            owner_class = _owner_class_symbol(symbol)
+            records.append(SymbolRecord(symbol=symbol, kind=_symbol_kind(obj, owner_class), obj=obj, owner_class=owner_class))
+    return records
+
+
+def iter_scoped_public_symbols() -> list[SymbolRecord]:
+    records: dict[str, SymbolRecord] = {
+        record.symbol: record
+        for record in iter_curated_public_symbols()
+    }
+    for symbol in SUPPORT_OWNER_SYMBOLS:
+        obj = _resolve_symbol(symbol)
+        records[symbol] = SymbolRecord(symbol=symbol, kind="class", obj=obj, owner_class=None)
+    return [records[key] for key in sorted(records)]
+
+
+def iter_inventory_example_symbols() -> list[SymbolRecord]:
+    records: list[SymbolRecord] = []
+    for symbol in sorted(INVENTORY_EXAMPLE_REQUIRED_SYMBOLS):
+        obj = _resolve_symbol(symbol)
+        owner_class = _owner_class_symbol(symbol)
+        records.append(SymbolRecord(symbol=symbol, kind=_symbol_kind(obj, owner_class), obj=obj, owner_class=owner_class))
+    return records
+
+
+def curated_scope_counts() -> dict[str, int]:
+    return {key: len(CURATED_SYMBOLS_BY_SUBSYSTEM[key]) for key in CURATED_SCOPE_COUNTS}
+
+
+def required_example_ids() -> set[str]:
+    out: set[str] = set()
+    for ids in EXAMPLE_REQUIRED_SYMBOLS.values():
+        out.update(ids)
+    return out
+
+
+def inventory_required_example_ids() -> set[str]:
+    out: set[str] = set()
+    for ids in INVENTORY_EXAMPLE_REQUIRED_SYMBOLS.values():
+        out.update(ids)
+    return out
