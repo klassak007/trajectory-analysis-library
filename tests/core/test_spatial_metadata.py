@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 import xarray as xr
 
+import tal.spatial.metadata as spatial_metadata
+import tal.spatial.metadata.representation as representation_metadata
 from tal import AnalysisObject
 from tal.spatial import LinearVelocity, Pose, Position, Rotation
 from tal.spatial.metadata import (
@@ -18,6 +22,14 @@ from tal.utils.frame_schema import get_frames
 
 _XYZ = ("x", "y", "z")
 _QUAT = ("x", "y", "z", "w")
+
+
+def _metadata_only_dataset() -> xr.Dataset:
+    return xr.Dataset()
+
+
+def _dataset_with_rep_block(block: dict[str, object]) -> xr.Dataset:
+    return xr.Dataset(attrs={"tal": {"ext": {"spatial": {"representation": block}}}})
 
 
 def _position(values: np.ndarray) -> Position:
@@ -51,6 +63,134 @@ def _linear_velocity(values: np.ndarray) -> LinearVelocity:
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name="linear_velocity"), sequence_dim="sample", core_dims=("axis",), validate=True)
     return LinearVelocity(ao)
+
+
+@pytest.mark.parametrize(
+    ("getter_name", "expected"),
+    [
+        ("get_position_rep", "cart"),
+        ("get_rotation_rep", "quat"),
+        ("get_linear_velocity_rep", "cart"),
+        ("get_angular_velocity_rep", "cart"),
+        ("get_velocity_rep", "components"),
+        ("get_linear_acceleration_rep", "cart"),
+        ("get_angular_acceleration_rep", "cart"),
+        ("get_acceleration_rep", "components"),
+    ],
+)
+def test_spatial_hard_187_rep_getter_factory_default_parity(getter_name: str, expected: str) -> None:
+    """ID: SPATIAL_HARD_187_rep_getter_factory_default_parity."""
+    getter = getattr(representation_metadata, getter_name)
+    ds = _metadata_only_dataset()
+    assert getter(ds, owner="test") == expected
+    assert ds.attrs == {}
+
+
+@pytest.mark.parametrize(
+    "ds",
+    [
+        _metadata_only_dataset(),
+        _dataset_with_rep_block({}),
+    ],
+)
+def test_spatial_hard_188_rep_getter_factory_required_pose_parity(ds: xr.Dataset) -> None:
+    """ID: SPATIAL_HARD_188_rep_getter_factory_required_pose_parity."""
+    with pytest.raises(
+        ValueError,
+        match=r"test: tal\.ext\.spatial\.representation\.rep must be explicitly set for pose",
+    ):
+        representation_metadata.get_pose_rep(ds, owner="test")
+
+
+@pytest.mark.parametrize(
+    ("setter_name", "getter_name", "rep", "expected"),
+    [
+        ("set_position_rep", "get_position_rep", " cart ", "cart"),
+        ("set_rotation_rep", "get_rotation_rep", " matrix ", "matrix"),
+        ("set_pose_rep", "get_pose_rep", " components ", "components"),
+        ("set_linear_velocity_rep", "get_linear_velocity_rep", " cart ", "cart"),
+        ("set_angular_velocity_rep", "get_angular_velocity_rep", " cart ", "cart"),
+        ("set_velocity_rep", "get_velocity_rep", " vector6 ", "vector6"),
+        ("set_linear_acceleration_rep", "get_linear_acceleration_rep", " cart ", "cart"),
+        ("set_angular_acceleration_rep", "get_angular_acceleration_rep", " cart ", "cart"),
+        ("set_acceleration_rep", "get_acceleration_rep", " vector6 ", "vector6"),
+    ],
+)
+def test_spatial_hard_189_rep_setter_factory_roundtrip_parity(
+    setter_name: str,
+    getter_name: str,
+    rep: str,
+    expected: str,
+) -> None:
+    """ID: SPATIAL_HARD_189_rep_setter_factory_roundtrip_parity."""
+    setter = getattr(representation_metadata, setter_name)
+    getter = getattr(representation_metadata, getter_name)
+    tagged = setter(_metadata_only_dataset(), rep=rep, validate=False, owner="test")
+    assert getter(tagged, owner="test") == expected
+
+
+@pytest.mark.parametrize(
+    ("setter_name", "bad_rep", "expected"),
+    [
+        ("set_rotation_rep", "axis_angle", r"test: unsupported rotation representation 'axis_angle'"),
+        ("set_velocity_rep", "cart", r"test: unsupported velocity representation 'cart'"),
+        ("set_acceleration_rep", "cart", r"test: unsupported acceleration representation 'cart'"),
+    ],
+)
+def test_spatial_hard_190_rep_setter_factory_validation_error_parity(
+    setter_name: str,
+    bad_rep: str,
+    expected: str,
+) -> None:
+    """ID: SPATIAL_HARD_190_rep_setter_factory_validation_error_parity."""
+    setter = getattr(representation_metadata, setter_name)
+    with pytest.raises(ValueError, match=expected):
+        setter(_metadata_only_dataset(), rep=bad_rep, validate=False, owner="test")
+
+
+def test_spatial_hard_191_rep_factory_exports_and_introspection_are_stable() -> None:
+    """ID: SPATIAL_HARD_191_rep_factory_exports_and_introspection_are_stable."""
+    expected_exports = [
+        "get_acceleration_rep",
+        "get_angular_acceleration_rep",
+        "get_angular_velocity_rep",
+        "get_linear_acceleration_rep",
+        "get_linear_velocity_rep",
+        "get_pose_rep",
+        "get_position_rep",
+        "get_rotation_rep",
+        "get_velocity_rep",
+        "set_acceleration_rep",
+        "set_angular_acceleration_rep",
+        "set_angular_velocity_rep",
+        "set_linear_acceleration_rep",
+        "set_linear_velocity_rep",
+        "set_pose_rep",
+        "set_position_rep",
+        "set_rotation_rep",
+        "set_velocity_rep",
+    ]
+    assert representation_metadata.__all__ == expected_exports
+    for name in expected_exports:
+        func = getattr(representation_metadata, name)
+        assert getattr(spatial_metadata, name) is func
+        assert func.__name__ == name
+        assert func.__qualname__ == name
+        assert func.__module__ == "tal.spatial.metadata.representation"
+        assert "representation" in (func.__doc__ or "")
+
+    getter_params = list(inspect.signature(representation_metadata.get_position_rep).parameters.values())
+    setter_params = list(inspect.signature(representation_metadata.set_position_rep).parameters.values())
+    assert [(param.name, param.kind) for param in getter_params] == [
+        ("ds", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+        ("owner", inspect.Parameter.KEYWORD_ONLY),
+    ]
+    assert [(param.name, param.kind) for param in setter_params] == [
+        ("ds", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+        ("rep", inspect.Parameter.KEYWORD_ONLY),
+        ("validate", inspect.Parameter.KEYWORD_ONLY),
+        ("owner", inspect.Parameter.KEYWORD_ONLY),
+    ]
 
 
 def test_spatial_core_c4_001_relation_semantics_fields_roundtrip_for_typed_families() -> None:

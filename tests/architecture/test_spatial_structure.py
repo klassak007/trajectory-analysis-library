@@ -955,11 +955,130 @@ def test_arch_spatial_059_slice_b5_velocity_acceleration_reuse_shared_vector6_co
 def test_arch_spatial_060_slice_b5_metadata_rep_owner_expands_velocity_acceleration_rep_sets_only() -> None:
     """ID: ARCH_SPATIAL_060_slice_b5_metadata_rep_owner_expands_velocity_acceleration_rep_sets_only."""
     rep_text = Path("tal/spatial/metadata/representation.py").read_text(encoding="utf-8")
-    assert '_ALLOWED_VELOCITY_REPS = {"components", "vector6"}' in rep_text
-    assert '_ALLOWED_ACCELERATION_REPS = {"components", "vector6"}' in rep_text
-    assert '_ALLOWED_POSITION_REPS = {"cart"}' in rep_text
-    assert '_ALLOWED_ROTATION_REPS = {"quat", "matrix"}' in rep_text
-    assert '_ALLOWED_POSE_REPS = {"components", "matrix"}' in rep_text
+    assert "_VELOCITY_REP_SPEC = _RepresentationMetadataSpec(" in rep_text
+    assert "_ACCELERATION_REP_SPEC = _RepresentationMetadataSpec(" in rep_text
+    assert "_POSITION_REP_SPEC = _RepresentationMetadataSpec(" in rep_text
+    assert "_ROTATION_REP_SPEC = _RepresentationMetadataSpec(" in rep_text
+    assert "_POSE_REP_SPEC = _RepresentationMetadataSpec(" in rep_text
+    assert 'allowed=frozenset({"components", "vector6"})' in rep_text
+    assert 'allowed=frozenset({"quat", "matrix"})' in rep_text
+    assert 'allowed=frozenset({"cart"})' in rep_text
+
+
+def test_arch_spatial_168_representation_metadata_factory_single_owner() -> None:
+    """ID: ARCH_SPATIAL_168_representation_metadata_factory_single_owner."""
+    owner_path = Path("tal/spatial/metadata/representation.py")
+    owner_text = owner_path.read_text(encoding="utf-8")
+    assert "class _RepresentationMetadataSpec" in owner_text
+    assert "def _make_rep_getter(" in owner_text
+    assert "def _make_rep_setter(" in owner_text
+    for path in sorted(Path("tal/spatial").rglob("*.py")):
+        if path == owner_path:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "_RepresentationMetadataSpec" not in text
+        assert "_make_rep_getter" not in text
+        assert "_make_rep_setter" not in text
+
+
+def test_arch_spatial_169_representation_metadata_exports_remain_explicit() -> None:
+    """ID: ARCH_SPATIAL_169_representation_metadata_exports_remain_explicit."""
+    module = _module("tal/spatial/metadata/representation.py")
+    expected_getters = {
+        "get_acceleration_rep",
+        "get_angular_acceleration_rep",
+        "get_angular_velocity_rep",
+        "get_linear_acceleration_rep",
+        "get_linear_velocity_rep",
+        "get_pose_rep",
+        "get_position_rep",
+        "get_rotation_rep",
+        "get_velocity_rep",
+    }
+    expected_setters = {name.replace("get_", "set_", 1) for name in expected_getters}
+    explicit_getters: set[str] = set()
+    explicit_setters: set[str] = set()
+    all_exports: list[str] | None = None
+    for node in module.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == "__all__" and isinstance(node.value, ast.List):
+                all_exports = [elt.value for elt in node.value.elts if isinstance(elt, ast.Constant)]
+            if not isinstance(target, ast.Name) or not isinstance(node.value, ast.Call):
+                continue
+            if not isinstance(node.value.func, ast.Name):
+                continue
+            if node.value.func.id == "_make_rep_getter":
+                explicit_getters.add(target.id)
+            if node.value.func.id == "_make_rep_setter":
+                explicit_setters.add(target.id)
+    assert explicit_getters == expected_getters
+    assert explicit_setters == expected_setters
+    assert all_exports == [
+        "get_acceleration_rep",
+        "get_angular_acceleration_rep",
+        "get_angular_velocity_rep",
+        "get_linear_acceleration_rep",
+        "get_linear_velocity_rep",
+        "get_pose_rep",
+        "get_position_rep",
+        "get_rotation_rep",
+        "get_velocity_rep",
+        "set_acceleration_rep",
+        "set_angular_acceleration_rep",
+        "set_angular_velocity_rep",
+        "set_linear_acceleration_rep",
+        "set_linear_velocity_rep",
+        "set_pose_rep",
+        "set_position_rep",
+        "set_rotation_rep",
+        "set_velocity_rep",
+    ]
+
+
+def test_arch_spatial_170_representation_metadata_no_core_interpretation() -> None:
+    """ID: ARCH_SPATIAL_170_representation_metadata_no_core_interpretation."""
+    for path in sorted(Path("tal/core").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        assert "tal.ext.spatial.representation" not in text
+        assert "_RepresentationMetadataSpec" not in text
+        assert "_make_rep_getter" not in text
+        assert "_make_rep_setter" not in text
+
+
+def test_arch_spatial_171_representation_metadata_duplicate_bodies_removed() -> None:
+    """ID: ARCH_SPATIAL_171_representation_metadata_duplicate_bodies_removed."""
+    module = _module("tal/spatial/metadata/representation.py")
+    text = Path("tal/spatial/metadata/representation.py").read_text(encoding="utf-8")
+    public_rep_names = {
+        "get_acceleration_rep",
+        "get_angular_acceleration_rep",
+        "get_angular_velocity_rep",
+        "get_linear_acceleration_rep",
+        "get_linear_velocity_rep",
+        "get_pose_rep",
+        "get_position_rep",
+        "get_rotation_rep",
+        "get_velocity_rep",
+        "set_acceleration_rep",
+        "set_angular_acceleration_rep",
+        "set_angular_velocity_rep",
+        "set_linear_acceleration_rep",
+        "set_linear_velocity_rep",
+        "set_pose_rep",
+        "set_position_rep",
+        "set_rotation_rep",
+        "set_velocity_rep",
+    }
+    function_names = {node.name for node in _function_nodes(module)}
+    assert public_rep_names.isdisjoint(function_names)
+    assert "_make_rep_getter" in function_names
+    assert "_make_rep_setter" in function_names
+    assert "_ALLOWED_" not in text
+    assert "_REP_SPECS" not in text
+    assert "globals(" not in text
+    assert "__getattr__" not in text
+    assert not any(isinstance(node, ast.For) for node in module.body)
 
 
 def test_arch_spatial_061_slice_b5_spatial6_apply_paths_canonicalize_vector6_targets_before_component_extraction() -> None:
