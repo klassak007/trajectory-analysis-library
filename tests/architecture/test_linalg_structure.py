@@ -6,6 +6,17 @@ from pathlib import Path
 from ._budget import function_loc
 
 
+def _module(path: str) -> ast.Module:
+    return ast.parse(Path(path).read_text(encoding="utf-8"))
+
+
+def _class_method_names(module: ast.Module, class_name: str) -> set[str]:
+    for node in module.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return {child.name for child in node.body if isinstance(child, ast.FunctionDef)}
+    raise AssertionError(f"missing class: {class_name}")
+
+
 def test_linalg_arch_001_orchestrate_kernel_finalize_owner_split() -> None:
     """ID: LINALG_ARCH_001_orchestrate_kernel_finalize_owner_split."""
     plan = Path("tal/linalg/plan.py").read_text(encoding="utf-8")
@@ -144,7 +155,8 @@ def test_linalg_arch_011_matmul_orchestrate_finalize_thin_wrappers() -> None:
 def test_linalg_arch_012_array_is_ao_subclass_no_wrapper_storage() -> None:
     """ID: LINALG_ARCH_012_array_is_ao_subclass_no_wrapper_storage."""
     array_text = Path("tal/linalg/array.py").read_text(encoding="utf-8")
-    assert "class Array(AnalysisObject):" in array_text
+    assert "class Array(TypedAnalysisObject):" in array_text
+    assert "from ..core.typed_lifecycle import TypedAnalysisObject" in array_text
     assert "self._ao" not in array_text
     assert "def _from_ao(" not in array_text
     assert "def analysis_object(" not in array_text
@@ -278,13 +290,15 @@ def test_linalg_arch_024_typed_wrapper_invariants_enforced_on_rewrap_boundaries(
     array_text = Path("tal/linalg/array.py").read_text(encoding="utf-8")
     vector_text = Path("tal/linalg/vector.py").read_text(encoding="utf-8")
     matrix_text = Path("tal/linalg/matrix.py").read_text(encoding="utf-8")
-    assert "def _enforce_array_invariants(" in array_text
-    assert "def _from_validated(" in array_text
-    assert "def _from_unvalidated(" in array_text
-    assert "_enforce_array_invariants(owner=f\"{cls.__name__}._from_validated\")" in array_text
-    assert "_enforce_array_invariants(owner=f\"{cls.__name__}._from_unvalidated\")" in array_text
-    assert "def _enforce_array_invariants(" in vector_text
-    assert "def _enforce_array_invariants(" in matrix_text
+    lifecycle_text = Path("tal/linalg/lifecycle.py").read_text(encoding="utf-8")
+    assert "LIFECYCLE = ARRAY_LIFECYCLE" in array_text
+    assert "LIFECYCLE = VECTOR_LIFECYCLE" in vector_text
+    assert "LIFECYCLE = MATRIX_LIFECYCLE" in matrix_text
+    assert "def enforce_array_invariants(" in lifecycle_text
+    assert "def enforce_vector_invariants(" in lifecycle_text
+    assert "def enforce_matrix_invariants(" in lifecycle_text
+    assert "def _from_validated(" not in array_text
+    assert "def _from_unvalidated(" not in array_text
     assert "def _from_validated(" not in vector_text
     assert "def _from_unvalidated(" not in vector_text
     assert "def _from_validated(" not in matrix_text
@@ -668,12 +682,12 @@ def test_linalg_arch_047_vector3_owner_module_single_owner() -> None:
 def test_linalg_arch_048_vector3_invariants_enforced_on_rewrap_boundaries() -> None:
     """ID: LINALG_ARCH_048_vector3_invariants_enforced_on_rewrap_boundaries."""
     vector3_text = Path("tal/linalg/vector3.py").read_text(encoding="utf-8")
-    array_text = Path("tal/linalg/array.py").read_text(encoding="utf-8")
-    assert "def _enforce_array_invariants(" in vector3_text
+    lifecycle_text = Path("tal/linalg/lifecycle.py").read_text(encoding="utf-8")
+    assert "LIFECYCLE = VECTOR3_LIFECYCLE" in vector3_text
+    assert "def enforce_vector3_invariants(" in lifecycle_text
+    assert "def _enforce_array_invariants(" not in vector3_text
     assert "def _from_validated(" not in vector3_text
     assert "def _from_unvalidated(" not in vector3_text
-    assert "def _from_validated(" in array_text
-    assert "def _from_unvalidated(" in array_text
 
 
 def test_linalg_arch_049_result_type_treats_vector3_as_builtin_not_custom_left_wins() -> None:
@@ -950,3 +964,35 @@ def test_linalg_arch_065_lstsq_kernel_stopgap_routes_through_backend_owner() -> 
     assert "lstsq_solution_backend" in lstsq_section
     assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
     assert "def lstsq_solution_backend(" in backend_text
+
+
+def test_linalg_arch_067_linalg_classes_do_not_duplicate_lifecycle_methods() -> None:
+    """ID: LINALG_ARCH_067_linalg_classes_do_not_duplicate_lifecycle_methods."""
+    array_methods = _class_method_names(_module("tal/linalg/array.py"), "Array")
+    assert "_from_validated" not in array_methods
+    assert "_from_unvalidated" not in array_methods
+    assert "_enforce_array_invariants" not in array_methods
+
+    for rel, class_name in (
+        ("tal/linalg/vector.py", "Vector"),
+        ("tal/linalg/matrix.py", "Matrix"),
+        ("tal/linalg/vector3.py", "Vector3"),
+    ):
+        methods = _class_method_names(_module(rel), class_name)
+        assert "__init__" not in methods
+        assert "_enforce_array_invariants" not in methods
+
+
+def test_linalg_arch_068_linalg_typed_lifecycle_specs_stay_domain_owned() -> None:
+    """ID: LINALG_ARCH_068_linalg_typed_lifecycle_specs_stay_domain_owned."""
+    lifecycle_path = Path("tal/linalg/lifecycle.py")
+    lifecycle_text = lifecycle_path.read_text(encoding="utf-8")
+    core_text = Path("tal/core/typed_lifecycle.py").read_text(encoding="utf-8")
+
+    assert lifecycle_path.exists()
+    assert "ARRAY_LIFECYCLE" in lifecycle_text
+    assert "VECTOR_LIFECYCLE" in lifecycle_text
+    assert "MATRIX_LIFECYCLE" in lifecycle_text
+    assert "VECTOR3_LIFECYCLE" in lifecycle_text
+    assert "VECTOR3_LIFECYCLE" not in core_text
+    assert "Vector3" not in core_text

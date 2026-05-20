@@ -5,10 +5,11 @@ from collections.abc import Sequence
 import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
-from ..core.schema_read import read_roles, validate_schema_if_needed
+from ..core.typed_lifecycle import TypedAnalysisObject
+from .lifecycle import ARRAY_LIFECYCLE, ArrayInitOptions, declared_roles, normalize_core_dims
 
 
-class Array(AnalysisObject):
+class Array(TypedAnalysisObject):
     """Typed linalg array subtype over ``AnalysisObject``.
 
     Notes
@@ -28,55 +29,16 @@ class Array(AnalysisObject):
         *,
         core_dims: tuple[str, ...] | None = None,
     ) -> None:
-        source: xr.Dataset | xr.DataArray
-        if isinstance(data, AnalysisObject):
-            source = data.unsafe_data
-        else:
-            source = data
-        super().__init__(source)
-        if core_dims is not None:
-            updated = self.set_core_dims(*core_dims)
-            self._bind_dataset(updated.unsafe_data)
+        self._init_typed(data, options=ArrayInitOptions(core_dims=core_dims))
 
-    def _enforce_array_invariants(self, *, owner: str) -> None:
-        _ = owner
-        return None
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Array":
-        obj = super()._from_validated(ds)
-        obj._enforce_array_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Array":
-        obj = super()._from_unvalidated(ds)
-        obj._enforce_array_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
+    LIFECYCLE = ARRAY_LIFECYCLE
 
     def _declared_roles(self, *, owner: str) -> tuple[str | None, tuple[str, ...], tuple[str, ...]]:
-        ds = validate_schema_if_needed(self.unsafe_data)
-        declared, sequence_dim, batch_dims, core_dims = read_roles(ds)
-        if not declared:
-            raise ValueError(f"{owner}: Array requires declared roles before setting core dims.")
-        return sequence_dim, batch_dims, core_dims
+        return declared_roles(self.unsafe_data, owner=owner)
 
     def _declared_role_context(self, *, owner: str) -> tuple[str | None, tuple[str, ...]]:
         sequence_dim, batch_dims, _ = self._declared_roles(owner=owner)
         return sequence_dim, batch_dims
-
-    @staticmethod
-    def _normalize_core_dims(dims: tuple[object, ...], *, owner: str) -> tuple[str, ...]:
-        if not dims:
-            raise ValueError(f"{owner}: expected at least one core dim.")
-        if any(not isinstance(dim, str) for dim in dims):
-            raise TypeError(f"{owner}: core dims must be strings.")
-        out = tuple(dims)
-        if any(not dim for dim in out):
-            raise ValueError(f"{owner}: core dims must be non-empty strings.")
-        if len(set(out)) != len(out):
-            raise ValueError(f"{owner}: core dims must be unique; got {out!r}.")
-        return out
 
     def set_core_dims(self, *dims: str) -> "Array":
         """Set declared core dimensions for the array.
@@ -112,7 +74,7 @@ class Array(AnalysisObject):
         """
         owner = "Array.set_core_dims"
         sequence_dim, batch_dims = self._declared_role_context(owner=owner)
-        normalized = self._normalize_core_dims(tuple(dims), owner=owner)
+        normalized = normalize_core_dims(tuple(dims), owner=owner)
         out = self.set_roles(
             sequence_dim=sequence_dim,
             batch_dims=batch_dims,

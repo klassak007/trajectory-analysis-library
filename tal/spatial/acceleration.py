@@ -5,14 +5,11 @@ from typing import TYPE_CHECKING, Literal
 import xarray as xr
 
 from tal.core.analysis_object import AnalysisObject
+from tal.core.typed_lifecycle import TypedAnalysisObject
 
 from .kinematics.family import (
     KinematicsClasses,
     KinematicsFamilyConfig,
-    coerce_source,
-    enforce_angular_invariants,
-    enforce_family_invariants,
-    enforce_linear_invariants,
     family_angular,
     family_as_components,
     family_as_vector6,
@@ -20,8 +17,8 @@ from .kinematics.family import (
     family_from_vector6,
     family_linear,
     family_to_rep,
-    normalize_typed_metadata,
 )
+from .kinematics.lifecycle import make_kinematics_lifecycle_spec
 from .kinematics.vector6_ops import ACCELERATION_VECTOR6_OPTS
 from .metadata import (
     get_acceleration_rep,
@@ -108,6 +105,25 @@ _ACCELERATION_CONFIG = KinematicsFamilyConfig(
     ),
 )
 
+_LINEAR_ACCELERATION_LIFECYCLE = make_kinematics_lifecycle_spec(
+    type_name="LinearAcceleration",
+    owner_prefix="spatial.linear_acceleration",
+    cfg=_ACCELERATION_CONFIG,
+    role="linear",
+)
+_ANGULAR_ACCELERATION_LIFECYCLE = make_kinematics_lifecycle_spec(
+    type_name="AngularAcceleration",
+    owner_prefix="spatial.angular_acceleration",
+    cfg=_ACCELERATION_CONFIG,
+    role="angular",
+)
+_ACCELERATION_LIFECYCLE = make_kinematics_lifecycle_spec(
+    type_name="Acceleration",
+    owner_prefix="spatial.acceleration",
+    cfg=_ACCELERATION_CONFIG,
+    role="family",
+)
+
 
 def _classes() -> KinematicsClasses:
     return KinematicsClasses(
@@ -117,7 +133,7 @@ def _classes() -> KinematicsClasses:
     )
 
 
-class LinearAcceleration(AnalysisObject):
+class LinearAcceleration(TypedAnalysisObject):
     """Linear acceleration vector type.
 
     Notes
@@ -126,40 +142,7 @@ class LinearAcceleration(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = coerce_source(data, owner="spatial.linear_acceleration.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.linear_acceleration.__init__")
-        self._enforce_invariants(owner="spatial.linear_acceleration.__init__")
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "LinearAcceleration":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "LinearAcceleration":
-        obj = super()._from_unvalidated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
-
-    def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = normalize_typed_metadata(
-            self.unsafe_data,
-            rep_getter=_ACCELERATION_CONFIG.get_linear_rep,
-            rep_setter=_ACCELERATION_CONFIG.set_linear_rep,
-            expected_kind=_ACCELERATION_CONFIG.linear_kind,
-            cfg=_ACCELERATION_CONFIG,
-            owner=owner,
-        )
-        self._bind_dataset(normalized)
-
-    def _enforce_invariants(self, *, owner: str) -> None:
-        enforce_linear_invariants(self.unsafe_data, owner=owner, cfg=_ACCELERATION_CONFIG)
+    LIFECYCLE = _LINEAR_ACCELERATION_LIFECYCLE
 
     def integrate(
         self,
@@ -394,7 +377,7 @@ class LinearAcceleration(AnalysisObject):
         )
 
 
-class AngularAcceleration(AnalysisObject):
+class AngularAcceleration(TypedAnalysisObject):
     """Angular acceleration vector type.
 
     Notes
@@ -403,40 +386,7 @@ class AngularAcceleration(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = coerce_source(data, owner="spatial.angular_acceleration.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.angular_acceleration.__init__")
-        self._enforce_invariants(owner="spatial.angular_acceleration.__init__")
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "AngularAcceleration":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "AngularAcceleration":
-        obj = super()._from_unvalidated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
-
-    def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = normalize_typed_metadata(
-            self.unsafe_data,
-            rep_getter=_ACCELERATION_CONFIG.get_angular_rep,
-            rep_setter=_ACCELERATION_CONFIG.set_angular_rep,
-            expected_kind=_ACCELERATION_CONFIG.angular_kind,
-            cfg=_ACCELERATION_CONFIG,
-            owner=owner,
-        )
-        self._bind_dataset(normalized)
-
-    def _enforce_invariants(self, *, owner: str) -> None:
-        enforce_angular_invariants(self.unsafe_data, owner=owner, cfg=_ACCELERATION_CONFIG)
+    LIFECYCLE = _ANGULAR_ACCELERATION_LIFECYCLE
 
     def integrate(
         self,
@@ -671,7 +621,7 @@ class AngularAcceleration(AnalysisObject):
         )
 
 
-class Acceleration(AnalysisObject):
+class Acceleration(TypedAnalysisObject):
     """Spatial acceleration family type (linear + angular).
 
     Notes
@@ -680,40 +630,7 @@ class Acceleration(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = coerce_source(data, owner="spatial.acceleration.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.acceleration.__init__")
-        self._enforce_invariants(owner="spatial.acceleration.__init__")
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Acceleration":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Acceleration":
-        obj = super()._from_unvalidated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
-
-    def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = normalize_typed_metadata(
-            self.unsafe_data,
-            rep_getter=_ACCELERATION_CONFIG.get_family_rep,
-            rep_setter=_ACCELERATION_CONFIG.set_family_rep,
-            expected_kind=_ACCELERATION_CONFIG.family_kind,
-            cfg=_ACCELERATION_CONFIG,
-            owner=owner,
-        )
-        self._bind_dataset(normalized)
-
-    def _enforce_invariants(self, *, owner: str) -> None:
-        enforce_family_invariants(self.unsafe_data, owner=owner, cfg=_ACCELERATION_CONFIG)
+    LIFECYCLE = _ACCELERATION_LIFECYCLE
 
     @classmethod
     def from_linear_angular(cls, linear: object, angular: object, *, validate: bool = True) -> "Acceleration":

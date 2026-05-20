@@ -6,6 +6,7 @@ import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
 from .array import Array
+from .lifecycle import MATRIX_LIFECYCLE, matrix_core_dims
 
 if TYPE_CHECKING:
     from .ops.pinv import PInvOptions
@@ -21,27 +22,10 @@ class Matrix(Array):
     Public TAL class surface. See class methods/properties for operational semantics.
     """
 
-    def __init__(
-        self,
-        data: "Array | AnalysisObject | xr.Dataset | xr.DataArray",
-        *,
-        core_dims: tuple[str, ...] | None = None,
-    ) -> None:
-        super().__init__(data, core_dims=core_dims)
-        self._enforce_array_invariants(owner="Matrix.__init__")
-
-    def _enforce_array_invariants(self, *, owner: str) -> None:
-        self._matrix_core_dims(owner=owner)
-        return None
+    LIFECYCLE = MATRIX_LIFECYCLE
 
     def _matrix_core_dims(self, *, owner: str) -> tuple[str, str]:
-        _, _, core_dims = self._declared_roles(owner=owner)
-        if len(core_dims) != 2:
-            raise ValueError(f"{owner}: Matrix requires exactly two core dims; got {core_dims!r}.")
-        row_dim, col_dim = core_dims
-        if row_dim == col_dim:
-            raise ValueError(f"{owner}: Matrix core dims must be distinct; got {core_dims!r}.")
-        return row_dim, col_dim
+        return matrix_core_dims(self.unsafe_data, owner=owner)
 
     def set_core_dims(self, *dims: str) -> "Matrix":
         """Set matrix core dimensions (exactly two distinct names).

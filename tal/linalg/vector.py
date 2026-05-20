@@ -4,6 +4,7 @@ import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
 from .array import Array
+from .lifecycle import VECTOR_LIFECYCLE
 
 
 class Vector(Array):
@@ -14,20 +15,7 @@ class Vector(Array):
     Public TAL class surface. See class methods/properties for operational semantics.
     """
 
-    def __init__(
-        self,
-        data: "Array | AnalysisObject | xr.Dataset | xr.DataArray",
-        *,
-        core_dims: tuple[str, ...] | None = None,
-    ) -> None:
-        super().__init__(data, core_dims=core_dims)
-        self._enforce_array_invariants(owner="Vector.__init__")
-
-    def _enforce_array_invariants(self, *, owner: str) -> None:
-        _, _, core_dims = self._declared_roles(owner=owner)
-        if len(core_dims) != 1:
-            raise ValueError(f"{owner}: Vector requires exactly one core dim; got {core_dims!r}.")
-        return None
+    LIFECYCLE = VECTOR_LIFECYCLE
 
     def set_core_dims(self, *dims: str) -> "Vector":
         """Set vector core dimension (exactly one required).

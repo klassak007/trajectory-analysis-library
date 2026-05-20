@@ -199,6 +199,33 @@ def test_linalg_core_001_array_core_role_declaration_roundtrip() -> None:
     assert core_dims == ("r", "c")
 
 
+def test_linalg_hard_096_array_typed_lifecycle_parity() -> None:
+    """ID: LINALG_HARD_096_array_typed_lifecycle_parity."""
+    base = _vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis")
+    from_ao = Array(base)
+    from_ds = Array(base.unsafe_data)
+
+    assert isinstance(from_ao, Array)
+    assert isinstance(from_ds, Array)
+    xr.testing.assert_identical(from_ao.unsafe_data, from_ds.unsafe_data)
+    assert xr_roles(from_ao.unsafe_data) == xr_roles(from_ds.unsafe_data)
+
+
+def test_linalg_hard_100_array_core_dims_init_options_parity() -> None:
+    """ID: LINALG_HARD_100_array_core_dims_init_options_parity."""
+    base = _vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis")
+    direct = Array(base, core_dims=("axis",))
+    via_setter = Array(base).set_core_dims("axis")
+    xr.testing.assert_identical(direct.unsafe_data, via_setter.unsafe_data)
+
+    raw = xr.Dataset(
+        {"x": (("sample", "axis"), np.arange(6, dtype=float).reshape(2, 3))},
+        coords={"sample": [0, 1], "axis": [0, 1, 2]},
+    )
+    with pytest.raises(ValueError, match="Array requires declared roles before setting core dims"):
+        _ = Array(raw, core_dims=("axis",))
+
+
 def test_linalg_core_002_vector_matrix_core_shape_validation() -> None:
     """ID: LINALG_CORE_002_vector_matrix_core_shape_validation."""
     base = _matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="r", col="c")
@@ -398,16 +425,16 @@ def test_linalg_hard_007_matmul_plain_ao_inputs_fallback_to_array() -> None:
 
 def test_linalg_hard_008_set_core_dims_single_role_read_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: LINALG_HARD_008_set_core_dims_single_role_read_path."""
-    import tal.linalg.array as array_module
+    import tal.linalg.lifecycle as lifecycle_module
 
     calls = {"count": 0}
-    original = array_module.read_roles
+    original = lifecycle_module.read_roles
 
     def _counted_read_roles(ds: xr.Dataset):
         calls["count"] += 1
         return original(ds)
 
-    monkeypatch.setattr(array_module, "read_roles", _counted_read_roles)
+    monkeypatch.setattr(lifecycle_module, "read_roles", _counted_read_roles)
     base = _matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="r", col="c")
     _ = Array(base).set_core_dims("r", "c")
     assert calls["count"] == 1

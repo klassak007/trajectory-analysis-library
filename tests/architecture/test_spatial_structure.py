@@ -34,6 +34,13 @@ def _class_method_node(module: ast.Module, class_name: str, method_name: str) ->
     raise AssertionError(f"missing class: {class_name}")
 
 
+def _class_method_names(module: ast.Module, class_name: str) -> set[str]:
+    for node in module.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return {child.name for child in node.body if isinstance(child, ast.FunctionDef)}
+    raise AssertionError(f"missing class: {class_name}")
+
+
 def _function_node(module: ast.Module, function_name: str) -> ast.FunctionDef:
     for node in module.body:
         if isinstance(node, ast.FunctionDef) and node.name == function_name:
@@ -325,6 +332,7 @@ def test_arch_spatial_020_slice_a4_kinematics_owner_split_and_budget() -> None:
         Path("tal/spatial/metadata/roles.py"),
         Path("tal/spatial/policies/runtime_checks.py"),
         Path("tal/spatial/kinematics/family.py"),
+        Path("tal/spatial/kinematics/lifecycle.py"),
         Path("tal/spatial/kinematics/paired_components.py"),
         Path("tal/spatial/velocity.py"),
         Path("tal/spatial/acceleration.py"),
@@ -378,6 +386,44 @@ def test_arch_spatial_023_slice_a4_shared_kinematics_component_scaffold_reused_b
     assert "def _merge_component_payloads(" not in acceleration_text
     assert "def _clear_component_registry(" not in velocity_text
     assert "def _clear_component_registry(" not in acceleration_text
+
+
+def test_arch_spatial_118_spatial_classes_do_not_duplicate_lifecycle_methods() -> None:
+    """ID: ARCH_SPATIAL_118_spatial_classes_do_not_duplicate_lifecycle_methods."""
+    forbidden = {
+        "__init__",
+        "_from_validated",
+        "_from_unvalidated",
+        "_normalize_metadata",
+        "_enforce_invariants",
+    }
+    for rel, class_names in (
+        ("tal/spatial/velocity.py", ("LinearVelocity", "AngularVelocity", "Velocity")),
+        ("tal/spatial/acceleration.py", ("LinearAcceleration", "AngularAcceleration", "Acceleration")),
+    ):
+        module = _module(rel)
+        for class_name in class_names:
+            assert _class_method_names(module, class_name).isdisjoint(forbidden)
+
+
+def test_arch_spatial_119_spatial_typed_lifecycle_specs_stay_domain_owned() -> None:
+    """ID: ARCH_SPATIAL_119_spatial_typed_lifecycle_specs_stay_domain_owned."""
+    lifecycle_path = Path("tal/spatial/kinematics/lifecycle.py")
+    lifecycle_text = lifecycle_path.read_text(encoding="utf-8")
+    velocity_text = Path("tal/spatial/velocity.py").read_text(encoding="utf-8")
+    acceleration_text = Path("tal/spatial/acceleration.py").read_text(encoding="utf-8")
+    core_text = Path("tal/core/typed_lifecycle.py").read_text(encoding="utf-8")
+
+    assert lifecycle_path.exists()
+    assert "make_kinematics_lifecycle_spec(" in lifecycle_text
+    assert "_LINEAR_VELOCITY_LIFECYCLE" in velocity_text
+    assert "_ANGULAR_VELOCITY_LIFECYCLE" in velocity_text
+    assert "_VELOCITY_LIFECYCLE" in velocity_text
+    assert "_LINEAR_ACCELERATION_LIFECYCLE" in acceleration_text
+    assert "_ANGULAR_ACCELERATION_LIFECYCLE" in acceleration_text
+    assert "_ACCELERATION_LIFECYCLE" in acceleration_text
+    assert "Kinematics" not in core_text
+    assert "LinearVelocity" not in core_text
 
 
 def test_arch_spatial_024_slice_a4_spatial_metadata_owner_split_representation_vs_roles() -> None:

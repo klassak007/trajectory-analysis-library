@@ -186,6 +186,11 @@ def _set_roles(ds: xr.Dataset, roles: object) -> xr.Dataset:
     return out
 
 
+def _with_core_labels(ds: xr.Dataset, *, core_dim: str, labels: tuple[object, ...]) -> xr.Dataset:
+    out = ds.copy(deep=True)
+    return out.assign_coords({core_dim: list(labels)})
+
+
 def _set_bad_frames(ds: xr.Dataset) -> xr.Dataset:
     out = ds.copy(deep=True)
     tal = dict(out.attrs["tal"])
@@ -304,6 +309,97 @@ def test_spatial_core_029_acceleration_spatial6_from_linear_angular_composition_
     assert get_acceleration_rep(acc.unsafe_data, owner="test") == "components"
     assert get_kinematics_kind(acc.unsafe_data, owner="test") == "acceleration"
     assert set(read_components(acc).keys()) == {"linear", "angular"}
+
+
+def test_spatial_hard_182_typed_lifecycle_linear_velocity_parity() -> None:
+    """ID: SPATIAL_HARD_182_typed_lifecycle_linear_velocity_parity."""
+    ds = _vector3_dataset(var_name="linear_velocity")
+    ao = AnalysisObject._from_validated(ds)
+    da = _as_dataarray_with_schema(ds, var_name="linear_velocity")
+
+    from_ao = LinearVelocity(ao)
+    from_ds = LinearVelocity(ds)
+    from_da = LinearVelocity(da)
+
+    assert isinstance(from_ao, LinearVelocity)
+    assert isinstance(from_ds, LinearVelocity)
+    assert isinstance(from_da, LinearVelocity)
+    assert get_linear_velocity_rep(from_ds.unsafe_data, owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "linear_velocity"
+    bad = _with_core_labels(ds, core_dim="axis", labels=("x", "z", "y"))
+    with pytest.raises(ValueError, match="labels must equal"):
+        _ = LinearVelocity._from_validated(bad)
+    with pytest.raises(ValueError, match="labels must equal"):
+        _ = LinearVelocity._from_unvalidated(bad)
+
+
+def test_spatial_hard_183_typed_lifecycle_angular_velocity_parity() -> None:
+    """ID: SPATIAL_HARD_183_typed_lifecycle_angular_velocity_parity."""
+    ds = _vector3_dataset(var_name="angular_velocity")
+    ao = AnalysisObject._from_validated(ds)
+    da = _as_dataarray_with_schema(ds, var_name="angular_velocity")
+
+    from_ao = AngularVelocity(ao)
+    from_ds = AngularVelocity(ds)
+    from_da = AngularVelocity(da)
+
+    assert isinstance(from_ao, AngularVelocity)
+    assert isinstance(from_ds, AngularVelocity)
+    assert isinstance(from_da, AngularVelocity)
+    assert get_angular_velocity_rep(from_ds.unsafe_data, owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "angular_velocity"
+    bad = _with_core_labels(ds, core_dim="axis", labels=("x", "z", "y"))
+    with pytest.raises(ValueError, match="labels must equal"):
+        _ = AngularVelocity._from_validated(bad)
+    with pytest.raises(ValueError, match="labels must equal"):
+        _ = AngularVelocity._from_unvalidated(bad)
+
+
+def test_spatial_hard_184_typed_lifecycle_velocity_family_parity() -> None:
+    """ID: SPATIAL_HARD_184_typed_lifecycle_velocity_family_parity."""
+    vel = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True)
+    reparsed = Velocity(vel.unsafe_data)
+    vector6 = reparsed.as_vector6(validate=True)
+    vector6_reparsed = Velocity(vector6.unsafe_data)
+    restored = vector6_reparsed.to_rep("components", validate=True)
+
+    assert get_velocity_rep(reparsed.unsafe_data, owner="test") == "components"
+    assert get_velocity_rep(vector6_reparsed.unsafe_data, owner="test") == "vector6"
+    assert set(read_components(reparsed).keys()) == {"linear", "angular"}
+    assert set(read_components(restored).keys()) == {"linear", "angular"}
+
+
+def test_spatial_hard_185_typed_lifecycle_acceleration_family_parity() -> None:
+    """ID: SPATIAL_HARD_185_typed_lifecycle_acceleration_family_parity."""
+    linear = _linear_acceleration()
+    angular = _angular_acceleration()
+    acc = Acceleration.from_linear_angular(linear, angular, validate=True)
+    reparsed = Acceleration(acc.unsafe_data)
+    vector6 = reparsed.as_vector6(validate=True)
+    vector6_reparsed = Acceleration(vector6.unsafe_data)
+    restored = vector6_reparsed.to_rep("components", validate=True)
+
+    assert get_linear_acceleration_rep(linear.unsafe_data, owner="test") == "cart"
+    assert get_angular_acceleration_rep(angular.unsafe_data, owner="test") == "cart"
+    assert get_acceleration_rep(reparsed.unsafe_data, owner="test") == "components"
+    assert get_acceleration_rep(vector6_reparsed.unsafe_data, owner="test") == "vector6"
+    assert set(read_components(reparsed).keys()) == {"linear", "angular"}
+    assert set(read_components(restored).keys()) == {"linear", "angular"}
+
+
+def test_spatial_hard_186_typed_lifecycle_owner_error_context_parity() -> None:
+    """ID: SPATIAL_HARD_186_typed_lifecycle_owner_error_context_parity."""
+    bad = _with_core_labels(_vector3_dataset(var_name="linear_velocity"), core_dim="axis", labels=("x", "z", "y"))
+
+    with pytest.raises(ValueError, match="spatial\\.linear_velocity\\.__init__"):
+        _ = LinearVelocity(bad)
+    with pytest.raises(ValueError, match="LinearVelocity\\._from_validated"):
+        _ = LinearVelocity._from_validated(bad)
+
+    obj = LinearVelocity(_vector3_dataset(var_name="linear_velocity"))
+    obj._bind_dataset(bad)
+    with pytest.raises(ValueError, match="custom\\.owner"):
+        obj._enforce_invariants(owner="custom.owner")
 
 
 def test_spatial_core_032_velocity_from_linear_angular_one_framed_operand_inherits_frame_tags() -> None:
