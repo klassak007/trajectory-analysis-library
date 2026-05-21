@@ -11,11 +11,13 @@ payload dimensions, parameter coordinates, validity, components, and frames.
 :caption: TAL Documentation
 
 user-guide/index
+developer-guide/index
 api/index
 ```
 
 Use the {doc}`user-guide/index` for concepts and workflows. Use the
-{doc}`api/index` when you need exact method contracts.
+{doc}`developer-guide/index` for extension recipes. Use the {doc}`api/index`
+when you need exact method contracts.
 
 Executable tutorial examples live under `examples/tutorial/` and are referenced
 from the user guide where they support public workflows.

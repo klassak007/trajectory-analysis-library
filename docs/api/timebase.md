@@ -1,6 +1,9 @@
 (api-timebase)=
 # Parameter Operations
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL parameter operations evaluate, select, resample, and synchronize AOs on a
 semantic coordinate. The coordinate is often time, but the API is intentionally
 generic: any declared ordered coordinate can be used as the operation domain.

@@ -94,6 +94,43 @@ def test_orch_arch_008_validity_finalize_owner_single_source() -> None:
     assert "def assign_sequence_size_if_left_packed(" not in param_finalize
 
 
+def test_orch_arch_010_typed_lifecycle_core_owner_exists() -> None:
+    """ID: ORCH_ARCH_010_typed_lifecycle_core_owner_exists."""
+    path = Path("tal/core/typed_lifecycle.py")
+    text = path.read_text(encoding="utf-8")
+    assert path.exists()
+    assert "LifecyclePhase = Literal[" in text
+    assert "class TypedLifecycleContext" in text
+    assert "class TypedLifecycleSpec" in text
+    assert "class TypedAnalysisObject(AnalysisObject):" in text
+    assert "def default_coerce_source(" in text
+    assert "__all__ = [" in text
+    assert file_loc(path=path) <= 600
+    for name, length in function_lengths(path).items():
+        assert length <= 50, f"{path}:{name} exceeds function budget: {length} > 50"
+
+
+def test_orch_arch_011_typed_lifecycle_core_owner_has_no_domain_imports() -> None:
+    """ID: ORCH_ARCH_011_typed_lifecycle_core_owner_has_no_domain_imports."""
+    text = Path("tal/core/typed_lifecycle.py").read_text(encoding="utf-8")
+    forbidden = (
+        "tal.linalg",
+        "tal.spatial",
+        "tal.frames",
+        "from ..linalg",
+        "from ..spatial",
+        "from ..frames",
+    )
+    for needle in forbidden:
+        assert needle not in text
+
+
+def test_orch_arch_012_typed_lifecycle_no_tal_v2_imports() -> None:
+    """ID: ORCH_ARCH_012_typed_lifecycle_no_tal_v2_imports."""
+    text = Path("tal/core/typed_lifecycle.py").read_text(encoding="utf-8")
+    assert "tal_v2" not in text
+
+
 def test_arch_topo_001_core_topology_owner_module_present_and_budgeted() -> None:
     """ID: ARCH_TOPO_001_core_topology_owner_module_present_and_budgeted."""
     path = Path("tal/core/orchestration/topology.py")

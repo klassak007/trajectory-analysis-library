@@ -122,6 +122,7 @@ nitpick_ignore_regex = [
     ("py:class", r"VizKind"),
     ("py:class", r"WeightInput"),
     ("py:class", r"xr\..*"),
+    ("py:data", r"typing\.Union"),
     ("py:meth", r"Array\.set_core_dims"),
     ("py:meth", r"Array\.set_matrix_axes"),
     ("py:meth", r"Array\.set_vector_axis"),

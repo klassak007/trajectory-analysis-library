@@ -1,6 +1,9 @@
 (api-concat)=
 # Combine and Alignment
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL combine operations assemble, align, merge, or reshape AOs while preserving
 schema truthfulness. They are available as top-level core helpers and through
 the `ao.combine` accessor.

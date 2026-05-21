@@ -182,6 +182,36 @@ def test_linalg_hard_068_vector3_rewrap_invariants_enforced_on_structural_paths(
         _ = vector3.isel({"axis": slice(0, 2)}, validate=False)
 
 
+def test_linalg_hard_099_vector3_typed_lifecycle_parity() -> None:
+    """ID: LINALG_HARD_099_vector3_typed_lifecycle_parity."""
+    base = _vector_ao(
+        np.arange(12, dtype=float).reshape(2, 2, 3),
+        axis="axis",
+        labels=("x", "y", "z"),
+    )
+    assert isinstance(Vector3(base), Vector3)
+    with pytest.raises(ValueError, match="requires exactly one core dim"):
+        _ = Vector3(_matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="row", col="col"))
+    with pytest.raises(ValueError, match="must have length 3"):
+        _ = Vector3(
+            _vector_ao(
+                np.arange(16, dtype=float).reshape(2, 2, 4),
+                axis="axis",
+                labels=("x", "y", "z", "w"),
+            )
+        )
+    with pytest.raises(ValueError, match="must have labels"):
+        _ = Vector3(base.unsafe_data.drop_vars("axis"))
+    with pytest.raises(ValueError, match="labels must equal"):
+        _ = Vector3(
+            _vector_ao(
+                np.arange(12, dtype=float).reshape(2, 2, 3),
+                axis="axis",
+                labels=("x", "z", "y"),
+            )
+        )
+
+
 def test_linalg_hard_069_vector3_binary_ops_do_not_invalid_rewrap_scalar_or_matrix_outputs() -> None:
     """ID: LINALG_HARD_069_vector3_binary_ops_do_not_invalid_rewrap_scalar_or_matrix_outputs."""
     vector3 = Vector3(

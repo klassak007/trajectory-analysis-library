@@ -1,6 +1,9 @@
 (api-rotation)=
 # `Rotation`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.spatial.Rotation` is an `AnalysisObject` subtype for rotation
 trajectories. It supports quaternion and matrix representations, rotation-aware
 composition, inverse, application to spatial payloads, and typed parameter

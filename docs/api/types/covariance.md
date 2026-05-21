@@ -1,6 +1,9 @@
 (api-covariance)=
 # `Covariance`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL does not currently provide a dedicated covariance typed wrapper. Represent
 covariance-like payloads with `tal.linalg.Array` or `tal.linalg.Matrix` using
 explicit core dimensions and labels.

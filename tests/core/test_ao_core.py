@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -7,6 +9,15 @@ from tal.core import SchemaError
 from tal.core.orchestration.alignment_intent import read_alignment_intent
 from tal.core.orchestration.broadcast_intent import read_broadcast_intent
 from tal.core.schema_read import read_roles
+from tal.core.typed_lifecycle import (
+    TypedAnalysisObject,
+    TypedLifecycleContext,
+    TypedLifecycleSpec,
+    default_coerce_source,
+    identity_init_options,
+    identity_normalize,
+    no_op_enforce,
+)
 from tal.linalg import Array
 from tal.spatial import Acceleration, Pose, Position, Rotation, Velocity
 import tal.core.analysis_object as ao_mod
@@ -570,3 +581,107 @@ def test_bcast_hard_032_b_and_a_chain_conflicts_fail_closed_with_owner_context()
     ao = AnalysisObject(_ds_single())
     with pytest.raises(ValueError, match="^AnalysisObject\\.a: conflicting chained alignment intents"):
         _ = ao.a(on="sequence").a(on="param", sequence_join=None)
+
+
+def test_typed_lifecycle_001_context_and_spec_validation() -> None:
+    """ID: TYPED_LIFECYCLE_001_context_and_spec_validation."""
+    ctx = TypedLifecycleContext(owner="typed.test", phase="init", options={"x": 1})
+    assert ctx.owner == "typed.test"
+    assert ctx.phase == "init"
+
+    with pytest.raises(ValueError, match="type_name"):
+        TypedLifecycleSpec(type_name="", owner_prefix="typed.test")
+    with pytest.raises(ValueError, match="owner_prefix"):
+        TypedLifecycleSpec(type_name="Probe", owner_prefix="")
+    with pytest.raises(TypeError, match="normalize"):
+        invalid_hook = cast(Any, object())
+        TypedLifecycleSpec(type_name="Probe", owner_prefix="typed.test", normalize=invalid_hook)
+
+
+def test_typed_lifecycle_002_default_source_coercer_uses_canonical_ao_input() -> None:
+    """ID: TYPED_LIFECYCLE_002_default_source_coercer_uses_canonical_ao_input."""
+    ctx = TypedLifecycleContext(owner="typed.default", phase="init")
+    ao = AnalysisObject(_ds_single())
+    da = xr.DataArray(np.arange(3.0), dims=("sample",), name="value")
+
+    assert default_coerce_source(ao, ctx) is ao
+    assert isinstance(default_coerce_source(_ds_single(), ctx), AnalysisObject)
+    assert isinstance(default_coerce_source(da, ctx), AnalysisObject)
+    with pytest.raises(TypeError, match="^typed\\.default: expected AnalysisObject"):
+        default_coerce_source(1.0, ctx)
+
+
+def test_typed_lifecycle_003_default_hooks_are_safe_noops() -> None:
+    """ID: TYPED_LIFECYCLE_003_default_hooks_are_safe_noops."""
+    ds = _ds_single()
+    ctx = TypedLifecycleContext(owner="typed.noop", phase="init")
+    before = ds.copy(deep=True)
+
+    assert identity_init_options(ds, ctx) is ds
+    assert identity_normalize(ds, ctx) is ds
+    assert no_op_enforce(ds, ctx) is None
+    xr.testing.assert_identical(ds, before)
+
+
+def test_typed_lifecycle_004_init_from_validated_from_unvalidated_ordering() -> None:
+    """ID: TYPED_LIFECYCLE_004_init_from_validated_from_unvalidated_ordering."""
+    calls: list[str] = []
+
+    def coerce(value: object, ctx: TypedLifecycleContext) -> AnalysisObject:
+        calls.append(f"{ctx.phase}:coerce:{ctx.owner}")
+        return default_coerce_source(value, ctx)
+
+    def apply_options(ds: xr.Dataset, ctx: TypedLifecycleContext) -> xr.Dataset:
+        calls.append(f"{ctx.phase}:options:{ctx.owner}")
+        return ds
+
+    def normalize(ds: xr.Dataset, ctx: TypedLifecycleContext) -> xr.Dataset:
+        calls.append(f"{ctx.phase}:normalize:{ctx.owner}")
+        return ds
+
+    def enforce(ds: xr.Dataset, ctx: TypedLifecycleContext) -> None:
+        calls.append(f"{ctx.phase}:enforce:{ctx.owner}")
+
+    class Probe(TypedAnalysisObject):
+        LIFECYCLE = TypedLifecycleSpec(
+            type_name="Probe",
+            owner_prefix="typed.probe",
+            coerce_source=coerce,
+            apply_init_options=apply_options,
+            normalize=normalize,
+            enforce=enforce,
+        )
+
+    _ = Probe(_ds_single())
+    assert calls == [
+        "init:coerce:typed.probe.__init__",
+        "init:options:typed.probe.__init__",
+        "init:normalize:typed.probe.__init__",
+        "init:enforce:typed.probe.__init__",
+    ]
+
+    calls.clear()
+    _ = Probe._from_validated(_ds_single())
+    assert calls == [
+        "from_validated:normalize:Probe._from_validated",
+        "from_validated:enforce:Probe._from_validated",
+    ]
+
+    calls.clear()
+    _ = Probe._from_unvalidated(_ds_single())
+    assert calls == [
+        "from_unvalidated:normalize:Probe._from_unvalidated",
+        "from_unvalidated:enforce:Probe._from_unvalidated",
+    ]
+
+
+def test_typed_lifecycle_005_self_typed_rewrap_contract() -> None:
+    """ID: TYPED_LIFECYCLE_005_self_typed_rewrap_contract."""
+
+    class Probe(TypedAnalysisObject):
+        LIFECYCLE = TypedLifecycleSpec(type_name="Probe", owner_prefix="typed.probe")
+
+    assert isinstance(Probe._from_validated(_ds_single()), Probe)
+    assert isinstance(Probe._from_unvalidated(_ds_single()), Probe)
+    assert TypedAnalysisObject._from_validated.__annotations__["return"] == "Self"
+    assert TypedAnalysisObject._from_unvalidated.__annotations__["return"] == "Self"

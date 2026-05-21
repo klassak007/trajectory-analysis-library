@@ -1,6 +1,9 @@
 (api-vector)=
 # `Vector`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.linalg.Vector` is an `Array` with exactly one declared core dimension.
 Use it when that payload axis should participate in vector operations.
 

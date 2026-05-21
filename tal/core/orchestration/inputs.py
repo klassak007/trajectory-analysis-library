@@ -17,25 +17,45 @@ def coerce_analysis_object_input(
     owner: str,
     index: int | None = None,
 ) -> "AnalysisObject":
-    """Coerce one AO-like input for orchestration entrypoints.
+    """Coerce one AO-like input for orchestration boundaries.
 
     Parameters
     ----------
     value : object
-        Input value to normalize/coerce/process.
-    owner : str, optional
-        Owner prefix used to build deterministic fail-closed error messages.
+        Input value to normalize. Existing ``AnalysisObject`` instances are
+        returned unchanged. ``xarray.Dataset`` and ``xarray.DataArray`` inputs
+        are wrapped in ``AnalysisObject``.
+    owner : str
+        Public owner string used to build deterministic diagnostics.
     index : int | None, optional
-        Index selector/configuration applied to the source data.
+        Operand index used in variadic boundary diagnostics.
 
     Returns
     -------
     AnalysisObject
-        Result of applying this operation with TAL semantic constraints preserved.
+        Coerced AO-like input.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not an ``AnalysisObject``, ``xarray.Dataset``, or
+        ``xarray.DataArray``.
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Existing AO inputs are also checked for pending alignment or broadcast
+    intents so invalid intent metadata fails at the operation boundary that
+    consumes it.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.orchestration.inputs import coerce_analysis_object_input
+    >>> ds = xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]})
+    >>> ao = coerce_analysis_object_input(ds, owner="thermal.Temperature.__init__")
+    >>> isinstance(ao, AnalysisObject)
+    True
     """
     from ..analysis_object import AnalysisObject
 
@@ -97,31 +117,53 @@ def coerce_operand(
     allow_scalar: bool = False,
     return_scalar_none: bool = False,
 ) -> object | None:
-    """Coerce one operation operand with optional scalar acceptance.
+    """Coerce one user-facing operation operand.
 
     Parameters
     ----------
     value : object
-        Input value to normalize/coerce/process.
-    owner : str, optional
-        Owner prefix used to build deterministic fail-closed error messages.
+        Operand supplied by user code.
+    owner : str
+        Public owner string used to build deterministic diagnostics.
     label : str | None, optional
-        Label/name selection used by this operation.
+        Operand label inserted before ``role`` in error messages.
     role : str, optional
-        Validation/diagnostic metadata used for deterministic error reporting.
+        Diagnostic noun for this operand. Defaults to ``"operand"``.
     allow_scalar : bool, optional
-        Behavior flag/policy controlling boundary semantics.
+        Whether NumPy scalar-like values are accepted.
     return_scalar_none : bool, optional
-        Behavior flag/policy controlling boundary semantics.
+        When ``True`` and a scalar is accepted, return ``None`` instead of the
+        scalar value. This is useful for scalar-or-AO operations that handle the
+        scalar path separately.
 
     Returns
     -------
     object | None
-        Result of applying this operation with TAL semantic constraints preserved.
+        ``AnalysisObject`` for AO-like inputs, a scalar for accepted scalar
+        inputs, or ``None`` when ``return_scalar_none`` is selected.
+
+    Raises
+    ------
+    TypeError
+        If the operand does not match the AO-like or scalar policy.
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Use this helper at public operation boundaries so diagnostics include both
+    the public owner and the operand label. Internal AO-only plumbing should use
+    ``coerce_analysis_object_input(...)`` directly.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.orchestration.inputs import coerce_operand
+    >>> ds = xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]})
+    >>> operand = coerce_operand(ds, owner="thermal.bias_temperature", label="temperature")
+    >>> isinstance(operand, AnalysisObject)
+    True
+    >>> coerce_operand(1.5, owner="thermal.bias_temperature", label="bias", allow_scalar=True)
+    1.5
     """
     if allow_scalar and np.isscalar(value):
         return None if return_scalar_none else value

@@ -1,6 +1,9 @@
 (api-types-index)=
 # Typed Analysis Objects
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 Typed AOs are `AnalysisObject` subclasses that interpret core dimensions as a
 specific mathematical or spatial payload. They keep the same sequence, batch,
 parameter, validity, and frame semantics as base AOs while adding stricter

@@ -5,14 +5,11 @@ from typing import TYPE_CHECKING, Literal
 import xarray as xr
 
 from tal.core.analysis_object import AnalysisObject
+from tal.core.typed_lifecycle import TypedAnalysisObject
 
 from .kinematics.family import (
     KinematicsClasses,
     KinematicsFamilyConfig,
-    coerce_source,
-    enforce_angular_invariants,
-    enforce_family_invariants,
-    enforce_linear_invariants,
     family_angular,
     family_as_components,
     family_as_vector6,
@@ -20,8 +17,8 @@ from .kinematics.family import (
     family_from_vector6,
     family_linear,
     family_to_rep,
-    normalize_typed_metadata,
 )
+from .kinematics.lifecycle import make_kinematics_lifecycle_spec
 from .kinematics.vector6_ops import VELOCITY_VECTOR6_OPTS
 from .metadata import (
     get_angular_velocity_rep,
@@ -113,6 +110,25 @@ _VELOCITY_CONFIG = KinematicsFamilyConfig(
     ),
 )
 
+_LINEAR_VELOCITY_LIFECYCLE = make_kinematics_lifecycle_spec(
+    type_name="LinearVelocity",
+    owner_prefix="spatial.linear_velocity",
+    cfg=_VELOCITY_CONFIG,
+    role="linear",
+)
+_ANGULAR_VELOCITY_LIFECYCLE = make_kinematics_lifecycle_spec(
+    type_name="AngularVelocity",
+    owner_prefix="spatial.angular_velocity",
+    cfg=_VELOCITY_CONFIG,
+    role="angular",
+)
+_VELOCITY_LIFECYCLE = make_kinematics_lifecycle_spec(
+    type_name="Velocity",
+    owner_prefix="spatial.velocity",
+    cfg=_VELOCITY_CONFIG,
+    role="family",
+)
+
 
 def _classes() -> KinematicsClasses:
     return KinematicsClasses(
@@ -122,7 +138,7 @@ def _classes() -> KinematicsClasses:
     )
 
 
-class LinearVelocity(AnalysisObject):
+class LinearVelocity(TypedAnalysisObject):
     """Linear velocity vector type.
 
     Notes
@@ -131,40 +147,7 @@ class LinearVelocity(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = coerce_source(data, owner="spatial.linear_velocity.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.linear_velocity.__init__")
-        self._enforce_invariants(owner="spatial.linear_velocity.__init__")
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "LinearVelocity":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-    
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "LinearVelocity":
-        obj = super()._from_unvalidated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
-    
-    def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = normalize_typed_metadata(
-            self.unsafe_data,
-            rep_getter=_VELOCITY_CONFIG.get_linear_rep,
-            rep_setter=_VELOCITY_CONFIG.set_linear_rep,
-            expected_kind=_VELOCITY_CONFIG.linear_kind,
-            cfg=_VELOCITY_CONFIG,
-            owner=owner,
-        )
-        self._bind_dataset(normalized)
-
-    def _enforce_invariants(self, *, owner: str) -> None:
-        enforce_linear_invariants(self.unsafe_data, owner=owner, cfg=_VELOCITY_CONFIG)
+    LIFECYCLE = _LINEAR_VELOCITY_LIFECYCLE
 
     def differentiate(
         self,
@@ -461,7 +444,7 @@ class LinearVelocity(AnalysisObject):
         )
 
 
-class AngularVelocity(AnalysisObject):
+class AngularVelocity(TypedAnalysisObject):
     """Angular velocity vector type.
 
     Notes
@@ -470,40 +453,7 @@ class AngularVelocity(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = coerce_source(data, owner="spatial.angular_velocity.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.angular_velocity.__init__")
-        self._enforce_invariants(owner="spatial.angular_velocity.__init__")
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "AngularVelocity":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-    
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "AngularVelocity":
-        obj = super()._from_unvalidated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
-    
-    def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = normalize_typed_metadata(
-            self.unsafe_data,
-            rep_getter=_VELOCITY_CONFIG.get_angular_rep,
-            rep_setter=_VELOCITY_CONFIG.set_angular_rep,
-            expected_kind=_VELOCITY_CONFIG.angular_kind,
-            cfg=_VELOCITY_CONFIG,
-            owner=owner,
-        )
-        self._bind_dataset(normalized)
-
-    def _enforce_invariants(self, *, owner: str) -> None:
-        enforce_angular_invariants(self.unsafe_data, owner=owner, cfg=_VELOCITY_CONFIG)
+    LIFECYCLE = _ANGULAR_VELOCITY_LIFECYCLE
 
     def differentiate(
         self,
@@ -738,7 +688,7 @@ class AngularVelocity(AnalysisObject):
         )
 
 
-class Velocity(AnalysisObject):
+class Velocity(TypedAnalysisObject):
     """Spatial velocity family type (linear + angular).
 
     Notes
@@ -747,40 +697,7 @@ class Velocity(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = coerce_source(data, owner="spatial.velocity.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.velocity.__init__")
-        self._enforce_invariants(owner="spatial.velocity.__init__")
-
-    @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Velocity":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
-        return obj
-    
-    @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Velocity":
-        obj = super()._from_unvalidated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
-        return obj
-    
-    def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = normalize_typed_metadata(
-            self.unsafe_data,
-            rep_getter=_VELOCITY_CONFIG.get_family_rep,
-            rep_setter=_VELOCITY_CONFIG.set_family_rep,
-            expected_kind=_VELOCITY_CONFIG.family_kind,
-            cfg=_VELOCITY_CONFIG,
-            owner=owner,
-        )
-        self._bind_dataset(normalized)
-
-    def _enforce_invariants(self, *, owner: str) -> None:
-        enforce_family_invariants(self.unsafe_data, owner=owner, cfg=_VELOCITY_CONFIG)
+    LIFECYCLE = _VELOCITY_LIFECYCLE
 
     @classmethod
     def from_linear_angular(cls, linear: object, angular: object, *, validate: bool = True) -> "Velocity":

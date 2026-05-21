@@ -1,6 +1,9 @@
 (api-vector3)=
 # `Vector3`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.linalg.Vector3` is a `Vector` whose single core axis is exactly
 `("x", "y", "z")`. It is useful for payloads that must carry explicit xyz
 semantics.

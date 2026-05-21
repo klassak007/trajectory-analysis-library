@@ -1,6 +1,9 @@
 (api-reducers)=
 # Reducers
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 Reducers summarize AO data while keeping schema metadata truthful. They are
 available on `AnalysisObject` and on grouped views returned by
 `ao.group.groupby(...)` or `ao.group.groupby_bins(...)`.

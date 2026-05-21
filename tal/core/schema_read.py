@@ -110,6 +110,43 @@ def _extract_roles_fields(roles: Mapping[str, Any]) -> tuple[str | None, tuple[s
 def read_roles(
     ds: xr.Dataset,
 ) -> tuple[bool, str | None, tuple[str, ...], tuple[str, ...]]:
+    """Read declared TAL role metadata from a dataset.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Dataset whose ``ds.attrs["tal"]`` payload should be inspected.
+
+    Returns
+    -------
+    tuple[bool, str | None, tuple[str, ...], tuple[str, ...]]
+        ``(declared, sequence_dim, batch_dims, core_dims)``. When roles are not
+        declared, returns ``(False, None, (), ())``.
+
+    Raises
+    ------
+    ValueError
+        If a present roles block is malformed or contains unknown keys.
+
+    Notes
+    -----
+    This reader does not mutate the dataset. It validates only the roles block
+    shape needed for safe metadata inspection.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.schema_read import read_roles
+    >>> ao = AnalysisObject.from_data(
+    ...     xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]}),
+    ...     sequence_dim="sample",
+    ...     core_dims=(),
+    ...     validate=True,
+    ... )
+    >>> read_roles(ao.unsafe_data)
+    (True, 'sample', (), ())
+    """
     core = _core_mapping(ds)
     if core is None:
         return False, None, (), ()

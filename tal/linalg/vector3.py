@@ -15,6 +15,7 @@ from .component_context import (
     coerce_component_or_scalar,
     promote_scalar_component,
 )
+from .lifecycle import VECTOR3_LIFECYCLE
 from .vector import Vector
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
@@ -71,29 +72,7 @@ class Vector3(Vector):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(
-        self,
-        data: "Array | AnalysisObject | xr.Dataset | xr.DataArray",
-        *,
-        core_dims: tuple[str, ...] | None = None,
-    ) -> None:
-        super().__init__(data, core_dims=core_dims)
-        self._enforce_array_invariants(owner="Vector3.__init__")
-
-    def _enforce_array_invariants(self, *, owner: str) -> None:
-        _, _, core_dims = self._declared_roles(owner=owner)
-        if len(core_dims) != 1:
-            raise ValueError(f"{owner}: Vector3 requires exactly one core dim; got {core_dims!r}.")
-        axis = core_dims[0]
-        if int(self.unsafe_data.sizes.get(axis, -1)) != 3:
-            raise ValueError(f"{owner}: Vector3 core axis {axis!r} must have length 3.")
-        if axis not in self.unsafe_data.coords:
-            raise ValueError(f"{owner}: Vector3 core axis {axis!r} must have labels ('x', 'y', 'z').")
-        labels = tuple(self.unsafe_data.coords[axis].to_index().tolist())
-        if labels != self.XYZ_LABELS:
-            raise ValueError(f"{owner}: Vector3 core axis labels must equal {self.XYZ_LABELS!r}; got {labels!r}.")
-        return None
+    LIFECYCLE = VECTOR3_LIFECYCLE
 
     @classmethod
     def from_xyz(

@@ -1,6 +1,9 @@
 (api-array)=
 # `Array`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.linalg.Array` is the base typed wrapper for dimension-aware linear algebra.
 It is an `AnalysisObject` subtype that requires declared core dimensions before
 running strict linalg operations.

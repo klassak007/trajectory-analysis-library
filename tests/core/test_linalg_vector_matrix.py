@@ -59,6 +59,44 @@ def test_linalg_core_012_matrix_wrapper_enforces_two_core_dims() -> None:
     assert _core_dims(mat.unsafe_data) == ("r", "c")
 
 
+def test_linalg_hard_097_vector_typed_lifecycle_parity() -> None:
+    """ID: LINALG_HARD_097_vector_typed_lifecycle_parity."""
+    vec = Vector(_vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis"))
+    from_ds = Vector(vec.unsafe_data)
+
+    assert isinstance(vec, Vector)
+    assert isinstance(from_ds, Vector)
+    assert _core_dims(from_ds.unsafe_data) == ("axis",)
+    for validate in (True, False):
+        with pytest.raises(ValueError, match="Vector requires exactly one core dim"):
+            _ = vec.set_roles(
+                sequence_dim="sample",
+                batch_dims=(),
+                core_dims=("trial", "axis"),
+                validate=validate,
+            )
+
+
+def test_linalg_hard_098_matrix_typed_lifecycle_parity() -> None:
+    """ID: LINALG_HARD_098_matrix_typed_lifecycle_parity."""
+    mat = Matrix(_matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="row", col="col"))
+    from_ds = Matrix(mat.unsafe_data)
+
+    assert isinstance(mat, Matrix)
+    assert isinstance(from_ds, Matrix)
+    assert _core_dims(from_ds.unsafe_data) == ("row", "col")
+    for validate in (True, False):
+        with pytest.raises(ValueError, match="Matrix requires exactly two core dims"):
+            _ = mat.set_roles(
+                sequence_dim="sample",
+                batch_dims=("trial",),
+                core_dims=("row",),
+                validate=validate,
+            )
+    with pytest.raises(ValueError, match="duplicate|distinct"):
+        _ = Matrix._from_unvalidated(mat.set_roles(core_dims=("row", "row"), validate=False).unsafe_data)
+
+
 def test_linalg_core_013_matrix_transpose_swaps_core_axes_truthfully() -> None:
     """ID: LINALG_CORE_013_matrix_transpose_swaps_core_axes_truthfully."""
     mat = Matrix(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))

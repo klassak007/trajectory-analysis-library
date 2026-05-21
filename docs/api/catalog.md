@@ -1,6 +1,9 @@
 (api-catalog)=
 # Catalog
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `Catalog` is TAL's browse/query/extract layer for grouped log-style data. It is
 useful before analysis: select records, filter by metadata, and extract
 analysis-ready AOs from a larger collection.
