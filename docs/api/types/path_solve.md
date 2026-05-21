@@ -1,6 +1,9 @@
 (api-type-path-solve)=
 # Path Solve
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 Path solving composes frame-edge payloads along a `tal.frames` topology path.
 The frame graph finds the path; caller-provided edge resolver callbacks provide
 the rotation or pose payloads for each edge.

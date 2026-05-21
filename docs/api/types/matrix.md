@@ -1,6 +1,9 @@
 (api-matrix)=
 # `Matrix`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.linalg.Matrix` is an `Array` with exactly two distinct declared core
 dimensions. It provides typed transpose and linear-system helpers while
 preserving sequence and batch topology.

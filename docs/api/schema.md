@@ -1,6 +1,9 @@
 (api-schema)=
 # Schema API
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL stores semantic metadata in one canonical location:
 
 ```python

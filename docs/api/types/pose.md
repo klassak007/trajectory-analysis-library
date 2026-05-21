@@ -1,6 +1,9 @@
 (api-pose)=
 # `Pose`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.spatial.Pose` is an `AnalysisObject` subtype for rigid transforms. A pose
 can be represented as rotation/position components or as a matrix, and exposes
 composition, inverse, application, representation conversion, and typed

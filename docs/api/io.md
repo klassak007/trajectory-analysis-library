@@ -1,6 +1,9 @@
 (api-io)=
 # I/O
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL provides two I/O layers:
 
 - AO-direct persistence for existing `AnalysisObject` instances.

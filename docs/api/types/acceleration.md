@@ -1,6 +1,9 @@
 (api-acceleration)=
 # Acceleration Types
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL models acceleration as either separate linear/angular typed vectors or as a
 combined spatial6 payload.
 

@@ -1,6 +1,9 @@
 (api-components)=
 # Components
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 Components let an AO name meaningful pieces inside a core dimension. Use them
 when a payload has stable substructure, such as linear and angular parts of a
 six-vector, named joints, marker groups, or pose components.

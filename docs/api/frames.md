@@ -1,6 +1,9 @@
 (api-frames)=
 # Frames
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL separates frame metadata from runtime frame topology. AOs can carry
 parent/child frame IDs in schema metadata, while `FrameGraph` owns runtime graph
 relationships, path finding, snapshots, and optional drawing.

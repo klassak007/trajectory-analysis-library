@@ -1,6 +1,9 @@
 (api-ufuncs)=
 # Universal Ufuncs
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.ufuncs` provides AO-aware wrappers for xarray-compatible unary, binary,
 comparison, and logical ufunc behavior. The wrappers keep xarray label
 alignment while finalizing TAL schema metadata on AO outputs.

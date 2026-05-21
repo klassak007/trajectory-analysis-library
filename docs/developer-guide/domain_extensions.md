@@ -350,5 +350,6 @@ Examples should be deterministic, short, and independent from each other.
 
 ## API Reference
 
-The extension-facing TAL helpers used in this guide are collected in
-{doc}`../api/domain-extensions`.
+The Extension Author API helpers used in this guide are collected in
+{doc}`../api/domain-extensions`. Application code should normally use the
+User API pages instead of these subclassing and orchestration helpers.

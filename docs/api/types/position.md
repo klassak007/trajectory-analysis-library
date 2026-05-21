@@ -1,6 +1,9 @@
 (api-position)=
 # `Position`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.spatial.Position` is an `AnalysisObject` subtype for cartesian xyz
 position or displacement trajectories. It validates vector labels, spatial
 metadata, optional frame tags, and temporal operations at the typed boundary.

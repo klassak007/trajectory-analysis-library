@@ -1,6 +1,9 @@
 (api-analysis-object)=
 # `AnalysisObject`
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `AnalysisObject` is TAL's core container: an `xarray.Dataset` with schema
 metadata stored in `ds.attrs["tal"]`. It keeps the base object small and exposes
 domain behavior through accessors such as `ao.param`, `ao.events`, `ao.group`,

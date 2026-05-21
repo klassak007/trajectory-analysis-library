@@ -1,10 +1,11 @@
 (api-index)=
 # API Reference
 
-The API reference documents TAL's public surface in the same terms used by the
-user guide: roles, parameter coordinates, validity, components, frames, and
-typed payloads. Use it when you need exact entry points, invariants, option
-objects, and return-type expectations.
+The API reference is organized by audience. **User API** pages are for normal
+analysis workflows. **Extension Author API** pages are for package authors
+building typed `AnalysisObject` subclasses and domain operations. **Internal
+API** pages define what is intentionally outside the supported documentation
+surface.
 
 ```{contents}
 :local:
@@ -12,24 +13,18 @@ objects, and return-type expectations.
 ```
 
 ```{toctree}
-:maxdepth: 1
-:caption: Core
+:maxdepth: 2
+:caption: User API
 
 analysis-object
-domain-extensions
+types/index
 components
-ufuncs
-schema
+concat
 timebase
 events
 reducers
-```
-
-```{toctree}
-:maxdepth: 1
-:caption: Data Plumbing
-
-concat
+schema
+ufuncs
 catalog
 frames
 io
@@ -37,8 +32,15 @@ viz
 ```
 
 ```{toctree}
-:maxdepth: 2
-:caption: Typed AOs
+:maxdepth: 1
+:caption: Extension Author API
 
-types/index
+domain-extensions
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Internal API Policy
+
+internal-api
 ```

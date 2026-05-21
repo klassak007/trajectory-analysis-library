@@ -1,6 +1,9 @@
 (api-viz)=
 # Visualization
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `tal.viz` and `ao.viz` provide optional plotting helpers for quick inspection
 of trajectories, variables, grouped runs, and registered components. The
 visualization layer reuses core AO coercion, dataset context resolution,

@@ -1,6 +1,9 @@
 (api-velocity)=
 # Velocity Types
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 TAL models velocity as either separate linear/angular typed vectors or as a
 combined spatial6 payload.
 

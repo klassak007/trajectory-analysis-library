@@ -1,6 +1,9 @@
 (api-events)=
 # Events
 
+> **Audience:** User API. This page is for application code and normal
+> analysis workflows.
+
 `ao.events` evaluates reusable conditions against trajectory data and returns
 masks, boundary tables, interval tables, condition-selected layouts, or
 event-centered windows.
