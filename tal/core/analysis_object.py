@@ -606,8 +606,8 @@ class AnalysisObject:
         ...     coords={"trial": ["t0"], "axis": ["x", "y", "z"]},
         ... )
         >>> ao = AnalysisObject.from_data(ds, batch_dims=("trial",), core_dims=("axis",), validate=True)
-        >>> read_roles(ao.unsafe_data)[1]
-        None
+        >>> read_roles(ao.unsafe_data)[1] is None
+        True
 
         See Also
         --------

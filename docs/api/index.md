@@ -16,6 +16,7 @@ objects, and return-type expectations.
 :caption: Core
 
 analysis-object
+domain-extensions
 components
 ufuncs
 schema

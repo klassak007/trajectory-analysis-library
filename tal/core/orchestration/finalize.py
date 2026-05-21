@@ -22,27 +22,47 @@ def finalize_like(
     validate: bool,
     owner: str,
 ) -> "AnalysisObject":
-    """Finalize a dataset using the source AO structural boundary.
+    """Finalize a dataset with the structural policy of a source AO.
 
     Parameters
     ----------
     source_ao : AnalysisObject
-        Input dataset/source value processed by this operation.
+        Source object whose schema and subclass rewrap behavior define the
+        finalization boundary.
     ds : xr.Dataset
-        Input dataset/source value processed by this operation.
-    validate : bool, optional
+        Candidate output dataset produced by an operation kernel.
+    validate : bool
         When ``True``, validate output schema/layout invariants before returning.
-    owner : str, optional
-        Owner prefix used to build deterministic fail-closed error messages.
+    owner : str
+        Public owner string used to build deterministic diagnostics.
 
     Returns
     -------
     AnalysisObject
-        Result of applying this operation with TAL semantic constraints preserved.
+        Output rewrapped like ``source_ao`` with schema repaired after structural
+        changes.
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Finalization repairs role references, validity metadata, and component
+    registry entries affected by structural changes. It preserves xarray
+    payload laziness and delegates subclass rewrap behavior to the source AO.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.orchestration.finalize import finalize_like
+    >>> source = AnalysisObject.from_data(
+    ...     xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]}),
+    ...     sequence_dim="sample",
+    ...     core_dims=(),
+    ...     validate=True,
+    ... )
+    >>> out_ds = source.unsafe_data.assign(celsius=source.unsafe_data["celsius"] + 1.0)
+    >>> out = finalize_like(source, out_ds, validate=True, owner="thermal.bias_temperature")
+    >>> out.unsafe_data.attrs["tal"]["core"]["roles"]["sequence_dim"]
+    'sample'
     """
     _ = owner
     return finalize_structural(source_ao, ds, validate=validate)

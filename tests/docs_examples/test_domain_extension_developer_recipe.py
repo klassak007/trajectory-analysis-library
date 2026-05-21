@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import doctest
+import io
+import inspect
 from pathlib import Path
 import re
 
@@ -11,6 +14,10 @@ DEVELOPER_GUIDE_DIR = REPO_ROOT / "docs" / "developer-guide"
 DOMAIN_EXTENSIONS_PATH = DEVELOPER_GUIDE_DIR / "domain_extensions.md"
 DEVELOPER_INDEX_PATH = DEVELOPER_GUIDE_DIR / "index.md"
 DOCS_INDEX_PATH = REPO_ROOT / "docs" / "index.md"
+API_INDEX_PATH = REPO_ROOT / "docs" / "api" / "index.md"
+API_ANALYSIS_OBJECT_PATH = REPO_ROOT / "docs" / "api" / "analysis-object.md"
+API_SCHEMA_PATH = REPO_ROOT / "docs" / "api" / "schema.md"
+API_DOMAIN_EXTENSIONS_PATH = REPO_ROOT / "docs" / "api" / "domain-extensions.md"
 PYTHON_BLOCK_RE = re.compile(r"```python\b")
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 EXAMPLE_BLOCK_RE = re.compile(
@@ -32,6 +39,7 @@ def _visible_developer_guide_text() -> str:
     parts = [
         HTML_COMMENT_RE.sub("", DEVELOPER_INDEX_PATH.read_text(encoding="utf-8")),
         _visible_domain_extension_text(),
+        HTML_COMMENT_RE.sub("", API_DOMAIN_EXTENSIONS_PATH.read_text(encoding="utf-8")),
     ]
     return "\n".join(parts)
 
@@ -40,6 +48,57 @@ def _example_blocks() -> dict[str, str]:
     return {
         match.group("example_id"): match.group("code")
         for match in EXAMPLE_BLOCK_RE.finditer(_domain_extension_text())
+    }
+
+
+def _referenced_domain_extension_api_objects() -> dict[str, object]:
+    from tal.core import AnalysisObject
+    from tal.core.orchestration.context import (
+        DatasetContext,
+        DatasetContextOptions,
+        resolve_dataset_context,
+        resolve_dataset_contexts,
+    )
+    from tal.core.orchestration.finalize import finalize_like
+    from tal.core.orchestration.inputs import coerce_analysis_object_input, coerce_operand
+    from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
+    from tal.core.schema import merge_schema
+    from tal.core.schema_read import read_roles
+    from tal.core.typed_lifecycle import (
+        TypedAnalysisObject,
+        TypedLifecycleContext,
+        TypedLifecycleSpec,
+        default_coerce_source,
+        identity_init_options,
+        identity_normalize,
+        no_op_enforce,
+    )
+
+    return {
+        "AnalysisObject": AnalysisObject,
+        "AnalysisObject.from_data": AnalysisObject.from_data,
+        "AnalysisObject.merge_schema": AnalysisObject.merge_schema,
+        "merge_schema": merge_schema,
+        "read_roles": read_roles,
+        "TypedLifecycleContext": TypedLifecycleContext,
+        "TypedLifecycleSpec": TypedLifecycleSpec,
+        "TypedAnalysisObject": TypedAnalysisObject,
+        "TypedAnalysisObject.__init__": TypedAnalysisObject.__init__,
+        "TypedAnalysisObject._from_validated": TypedAnalysisObject._from_validated,
+        "TypedAnalysisObject._from_unvalidated": TypedAnalysisObject._from_unvalidated,
+        "default_coerce_source": default_coerce_source,
+        "identity_init_options": identity_init_options,
+        "identity_normalize": identity_normalize,
+        "no_op_enforce": no_op_enforce,
+        "coerce_analysis_object_input": coerce_analysis_object_input,
+        "coerce_operand": coerce_operand,
+        "DatasetContextOptions": DatasetContextOptions,
+        "DatasetContext": DatasetContext,
+        "resolve_dataset_context": resolve_dataset_context,
+        "resolve_dataset_contexts": resolve_dataset_contexts,
+        "finalize_like": finalize_like,
+        "CoreSchemaFinalizeSpec": CoreSchemaFinalizeSpec,
+        "finalize_with_schema": finalize_with_schema,
     }
 
 
@@ -130,6 +189,116 @@ def test_docs_dev_005_domain_extension_testing_recipe() -> None:
     ]
     missing = [snippet for snippet in required if snippet not in text]
     assert not missing, f"Missing coverage recipe snippets: {missing!r}"
+
+
+def test_docs_dev_006_domain_extension_referenced_apis_are_documented() -> None:
+    """ID: DOCS_DEV_006_domain_extension_referenced_apis_are_documented."""
+    assert API_DOMAIN_EXTENSIONS_PATH.exists()
+    assert "domain-extensions" in API_INDEX_PATH.read_text(encoding="utf-8")
+    assert "{doc}`../api/domain-extensions`" in _visible_domain_extension_text()
+
+    api_text = API_DOMAIN_EXTENSIONS_PATH.read_text(encoding="utf-8")
+    analysis_object_text = API_ANALYSIS_OBJECT_PATH.read_text(encoding="utf-8")
+    schema_text = API_SCHEMA_PATH.read_text(encoding="utf-8")
+    required_by_file = {
+        "domain-extensions.md": [
+            "tal.core.typed_lifecycle.TypedAnalysisObject",
+            "tal.core.typed_lifecycle.TypedLifecycleContext",
+            "tal.core.typed_lifecycle.TypedLifecycleSpec",
+            "tal.core.typed_lifecycle.default_coerce_source",
+            "tal.core.typed_lifecycle.identity_init_options",
+            "tal.core.typed_lifecycle.identity_normalize",
+            "tal.core.typed_lifecycle.no_op_enforce",
+            "tal.core.typed_lifecycle.TypedAnalysisObject._from_validated",
+            "tal.core.typed_lifecycle.TypedAnalysisObject._from_unvalidated",
+            "tal.core.orchestration.inputs.coerce_operand",
+            "tal.core.orchestration.inputs.coerce_analysis_object_input",
+            "tal.core.orchestration.context.DatasetContextOptions",
+            "tal.core.orchestration.context.DatasetContext",
+            "tal.core.orchestration.context.resolve_dataset_context",
+            "tal.core.orchestration.finalize.finalize_like",
+            "tal.core.orchestration.schema_finalize.CoreSchemaFinalizeSpec",
+            "tal.core.orchestration.schema_finalize.finalize_with_schema",
+            "tal.core.schema_read.read_roles",
+        ],
+        "analysis-object.md": [
+            "tal.AnalysisObject",
+            "tal.AnalysisObject.from_data",
+            "tal.AnalysisObject.merge_schema",
+        ],
+        "schema.md": [
+            "tal.core.merge_schema",
+        ],
+    }
+    texts_by_file = {
+        "domain-extensions.md": api_text,
+        "analysis-object.md": analysis_object_text,
+        "schema.md": schema_text,
+    }
+    missing = {
+        name: [snippet for snippet in snippets if snippet not in texts_by_file[name]]
+        for name, snippets in required_by_file.items()
+    }
+    missing = {name: snippets for name, snippets in missing.items() if snippets}
+    assert not missing, f"Domain extension guide references APIs without docs entries: {missing!r}"
+
+
+def test_docs_dev_007_domain_extension_referenced_apis_have_docstrings() -> None:
+    """ID: DOCS_DEV_007_domain_extension_referenced_apis_have_docstrings."""
+    required = {
+        "AnalysisObject": ("Notes", "See Also", "Examples"),
+        "AnalysisObject.from_data": ("Parameters", "Returns", "Notes", "Examples"),
+        "AnalysisObject.merge_schema": ("Parameters", "Returns", "Examples", "See Also"),
+        "merge_schema": ("Parameters", "Returns", "Notes", "Examples"),
+        "read_roles": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
+        "TypedLifecycleContext": ("Parameters", "Notes", "Examples"),
+        "TypedLifecycleSpec": ("Parameters", "Raises", "Notes", "Examples"),
+        "TypedAnalysisObject": ("Parameters", "Notes", "Examples"),
+        "TypedAnalysisObject.__init__": ("Parameters", "Raises", "Examples"),
+        "TypedAnalysisObject._from_validated": ("Parameters", "Returns", "Notes", "Examples"),
+        "TypedAnalysisObject._from_unvalidated": ("Parameters", "Returns", "Notes", "Examples"),
+        "default_coerce_source": ("Parameters", "Returns", "Raises", "See Also", "Examples"),
+        "identity_init_options": ("Parameters", "Returns", "Notes", "Examples"),
+        "identity_normalize": ("Parameters", "Returns", "Notes", "Examples"),
+        "no_op_enforce": ("Parameters", "Returns", "Notes", "Examples"),
+        "coerce_analysis_object_input": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
+        "coerce_operand": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
+        "DatasetContextOptions": ("Parameters", "Notes", "Examples"),
+        "DatasetContext": ("Parameters", "Notes", "Examples"),
+        "resolve_dataset_context": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
+        "resolve_dataset_contexts": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
+        "finalize_like": ("Parameters", "Returns", "Notes", "Examples"),
+        "CoreSchemaFinalizeSpec": ("Parameters", "Notes", "Examples"),
+        "finalize_with_schema": ("Parameters", "Returns", "Notes", "Examples"),
+    }
+    objects = _referenced_domain_extension_api_objects()
+    failures: dict[str, list[str]] = {}
+    for name, snippets in required.items():
+        obj = objects[name]
+        doc = inspect.getdoc(obj) or ""
+        missing = [snippet for snippet in snippets if snippet not in doc]
+        if missing or not doc:
+            failures[name] = missing or ["docstring"]
+    assert not failures, f"Referenced domain-extension APIs lack complete docstrings: {failures!r}"
+
+
+def test_docs_dev_008_domain_extension_referenced_api_docstring_examples_execute() -> None:
+    """ID: DOCS_DEV_008_domain_extension_referenced_api_docstring_examples_execute."""
+    parser = doctest.DocTestParser()
+    failures: dict[str, str] = {}
+    for name, obj in _referenced_domain_extension_api_objects().items():
+        doc = inspect.getdoc(obj) or ""
+        source = inspect.getsourcefile(obj) or name
+        test = parser.get_doctest(doc, {}, name, source, 0)
+        if not test.examples:
+            failures[name] = "docstring has no executable doctest examples"
+            continue
+        runner = doctest.DocTestRunner(optionflags=doctest.ELLIPSIS)
+        output = io.StringIO()
+        result = runner.run(test, out=output.write)
+        if result.failed:
+            failures[name] = output.getvalue()
+    assert not failures, f"Domain-extension API docstring examples failed: {failures!r}"
 
 
 @pytest.mark.parametrize(

@@ -347,3 +347,8 @@ and assert the behavior it is demonstrating.
 For each documented example, add executable coverage that checks the same
 roles, metadata, values, and failure behavior shown in the documentation.
 Examples should be deterministic, short, and independent from each other.
+
+## API Reference
+
+The extension-facing TAL helpers used in this guide are collected in
+{doc}`../api/domain-extensions`.

@@ -18,6 +18,43 @@ from .topology import SemanticTopology
 
 @dataclass(frozen=True)
 class DatasetContextOptions:
+    """Options for resolving operation-time dataset context.
+
+    Parameters
+    ----------
+    require_roles : bool, optional
+        Require TAL role metadata to be declared.
+    require_sequence_dim : bool, optional
+        Require declared roles to include ``sequence_dim``.
+    select_numeric_var : bool, optional
+        Select a numeric data variable and expose it on the resolved context.
+    require_single_numeric_var : bool, optional
+        Require the dataset to contain exactly one data variable when selecting
+        numeric data.
+    allowed_core_arity : tuple[int, ...] | None, optional
+        Allowed number of core dimensions after role or payload resolution.
+    require_semantic_dims_in_var : bool, optional
+        Require the selected variable to contain all declared semantic
+        dimensions.
+
+    Notes
+    -----
+    These options describe orchestration-time requirements only. They do not
+    mutate datasets and they do not perform numeric computation on payload
+    values.
+
+    Examples
+    --------
+    >>> from tal.core.orchestration.context import DatasetContextOptions
+    >>> opts = DatasetContextOptions(
+    ...     require_roles=True,
+    ...     select_numeric_var=True,
+    ...     allowed_core_arity=(0,),
+    ... )
+    >>> (opts.require_roles, opts.select_numeric_var, opts.allowed_core_arity)
+    (True, True, (0,))
+    """
+
     require_roles: bool = False
     require_sequence_dim: bool = False
     select_numeric_var: bool = False
@@ -28,6 +65,61 @@ class DatasetContextOptions:
 
 @dataclass(frozen=True)
 class DatasetContext:
+    """Resolved dataset metadata for an operation boundary.
+
+    Parameters
+    ----------
+    ao : AnalysisObject
+        Source object used for later finalization.
+    ds : xr.Dataset
+        Schema-checked backing dataset used by the operation.
+    roles_declared : bool
+        Whether ``tal.core.roles`` was present.
+    sequence_dim : str | None
+        Declared sequence dimension, when present.
+    batch_dims : tuple[str, ...]
+        Declared batch dimensions.
+    core_dims : tuple[str, ...]
+        Declared or inferred core dimensions.
+    param_coord : str | None
+        Declared parameter coordinate name, when present.
+    sequence_size_coord : str | None
+        Declared sequence-size validity coordinate name, when present.
+    var_name : str | None
+        Selected data variable name, when variable selection was requested.
+    data : xr.DataArray | None
+        Selected data variable, when variable selection was requested.
+
+    Notes
+    -----
+    The context is immutable and contains only metadata plus references to
+    xarray objects. It preserves xarray laziness by avoiding payload value
+    materialization.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.orchestration.context import (
+    ...     DatasetContext,
+    ...     DatasetContextOptions,
+    ...     resolve_dataset_context,
+    ... )
+    >>> ao = AnalysisObject.from_data(
+    ...     xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]}),
+    ...     sequence_dim="sample",
+    ...     core_dims=(),
+    ...     validate=True,
+    ... )
+    >>> ctx = resolve_dataset_context(
+    ...     ao,
+    ...     owner="thermal.bias_temperature",
+    ...     options=DatasetContextOptions(select_numeric_var=True),
+    ... )
+    >>> (isinstance(ctx, DatasetContext), ctx.sequence_dim, ctx.var_name)
+    (True, 'sample', 'celsius')
+    """
+
     ao: AnalysisObject
     ds: xr.Dataset
     roles_declared: bool
@@ -172,6 +264,64 @@ def resolve_dataset_context(
     options: DatasetContextOptions | None = None,
     index: int | None = None,
 ) -> DatasetContext:
+    """Resolve roles, optional metadata, and selected data for one AO.
+
+    Parameters
+    ----------
+    ao : AnalysisObject
+        Source object to inspect.
+    owner : str
+        Public owner string used to build deterministic diagnostics.
+    options : DatasetContextOptions | None, optional
+        Resolution requirements. ``None`` uses default permissive options.
+    index : int | None, optional
+        Operand index for diagnostics in multi-input operations.
+
+    Returns
+    -------
+    DatasetContext
+        Immutable context containing the schema-checked dataset, role metadata,
+        optional coordinate metadata, and optional selected numeric variable.
+
+    Raises
+    ------
+    TypeError
+        If a selected variable is not numeric.
+    ValueError
+        If required roles, sequence metadata, variable cardinality, core arity,
+        or semantic dimensions are missing.
+
+    Notes
+    -----
+    Resolution is xarray-native and metadata-oriented. It validates schema when
+    needed and selects arrays without reading payload values, so Dask-backed
+    data remains lazy.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_context
+    >>> ao = AnalysisObject.from_data(
+    ...     xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]}),
+    ...     sequence_dim="sample",
+    ...     core_dims=(),
+    ...     validate=True,
+    ... )
+    >>> ctx = resolve_dataset_context(
+    ...     ao,
+    ...     owner="thermal.bias_temperature",
+    ...     options=DatasetContextOptions(
+    ...         require_roles=True,
+    ...         select_numeric_var=True,
+    ...         require_single_numeric_var=True,
+    ...         allowed_core_arity=(0,),
+    ...         require_semantic_dims_in_var=True,
+    ...     ),
+    ... )
+    >>> (ctx.roles_declared, ctx.sequence_dim, ctx.core_dims, ctx.var_name, ctx.data.dims)
+    (True, 'sample', (), 'celsius', ('sample',))
+    """
     opts = options if options is not None else DatasetContextOptions()
     ds = validate_schema_if_needed(ao.unsafe_data)
     roles_declared, sequence_dim, batch_dims, core_dims = _resolve_context_roles(
@@ -210,6 +360,49 @@ def resolve_dataset_contexts(
     owner: str,
     options: DatasetContextOptions | None = None,
 ) -> list[DatasetContext]:
+    """Resolve dataset context for a sequence of AO inputs.
+
+    Parameters
+    ----------
+    aos : Sequence[AnalysisObject]
+        Ordered AO inputs to inspect.
+    owner : str
+        Public owner string used to build deterministic diagnostics.
+    options : DatasetContextOptions | None, optional
+        Resolution requirements shared by every input.
+
+    Returns
+    -------
+    list[DatasetContext]
+        Contexts in the same order as ``aos``.
+
+    Raises
+    ------
+    TypeError
+        If selected variables violate numeric requirements.
+    ValueError
+        If any input violates the requested context options.
+
+    Notes
+    -----
+    Diagnostics include the operand index so variadic operation failures point
+    to the source input.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import AnalysisObject
+    >>> from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_contexts
+    >>> ds = xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]})
+    >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=(), validate=True)
+    >>> contexts = resolve_dataset_contexts(
+    ...     [ao, ao],
+    ...     owner="thermal.combine_temperatures",
+    ...     options=DatasetContextOptions(select_numeric_var=True),
+    ... )
+    >>> [ctx.var_name for ctx in contexts]
+    ['celsius', 'celsius']
+    """
     return [
         resolve_dataset_context(ao, owner=owner, options=options, index=index)
         for index, ao in enumerate(aos)
