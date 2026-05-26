@@ -54,6 +54,7 @@ viz = [
 ]
 ros = ["rosbags"]
 netcdf = ["netCDF4>=1.7"]
+numba = ["numba>=0.65.1"]
 notebooks = [
     "ipykernel>=6.29",
     "jupyterlab>=4.3",
