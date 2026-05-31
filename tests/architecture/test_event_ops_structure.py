@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -99,14 +100,33 @@ def test_event_arch_009_intervals_no_private_boundary_internal_imports() -> None
 
 def test_event_arch_010_event_edge_sentinel_constants_single_owner() -> None:
     """ID: EVENT_ARCH_010_event_edge_sentinel_constants_single_owner."""
+    constants_path = Path("tal/core/event_ops/_event_constants.py")
+    constants = constants_path.read_text(encoding="utf-8")
     primitives = Path("tal/core/event_ops/event_primitives.py").read_text(encoding="utf-8")
-    assert "EDGE_INVALID =" in primitives
-    assert "EDGE_ENTER =" in primitives
-    assert "EDGE_EXIT =" in primitives
-    assert "EDGE_TRIGGER =" in primitives
-    assert "SAMPLE_SENTINEL =" in primitives
-    for path in ["tal/core/event_ops/boundary.py", "tal/core/event_ops/intervals.py"]:
-        text = Path(path).read_text(encoding="utf-8")
+    module = ast.parse(constants)
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == ["__future__", "numpy"]
+    assert "xarray" not in constants
+    assert "tal." not in constants
+    assert "attrs" not in constants
+    assert "from ._event_constants import" in primitives
+    for needle in [
+        "EDGE_INVALID =",
+        "EDGE_ENTER =",
+        "EDGE_EXIT =",
+        "EDGE_TRIGGER =",
+        "SAMPLE_SENTINEL =",
+    ]:
+        assert needle in constants
+    for path in _event_ops_files():
+        if path == constants_path:
+            continue
+        text = path.read_text(encoding="utf-8")
         for needle in [
             "EDGE_INVALID =",
             "EDGE_ENTER =",
@@ -507,3 +527,49 @@ def test_event_arch_046_bounded_event_stopgaps_route_through_backend_owner() -> 
     assert "intervals_bounded_row_backend" in intervals
     assert "def boundary_bounded_row_backend(" in backends
     assert "def intervals_bounded_row_backend(" in backends
+
+
+def test_event_arch_047_boundary_bounded_numba_backend_owner_routed() -> None:
+    """ID: EVENT_ARCH_047_boundary_bounded_numba_backend_owner_routed."""
+    backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
+    assert 'EVENT_BOUNDARY_BACKEND_NUMBA = "numba"' in backends
+    assert "def boundary_bounded_block_backend(" in backends
+    assert "from .numba_backends import boundary_bounded_block_numba" in backends
+
+
+def test_event_arch_048_intervals_bounded_numba_backend_owner_routed() -> None:
+    """ID: EVENT_ARCH_048_intervals_bounded_numba_backend_owner_routed."""
+    backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
+    assert 'EVENT_INTERVALS_BACKEND_NUMBA = "numba"' in backends
+    assert "def intervals_bounded_block_backend(" in backends
+    assert "from .numba_backends import intervals_bounded_block_numba" in backends
+
+
+def test_event_arch_049_bounded_event_numba_paths_are_blockwise_vectorize_false() -> None:
+    """ID: EVENT_ARCH_049_bounded_event_numba_paths_are_blockwise_vectorize_false."""
+    boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    numba_backends = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
+    assert "boundary_bounded_block_backend" not in boundary
+    assert "intervals_bounded_block_backend" not in intervals
+    assert "vectorize=True" not in numba_backends
+
+
+def test_event_arch_050_baseline_event_stopgaps_remain_explicit_until_f2c() -> None:
+    """ID: EVENT_ARCH_050_baseline_event_stopgaps_remain_explicit_until_f2c."""
+    boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    assert '"backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW' in boundary
+    assert '"backend": EVENT_INTERVALS_BACKEND_NUMPY_ROW' in intervals
+    assert "EVENT_BOUNDARY_BACKEND_NUMBA" not in boundary
+    assert "EVENT_INTERVALS_BACKEND_NUMBA" not in intervals
+
+
+def test_event_arch_052_bounded_event_numba_helper_parameter_budget() -> None:
+    """ID: EVENT_ARCH_052_bounded_event_numba_helper_parameter_budget."""
+    module = ast.parse(Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8"))
+    for node in ast.walk(module):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        params = len(node.args.args) + len(node.args.kwonlyargs)
+        assert params <= 10, f"numba_backends.{node.name} exceeds parameter budget ({params} > 10)"

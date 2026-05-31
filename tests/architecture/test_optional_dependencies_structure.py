@@ -33,9 +33,25 @@ def test_numba_arch_001_no_unguarded_numba_imports_in_core_import_path() -> None
     assert offenders == []
 
 
+def test_numba_arch_002_optional_import_helper_has_no_domain_imports() -> None:
+    """ID: NUMBA_ARCH_002_optional_import_helper_has_no_domain_imports."""
+    module = ast.parse(Path("tal/utils/numba_support.py").read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == ["__future__", "importlib"]
+    text = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    assert "tal.core" not in text
+    assert "tal.spatial" not in text
+    assert "tal.linalg" not in text
+    assert "import numba" not in text
+
+
 def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
     """ID: NUMBA_ARCH_003_numba_kernels_are_schema_free."""
-    text = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
     banned = [
         "import xarray",
         "xr.",
@@ -48,7 +64,12 @@ def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
         "ParamMap",
         "ParamBoundsMap",
     ]
-    assert [token for token in banned if token in text] == []
+    for path in [
+        Path("tal/core/param_engine/numba_backends.py"),
+        Path("tal/core/event_ops/numba_backends.py"),
+    ]:
+        text = path.read_text(encoding="utf-8")
+        assert [token for token in banned if token in text] == []
 
 
 def test_numba_arch_004_numba_backend_dispatch_keeps_public_signatures_stable() -> None:
@@ -63,13 +84,16 @@ def test_numba_arch_004_numba_backend_dispatch_keeps_public_signatures_stable() 
 
 def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> None:
     """ID: NUMBA_ARCH_005_numba_expected_failures_translate_through_wrappers."""
-    text = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
-    assert "Install with 'tal[numba]'" in text
-    assert "def _raise_map_status(" in text
-    assert "def _raise_bounds_status(" in text
-    assert "_DUPLICATE_BRACKET_ERROR" in text
-    assert "_MAP_MONOTONIC_ERROR" in text
-    assert "_BOUNDS_MONOTONIC_ERROR" in text
+    helper = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    param_text = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
+    event_text = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
+    assert "Install with 'tal[numba]'" in helper
+    assert "def _raise_map_status(" in param_text
+    assert "def _raise_bounds_status(" in param_text
+    assert "_DUPLICATE_BRACKET_ERROR" in param_text
+    assert "_MAP_MONOTONIC_ERROR" in param_text
+    assert "_BOUNDS_MONOTONIC_ERROR" in param_text
+    assert "extracted event boundaries include non-finite clock values" in event_text
 
 
 def test_param_arch_041_param_map_numba_backend_owner_routed() -> None:

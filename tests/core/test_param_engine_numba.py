@@ -7,6 +7,12 @@ from tal.core.param_engine.backends import (
     bounds_block_backend,
     map_block_backend,
 )
+from tal.core.event_ops.backends import (
+    EVENT_BOUNDARY_BACKEND_NUMBA,
+    EVENT_INTERVALS_BACKEND_NUMBA,
+    boundary_bounded_block_backend,
+    intervals_bounded_block_backend,
+)
 from tal.core.param_engine.map_build import (
     _DUPLICATE_CODES,
     _bounds_row,
@@ -66,12 +72,12 @@ def _assert_map_equal(
 
 def test_numba_opt_005_backends_fail_closed_when_numba_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: NUMBA_OPT_005_primary_backends_fail_closed_when_numba_requested_without_numba."""
-    import tal.core.param_engine.numba_backends as numba_backends
+    import tal.utils.numba_support as numba_support
 
     def _raise_import_error():
         raise ImportError("missing numba")
 
-    monkeypatch.setattr(numba_backends, "_import_numba", _raise_import_error)
+    monkeypatch.setattr(numba_support, "_import_numba", _raise_import_error)
     with pytest.raises(ImportError, match=r"build_param_map: numba is required for backend='numba'"):
         map_block_backend(
             np.asarray([[0.0, 1.0]]),
@@ -88,6 +94,28 @@ def test_numba_opt_005_backends_fail_closed_when_numba_missing(monkeypatch: pyte
             np.asarray([0.0]),
             np.asarray([1.0]),
             backend=PARAM_BOUNDS_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"events.boundaries: numba is required for backend='numba'"):
+        boundary_bounded_block_backend(
+            np.asarray([[False, True]]),
+            np.asarray([[True, True]]),
+            np.asarray([[0.0, 1.0]]),
+            include_initial=False,
+            emit_triggers=False,
+            dedupe_atol=0.0,
+            max_events=2,
+            owner="events.boundaries",
+            backend=EVENT_BOUNDARY_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"events.intervals: numba is required for backend='numba'"):
+        intervals_bounded_block_backend(
+            np.asarray([[1.0, 2.0]]),
+            np.asarray([[1, 2]], dtype="int8"),
+            np.asarray([[-1, 1]]),
+            np.asarray([[1, -1]]),
+            max_segments=1,
+            owner="events.intervals",
+            backend=EVENT_INTERVALS_BACKEND_NUMBA,
         )
 
 

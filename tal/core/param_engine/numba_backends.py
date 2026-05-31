@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-import importlib
 
 import numpy as np
+
+from tal.utils.numba_support import require_numba
 
 _METHOD_NEAREST = 0
 _METHOD_LINEAR = 1
@@ -21,27 +22,16 @@ _DUPLICATE_BRACKET_ERROR = (
 _HELPERS_JITTED = False
 
 
-def _import_numba():
-    return importlib.import_module("numba")
-
-
-def _require_numba(owner: str):
-    try:
-        return _import_numba()
-    except ImportError as exc:
-        raise ImportError(f"{owner}: numba is required for backend='numba'. Install with 'tal[numba]'.") from exc
-
-
 @lru_cache(maxsize=1)
 def _compiled_map_block():
-    numba = _require_numba("build_param_map")
+    numba = require_numba("build_param_map")
     _jit_kernel_helpers(numba)
     return numba.njit(cache=True, fastmath=False)(_map_block_impl)
 
 
 @lru_cache(maxsize=1)
 def _compiled_bounds_block():
-    numba = _require_numba("build_param_bounds_map")
+    numba = require_numba("build_param_bounds_map")
     _jit_kernel_helpers(numba)
     return numba.njit(cache=True, fastmath=False)(_bounds_block_impl)
 
@@ -165,7 +155,7 @@ def map_block_numba(
     method: str,
     dup_code: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    _require_numba("build_param_map")
+    require_numba("build_param_map")
     method_code = _method_code(method)
     param_rows, valid_rows, query_rows, output_shape = _broadcast_map_blocks(param_block, valid_block, query_block)
     i0, i1, alpha, valid, status = _compiled_map_block()(param_rows, valid_rows, query_rows, method_code, int(dup_code))
@@ -179,7 +169,7 @@ def bounds_block_numba(
     start_block: np.ndarray,
     stop_block: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    _require_numba("build_param_bounds_map")
+    require_numba("build_param_bounds_map")
     param_rows, valid_rows, start_rows, stop_rows, output_shape = _broadcast_bounds_blocks(
         param_block,
         valid_block,
