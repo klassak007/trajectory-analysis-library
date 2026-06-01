@@ -13,6 +13,7 @@ from tal.core.event_ops.backends import (
     boundary_bounded_block_backend,
     intervals_bounded_block_backend,
 )
+from tal.linalg.ops.solve_backends import LSTSQ_BACKEND_NUMBA, lstsq_block_backend
 from tal.core.param_engine.map_build import (
     _DUPLICATE_CODES,
     _bounds_row,
@@ -116,6 +117,14 @@ def test_numba_opt_005_backends_fail_closed_when_numba_missing(monkeypatch: pyte
             max_segments=1,
             owner="events.intervals",
             backend=EVENT_INTERVALS_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"linalg.solve: numba is required for backend='numba'"):
+        lstsq_block_backend(
+            np.asarray([[[1.0], [2.0]]]),
+            np.asarray([[1.0, 2.0]]),
+            rcond=None,
+            rhs_is_vector=True,
+            backend=LSTSQ_BACKEND_NUMBA,
         )
 
 

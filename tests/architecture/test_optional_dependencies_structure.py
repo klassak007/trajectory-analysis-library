@@ -67,6 +67,7 @@ def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
     for path in [
         Path("tal/core/param_engine/numba_backends.py"),
         Path("tal/core/event_ops/numba_backends.py"),
+        Path("tal/linalg/ops/numba_backends.py"),
     ]:
         text = path.read_text(encoding="utf-8")
         assert [token for token in banned if token in text] == []
@@ -87,6 +88,7 @@ def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> 
     helper = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
     param_text = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
     event_text = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
+    linalg_text = Path("tal/linalg/ops/numba_backends.py").read_text(encoding="utf-8")
     assert "Install with 'tal[numba]'" in helper
     assert "def _raise_map_status(" in param_text
     assert "def _raise_bounds_status(" in param_text
@@ -94,6 +96,7 @@ def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> 
     assert "_MAP_MONOTONIC_ERROR" in param_text
     assert "_BOUNDS_MONOTONIC_ERROR" in param_text
     assert "extracted event boundaries include non-finite clock values" in event_text
+    assert "require_numba(owner)" in linalg_text
 
 
 def test_param_arch_041_param_map_numba_backend_owner_routed() -> None:
