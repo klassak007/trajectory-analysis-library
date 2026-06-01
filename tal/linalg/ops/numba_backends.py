@@ -4,26 +4,20 @@ from functools import lru_cache
 
 import numpy as np
 
-from tal.utils.numba_support import require_numba
-
-
-def _row_count(shape: tuple[int, ...]) -> int:
-    rows = 1
-    for size in shape:
-        rows *= int(size)
-    return rows
+from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
+from tal.utils.numba_support import njit_kernel, require_numba
 
 
 @lru_cache(maxsize=1)
 def _compiled_lstsq_vector_block():
     numba = require_numba("linalg.solve")
-    return numba.njit(cache=True, fastmath=False)(_lstsq_vector_block_impl)
+    return njit_kernel(numba, _lstsq_vector_block_impl)
 
 
 @lru_cache(maxsize=1)
 def _compiled_lstsq_matrix_block():
     numba = require_numba("linalg.solve")
-    return numba.njit(cache=True, fastmath=False)(_lstsq_matrix_block_impl)
+    return njit_kernel(numba, _lstsq_matrix_block_impl)
 
 
 def _broadcast_vector_blocks(
@@ -32,20 +26,18 @@ def _broadcast_vector_blocks(
     *,
     owner: str,
 ) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
-    if a_block.ndim < 2 or b_block.ndim < 1:
-        raise ValueError(f"{owner}: lstsq blocks must include trailing core dimensions.")
-    equations = int(a_block.shape[-2])
-    solutions = int(a_block.shape[-1])
-    if int(b_block.shape[-1]) != equations:
+    prepared = prepare_block_rows(
+        (a_block, b_block),
+        (BlockInputSpec("a", 2, None), BlockInputSpec("b", 1, None)),
+        output_core_shape=(),
+        owner=owner,
+    )
+    a_rows, b_rows = prepared.row_arrays
+    equations = int(a_rows.shape[-2])
+    solutions = int(a_rows.shape[-1])
+    if int(b_rows.shape[-1]) != equations:
         raise ValueError(f"{owner}: vector rhs trailing dimension must match equation dimension.")
-    try:
-        outer = np.broadcast_shapes(a_block.shape[:-2], b_block.shape[:-1])
-    except ValueError as exc:
-        raise ValueError(f"{owner}: lstsq vector rhs blocks are not broadcast-compatible.") from exc
-    rows = _row_count(outer)
-    a_rows = np.broadcast_to(a_block, outer + (equations, solutions)).reshape(rows, equations, solutions)
-    b_rows = np.broadcast_to(b_block, outer + (equations,)).reshape(rows, equations)
-    return np.ascontiguousarray(a_rows), np.ascontiguousarray(b_rows), outer + (solutions,)
+    return a_rows, b_rows, prepared.outer_shape + (solutions,)
 
 
 def _broadcast_matrix_blocks(
@@ -54,21 +46,19 @@ def _broadcast_matrix_blocks(
     *,
     owner: str,
 ) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
-    if a_block.ndim < 2 or b_block.ndim < 2:
-        raise ValueError(f"{owner}: matrix rhs lstsq blocks must include trailing core dimensions.")
-    equations = int(a_block.shape[-2])
-    solutions = int(a_block.shape[-1])
-    rhs_cols = int(b_block.shape[-1])
-    if int(b_block.shape[-2]) != equations:
+    prepared = prepare_block_rows(
+        (a_block, b_block),
+        (BlockInputSpec("a", 2, None), BlockInputSpec("b", 2, None)),
+        output_core_shape=(),
+        owner=owner,
+    )
+    a_rows, b_rows = prepared.row_arrays
+    equations = int(a_rows.shape[-2])
+    solutions = int(a_rows.shape[-1])
+    rhs_cols = int(b_rows.shape[-1])
+    if int(b_rows.shape[-2]) != equations:
         raise ValueError(f"{owner}: matrix rhs leading core dimension must match equation dimension.")
-    try:
-        outer = np.broadcast_shapes(a_block.shape[:-2], b_block.shape[:-2])
-    except ValueError as exc:
-        raise ValueError(f"{owner}: lstsq matrix rhs blocks are not broadcast-compatible.") from exc
-    rows = _row_count(outer)
-    a_rows = np.broadcast_to(a_block, outer + (equations, solutions)).reshape(rows, equations, solutions)
-    b_rows = np.broadcast_to(b_block, outer + (equations, rhs_cols)).reshape(rows, equations, rhs_cols)
-    return np.ascontiguousarray(a_rows), np.ascontiguousarray(b_rows), outer + (solutions, rhs_cols)
+    return a_rows, b_rows, prepared.outer_shape + (solutions, rhs_cols)
 
 
 def lstsq_block_numba(

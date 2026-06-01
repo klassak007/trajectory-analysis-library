@@ -4,7 +4,8 @@ from functools import lru_cache
 
 import numpy as np
 
-from tal.utils.numba_support import require_numba
+from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
+from tal.utils.numba_support import njit_kernel, require_numba
 
 _METHOD_NEAREST = 0
 _METHOD_LINEAR = 1
@@ -26,14 +27,14 @@ _HELPERS_JITTED = False
 def _compiled_map_block():
     numba = require_numba("build_param_map")
     _jit_kernel_helpers(numba)
-    return numba.njit(cache=True, fastmath=False)(_map_block_impl)
+    return njit_kernel(numba, _map_block_impl)
 
 
 @lru_cache(maxsize=1)
 def _compiled_bounds_block():
     numba = require_numba("build_param_bounds_map")
     _jit_kernel_helpers(numba)
-    return numba.njit(cache=True, fastmath=False)(_bounds_block_impl)
+    return njit_kernel(numba, _bounds_block_impl)
 
 
 def _jit_kernel_helpers(numba) -> None:
@@ -43,25 +44,18 @@ def _jit_kernel_helpers(numba) -> None:
     global _write_bounds_span, _write_constant, _write_duplicate
     if _HELPERS_JITTED:
         return
-    _fill_source = numba.njit(cache=True, fastmath=False)(_fill_source)
-    _search_left = numba.njit(cache=True, fastmath=False)(_search_left)
-    _search_right = numba.njit(cache=True, fastmath=False)(_search_right)
-    _write_constant = numba.njit(cache=True, fastmath=False)(_write_constant)
-    _write_duplicate = numba.njit(cache=True, fastmath=False)(_write_duplicate)
-    _map_nearest_row = numba.njit(cache=True, fastmath=False)(_map_nearest_row)
-    _map_linear_interior = numba.njit(cache=True, fastmath=False)(_map_linear_interior)
-    _map_linear_row = numba.njit(cache=True, fastmath=False)(_map_linear_row)
-    _write_bounds_empty = numba.njit(cache=True, fastmath=False)(_write_bounds_empty)
-    _write_bounds_edge = numba.njit(cache=True, fastmath=False)(_write_bounds_edge)
-    _write_bounds_span = numba.njit(cache=True, fastmath=False)(_write_bounds_span)
+    _fill_source = njit_kernel(numba, _fill_source)
+    _search_left = njit_kernel(numba, _search_left)
+    _search_right = njit_kernel(numba, _search_right)
+    _write_constant = njit_kernel(numba, _write_constant)
+    _write_duplicate = njit_kernel(numba, _write_duplicate)
+    _map_nearest_row = njit_kernel(numba, _map_nearest_row)
+    _map_linear_interior = njit_kernel(numba, _map_linear_interior)
+    _map_linear_row = njit_kernel(numba, _map_linear_row)
+    _write_bounds_empty = njit_kernel(numba, _write_bounds_empty)
+    _write_bounds_edge = njit_kernel(numba, _write_bounds_edge)
+    _write_bounds_span = njit_kernel(numba, _write_bounds_span)
     _HELPERS_JITTED = True
-
-
-def _row_count(shape: tuple[int, ...]) -> int:
-    rows = 1
-    for size in shape:
-        rows *= int(size)
-    return rows
 
 
 def _method_code(method: str) -> int:
@@ -77,29 +71,22 @@ def _broadcast_map_blocks(
     valid_block: np.ndarray,
     query_block: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[int, ...]]:
-    param = np.asarray(param_block, dtype=np.float64)
-    valid = np.asarray(valid_block, dtype=bool)
-    query = np.asarray(query_block, dtype=np.float64)
-    if param.ndim < 1 or valid.ndim < 1 or query.ndim < 1:
-        raise ValueError("build_param_map: param, valid, and query blocks must include trailing core dimensions.")
-    seq_size = int(param.shape[-1])
-    query_size = int(query.shape[-1])
-    if int(valid.shape[-1]) != seq_size:
-        raise ValueError("build_param_map: valid block trailing dimension must match param block.")
-    try:
-        outer = np.broadcast_shapes(param.shape[:-1], valid.shape[:-1], query.shape[:-1])
-    except ValueError as exc:
-        raise ValueError("build_param_map: param, valid, and query blocks are not broadcast-compatible.") from exc
-    rows = _row_count(outer)
-    param_rows = np.broadcast_to(param, outer + (seq_size,)).reshape(rows, seq_size)
-    valid_rows = np.broadcast_to(valid, outer + (seq_size,)).reshape(rows, seq_size)
-    query_rows = np.broadcast_to(query, outer + (query_size,)).reshape(rows, query_size)
-    return (
-        np.ascontiguousarray(param_rows),
-        np.ascontiguousarray(valid_rows),
-        np.ascontiguousarray(query_rows),
-        outer + (query_size,),
+    prepared = prepare_block_rows(
+        (param_block, valid_block, query_block),
+        (
+            BlockInputSpec("param", 1, np.float64),
+            BlockInputSpec("valid", 1, bool),
+            BlockInputSpec("query", 1, np.float64),
+        ),
+        output_core_shape=(),
+        owner="build_param_map",
     )
+    param_rows, valid_rows, query_rows = prepared.row_arrays
+    seq_size = int(param_rows.shape[-1])
+    query_size = int(query_rows.shape[-1])
+    if int(valid_rows.shape[-1]) != seq_size:
+        raise ValueError("build_param_map: valid block trailing dimension must match param block.")
+    return param_rows, valid_rows, query_rows, prepared.outer_shape + (query_size,)
 
 
 def _broadcast_bounds_blocks(
@@ -108,31 +95,22 @@ def _broadcast_bounds_blocks(
     start_block: np.ndarray,
     stop_block: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[int, ...]]:
-    param = np.asarray(param_block, dtype=np.float64)
-    valid = np.asarray(valid_block, dtype=bool)
-    start = np.asarray(start_block, dtype=np.float64)
-    stop = np.asarray(stop_block, dtype=np.float64)
-    if param.ndim < 1 or valid.ndim < 1:
-        raise ValueError("build_param_bounds_map: param and valid blocks must include trailing core dimensions.")
-    seq_size = int(param.shape[-1])
-    if int(valid.shape[-1]) != seq_size:
-        raise ValueError("build_param_bounds_map: valid block trailing dimension must match param block.")
-    try:
-        outer = np.broadcast_shapes(param.shape[:-1], valid.shape[:-1], start.shape, stop.shape)
-    except ValueError as exc:
-        raise ValueError("build_param_bounds_map: param, valid, start, and stop blocks are not broadcast-compatible.") from exc
-    rows = _row_count(outer)
-    param_rows = np.broadcast_to(param, outer + (seq_size,)).reshape(rows, seq_size)
-    valid_rows = np.broadcast_to(valid, outer + (seq_size,)).reshape(rows, seq_size)
-    start_rows = np.broadcast_to(start, outer).reshape(rows)
-    stop_rows = np.broadcast_to(stop, outer).reshape(rows)
-    return (
-        np.ascontiguousarray(param_rows),
-        np.ascontiguousarray(valid_rows),
-        np.ascontiguousarray(start_rows),
-        np.ascontiguousarray(stop_rows),
-        outer,
+    prepared = prepare_block_rows(
+        (param_block, valid_block, start_block, stop_block),
+        (
+            BlockInputSpec("param", 1, np.float64),
+            BlockInputSpec("valid", 1, bool),
+            BlockInputSpec("start", 0, np.float64),
+            BlockInputSpec("stop", 0, np.float64),
+        ),
+        output_core_shape=(),
+        owner="build_param_bounds_map",
     )
+    param_rows, valid_rows, start_rows, stop_rows = prepared.row_arrays
+    seq_size = int(param_rows.shape[-1])
+    if int(valid_rows.shape[-1]) != seq_size:
+        raise ValueError("build_param_bounds_map: valid block trailing dimension must match param block.")
+    return param_rows, valid_rows, start_rows, stop_rows, prepared.outer_shape
 
 
 def _raise_map_status(status: int) -> None:

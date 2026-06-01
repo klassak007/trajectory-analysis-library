@@ -99,6 +99,59 @@ def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> 
     assert "require_numba(owner)" in linalg_text
 
 
+def test_numba_arch_006_shared_block_rows_helper_is_schema_free() -> None:
+    """ID: NUMBA_ARCH_006_shared_block_rows_helper_is_schema_free."""
+    path = Path("tal/utils/block_rows.py")
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == ["__future__", "dataclasses", "numpy"]
+    text = path.read_text(encoding="utf-8")
+    assert "xarray" not in text
+    assert "tal.core" not in text
+    assert "tal.linalg" not in text
+    assert "tal.spatial" not in text
+    assert "tal_v2" not in text
+    assert "import numba" not in text
+
+
+def test_numba_arch_007_shared_block_rows_helper_preserves_owner_boundaries() -> None:
+    """ID: NUMBA_ARCH_007_shared_block_rows_helper_preserves_owner_boundaries."""
+    text = Path("tal/utils/block_rows.py").read_text(encoding="utf-8")
+    banned = ["param", "event", "lstsq", "quaternion", "PARAM_", "EVENT_", "LSTSQ_", "SPATIAL_"]
+    assert [token for token in banned if token in text] == []
+
+
+def test_numba_arch_008_numba_compile_policy_helper_is_minimal() -> None:
+    """ID: NUMBA_ARCH_008_numba_compile_policy_helper_is_minimal."""
+    text = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    assert "def njit_kernel(" in text
+    assert "cache=True" in text
+    assert "fastmath=False" in text
+    assert "parallel=True" not in text
+    assert "**kwargs" not in text
+
+
+def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
+    """ID: NUMBA_ARCH_009_numba_benchmark_protocol_is_shared."""
+    helper = Path("benchmarks/_numba_bench.py").read_text(encoding="utf-8")
+    assert "NUMBA_CACHE_DIR" in helper
+    assert "TemporaryDirectory" in helper
+    for path in [
+        Path("benchmarks/bench_param_numba_backends.py"),
+        Path("benchmarks/bench_event_numba_backends.py"),
+        Path("benchmarks/bench_linalg_lstsq_numba_backends.py"),
+    ]:
+        text = path.read_text(encoding="utf-8")
+        assert "from _numba_bench import" in text
+        assert "NUMBA_CACHE_DIR" not in text
+        assert "TemporaryDirectory" not in text
+
+
 def test_param_arch_041_param_map_numba_backend_owner_routed() -> None:
     """ID: PARAM_ARCH_041_param_map_numba_backend_owner_routed."""
     text = Path("tal/core/param_engine/backends.py").read_text(encoding="utf-8")

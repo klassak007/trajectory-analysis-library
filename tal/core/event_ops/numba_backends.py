@@ -5,32 +5,26 @@ from functools import lru_cache
 import numpy as np
 
 from ._event_constants import EDGE_ENTER, EDGE_EXIT, EDGE_INVALID, EDGE_TRIGGER, SAMPLE_SENTINEL
-from tal.utils.numba_support import require_numba
+from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
+from tal.utils.numba_support import njit_kernel, require_numba
 
 _STATUS_OK = 0
 _STATUS_NONFINITE_TIME = 1
 _HELPERS_JITTED = False
 
 
-def _row_count(shape: tuple[int, ...]) -> int:
-    rows = 1
-    for size in shape:
-        rows *= int(size)
-    return rows
-
-
 @lru_cache(maxsize=1)
 def _compiled_boundary_block():
     numba = require_numba("events.boundaries")
     _jit_kernel_helpers(numba)
-    return numba.njit(cache=True, fastmath=False)(_boundary_block_impl)
+    return njit_kernel(numba, _boundary_block_impl)
 
 
 @lru_cache(maxsize=1)
 def _compiled_intervals_block():
     numba = require_numba("events.intervals")
     _jit_kernel_helpers(numba)
-    return numba.njit(cache=True, fastmath=False)(_intervals_block_impl)
+    return njit_kernel(numba, _intervals_block_impl)
 
 
 def _jit_kernel_helpers(numba) -> None:
@@ -41,17 +35,17 @@ def _jit_kernel_helpers(numba) -> None:
     global _trigger_candidates, _write_interval_segments
     if _HELPERS_JITTED:
         return
-    _edge_rank = numba.njit(cache=True, fastmath=False)(_edge_rank)
-    _append_boundary = numba.njit(cache=True, fastmath=False)(_append_boundary)
-    _sort_boundaries = numba.njit(cache=True, fastmath=False)(_sort_boundaries)
-    _dedupe_boundaries = numba.njit(cache=True, fastmath=False)(_dedupe_boundaries)
-    _transition_candidates = numba.njit(cache=True, fastmath=False)(_transition_candidates)
-    _trigger_candidates = numba.njit(cache=True, fastmath=False)(_trigger_candidates)
-    _boundary_row_impl = numba.njit(cache=True, fastmath=False)(_boundary_row_impl)
-    _interval_has_trigger_collision = numba.njit(cache=True, fastmath=False)(_interval_has_trigger_collision)
-    _collect_interval_segments = numba.njit(cache=True, fastmath=False)(_collect_interval_segments)
-    _write_interval_segments = numba.njit(cache=True, fastmath=False)(_write_interval_segments)
-    _intervals_row_impl = numba.njit(cache=True, fastmath=False)(_intervals_row_impl)
+    _edge_rank = njit_kernel(numba, _edge_rank)
+    _append_boundary = njit_kernel(numba, _append_boundary)
+    _sort_boundaries = njit_kernel(numba, _sort_boundaries)
+    _dedupe_boundaries = njit_kernel(numba, _dedupe_boundaries)
+    _transition_candidates = njit_kernel(numba, _transition_candidates)
+    _trigger_candidates = njit_kernel(numba, _trigger_candidates)
+    _boundary_row_impl = njit_kernel(numba, _boundary_row_impl)
+    _interval_has_trigger_collision = njit_kernel(numba, _interval_has_trigger_collision)
+    _collect_interval_segments = njit_kernel(numba, _collect_interval_segments)
+    _write_interval_segments = njit_kernel(numba, _write_interval_segments)
+    _intervals_row_impl = njit_kernel(numba, _intervals_row_impl)
     _HELPERS_JITTED = True
 
 
@@ -62,28 +56,21 @@ def _broadcast_boundary_blocks(
     *,
     owner: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[int, ...]]:
-    mask = np.asarray(mask_block, dtype=bool)
-    valid = np.asarray(valid_block, dtype=bool)
-    clock = np.asarray(clock_block, dtype=np.float64)
-    if mask.ndim < 1 or valid.ndim < 1 or clock.ndim < 1:
-        raise ValueError(f"{owner}: mask, valid, and clock blocks must include trailing sequence dimensions.")
-    seq_size = int(mask.shape[-1])
-    if int(valid.shape[-1]) != seq_size or int(clock.shape[-1]) != seq_size:
-        raise ValueError(f"{owner}: event boundary block trailing dimensions must match.")
-    try:
-        outer = np.broadcast_shapes(mask.shape[:-1], valid.shape[:-1], clock.shape[:-1])
-    except ValueError as exc:
-        raise ValueError(f"{owner}: event boundary blocks are not broadcast-compatible.") from exc
-    rows = _row_count(outer)
-    mask_rows = np.broadcast_to(mask, outer + (seq_size,)).reshape(rows, seq_size)
-    valid_rows = np.broadcast_to(valid, outer + (seq_size,)).reshape(rows, seq_size)
-    clock_rows = np.broadcast_to(clock, outer + (seq_size,)).reshape(rows, seq_size)
-    return (
-        np.ascontiguousarray(mask_rows),
-        np.ascontiguousarray(valid_rows),
-        np.ascontiguousarray(clock_rows),
-        outer,
+    prepared = prepare_block_rows(
+        (mask_block, valid_block, clock_block),
+        (
+            BlockInputSpec("mask", 1, bool),
+            BlockInputSpec("valid", 1, bool),
+            BlockInputSpec("clock", 1, np.float64),
+        ),
+        output_core_shape=(),
+        owner=owner,
     )
+    mask_rows, valid_rows, clock_rows = prepared.row_arrays
+    seq_size = int(mask_rows.shape[-1])
+    if int(valid_rows.shape[-1]) != seq_size or int(clock_rows.shape[-1]) != seq_size:
+        raise ValueError(f"{owner}: event boundary block trailing dimensions must match.")
+    return mask_rows, valid_rows, clock_rows, prepared.outer_shape
 
 
 def _broadcast_interval_blocks(
@@ -94,31 +81,22 @@ def _broadcast_interval_blocks(
     *,
     owner: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[int, ...]]:
-    time = np.asarray(time_block, dtype=np.float64)
-    edge = np.asarray(edge_block, dtype=np.int8)
-    before = np.asarray(before_block, dtype=np.int64)
-    after = np.asarray(after_block, dtype=np.int64)
-    if time.ndim < 1 or edge.ndim < 1 or before.ndim < 1 or after.ndim < 1:
-        raise ValueError(f"{owner}: interval blocks must include trailing event dimensions.")
-    event_size = int(time.shape[-1])
-    if int(edge.shape[-1]) != event_size or int(before.shape[-1]) != event_size or int(after.shape[-1]) != event_size:
-        raise ValueError(f"{owner}: interval block trailing dimensions must match.")
-    try:
-        outer = np.broadcast_shapes(time.shape[:-1], edge.shape[:-1], before.shape[:-1], after.shape[:-1])
-    except ValueError as exc:
-        raise ValueError(f"{owner}: interval blocks are not broadcast-compatible.") from exc
-    rows = _row_count(outer)
-    time_rows = np.broadcast_to(time, outer + (event_size,)).reshape(rows, event_size)
-    edge_rows = np.broadcast_to(edge, outer + (event_size,)).reshape(rows, event_size)
-    before_rows = np.broadcast_to(before, outer + (event_size,)).reshape(rows, event_size)
-    after_rows = np.broadcast_to(after, outer + (event_size,)).reshape(rows, event_size)
-    return (
-        np.ascontiguousarray(time_rows),
-        np.ascontiguousarray(edge_rows),
-        np.ascontiguousarray(before_rows),
-        np.ascontiguousarray(after_rows),
-        outer,
+    prepared = prepare_block_rows(
+        (time_block, edge_block, before_block, after_block),
+        (
+            BlockInputSpec("time", 1, np.float64),
+            BlockInputSpec("edge", 1, np.int8),
+            BlockInputSpec("before", 1, np.int64),
+            BlockInputSpec("after", 1, np.int64),
+        ),
+        output_core_shape=(),
+        owner=owner,
     )
+    time_rows, edge_rows, before_rows, after_rows = prepared.row_arrays
+    event_size = int(time_rows.shape[-1])
+    if int(edge_rows.shape[-1]) != event_size or int(before_rows.shape[-1]) != event_size or int(after_rows.shape[-1]) != event_size:
+        raise ValueError(f"{owner}: interval block trailing dimensions must match.")
+    return time_rows, edge_rows, before_rows, after_rows, prepared.outer_shape
 
 
 def boundary_bounded_block_numba(
