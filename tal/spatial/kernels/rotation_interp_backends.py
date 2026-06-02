@@ -5,6 +5,7 @@ from scipy.spatial.transform import Rotation as SciRotation
 from scipy.spatial.transform import Slerp
 
 ROTATION_INTERP_BACKEND_SCIPY = "scipy"
+ROTATION_INTERP_BACKEND_NUMBA = "numba"
 
 
 def _normalize_quaternion(values: np.ndarray, *, owner: str) -> np.ndarray:
@@ -66,9 +67,14 @@ def slerp_quat_backend(
     *,
     backend: str = ROTATION_INTERP_BACKEND_SCIPY,
 ) -> np.ndarray:
-    if backend != ROTATION_INTERP_BACKEND_SCIPY:
-        raise ValueError(f"spatial.rotation.interp_backend: unsupported backend {backend!r}.")
-    return _slerp_quat_scipy_stopgap(q0, q1, alpha, valid)
+    owner = "spatial.rotation.interp_backend"
+    if backend == ROTATION_INTERP_BACKEND_SCIPY:
+        return _slerp_quat_scipy_stopgap(q0, q1, alpha, valid)
+    if backend == ROTATION_INTERP_BACKEND_NUMBA:
+        from .rotation_interp_numba_backends import slerp_quat_numba
+
+        return slerp_quat_numba(q0, q1, alpha, valid, owner=owner)
+    raise ValueError(f"{owner}: unsupported backend {backend!r}.")
 
 
-__all__ = ["ROTATION_INTERP_BACKEND_SCIPY", "slerp_quat_backend"]
+__all__ = ["ROTATION_INTERP_BACKEND_NUMBA", "ROTATION_INTERP_BACKEND_SCIPY", "slerp_quat_backend"]

@@ -68,6 +68,7 @@ def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
         Path("tal/core/param_engine/numba_backends.py"),
         Path("tal/core/event_ops/numba_backends.py"),
         Path("tal/linalg/ops/numba_backends.py"),
+        Path("tal/spatial/kernels/rotation_interp_numba_backends.py"),
     ]:
         text = path.read_text(encoding="utf-8")
         assert [token for token in banned if token in text] == []
@@ -89,6 +90,7 @@ def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> 
     param_text = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
     event_text = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
     linalg_text = Path("tal/linalg/ops/numba_backends.py").read_text(encoding="utf-8")
+    spatial_text = Path("tal/spatial/kernels/rotation_interp_numba_backends.py").read_text(encoding="utf-8")
     assert "Install with 'tal[numba]'" in helper
     assert "def _raise_map_status(" in param_text
     assert "def _raise_bounds_status(" in param_text
@@ -97,6 +99,8 @@ def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> 
     assert "_BOUNDS_MONOTONIC_ERROR" in param_text
     assert "extracted event boundaries include non-finite clock values" in event_text
     assert "require_numba(owner)" in linalg_text
+    assert "def _raise_slerp_status(" in spatial_text
+    assert "finite alpha values must be within [0, 1]" in spatial_text
 
 
 def test_numba_arch_006_shared_block_rows_helper_is_schema_free() -> None:
@@ -145,6 +149,7 @@ def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
         Path("benchmarks/bench_param_numba_backends.py"),
         Path("benchmarks/bench_event_numba_backends.py"),
         Path("benchmarks/bench_linalg_lstsq_numba_backends.py"),
+        Path("benchmarks/bench_spatial_slerp_numba_backends.py"),
     ]:
         text = path.read_text(encoding="utf-8")
         assert "from _numba_bench import" in text

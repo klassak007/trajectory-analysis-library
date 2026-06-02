@@ -2165,6 +2165,26 @@ def test_arch_spatial_144_rotation_interp_backend_stopgap_loops_are_row_local_no
     assert "xarray" not in text
 
 
+def test_spatial_arch_150_rotation_slerp_numba_backend_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_150_rotation_slerp_numba_backend_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/rotation_interp_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/rotation_interp_numba_backends.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
+    assert 'ROTATION_INTERP_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def slerp_quat_backend(" in backend_text
+    assert "from .rotation_interp_numba_backends import slerp_quat_numba" in backend_text
+    assert "prepare_block_rows(" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "vectorize=True" not in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "kwargs={\"backend\": ROTATION_INTERP_BACKEND_SCIPY}" in temporal_text
+    assert "ROTATION_INTERP_BACKEND_NUMBA" not in temporal_text
+
+
 def test_arch_spatial_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded() -> None:
     """ID: ARCH_SPATIAL_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded."""
     text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")

@@ -100,6 +100,25 @@ def test_numba_shared_001_block_rows_matches_existing_broadcast_shapes() -> None
     assert linalg_matrix.output_shape == (8, 5, 2, 3)
     assert tuple(array.shape for array in linalg_matrix.row_arrays) == ((40, 4, 2), (40, 4, 3))
 
+    spatial_slerp = prepare_block_rows(
+        (
+            np.zeros((2, 1, 5, 4)),
+            np.zeros((1, 3, 5, 4)),
+            np.zeros((5,)),
+            np.ones((1, 3, 5), dtype=bool),
+        ),
+        (
+            BlockInputSpec("q0", 2, np.float64),
+            BlockInputSpec("q1", 2, np.float64),
+            BlockInputSpec("alpha", 1, np.float64),
+            BlockInputSpec("valid", 1, bool),
+        ),
+        output_core_shape=(5, 4),
+        owner="numba.shared",
+    )
+    assert spatial_slerp.output_shape == (2, 3, 5, 4)
+    assert tuple(array.shape for array in spatial_slerp.row_arrays) == ((6, 5, 4), (6, 5, 4), (6, 5), (6, 5))
+
     with pytest.raises(ValueError, match=r"numba\.shared: block 'bad' could not be coerced to dtype"):
         prepare_block_rows(
             (np.array(["bad"], dtype=object),),
