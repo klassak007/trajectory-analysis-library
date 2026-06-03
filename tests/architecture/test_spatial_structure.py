@@ -2185,6 +2185,47 @@ def test_spatial_arch_150_rotation_slerp_numba_backend_owner_routed() -> None:
     assert "ROTATION_INTERP_BACKEND_NUMBA" not in temporal_text
 
 
+def test_spatial_arch_151_kinematics_numba_kernels_are_schema_free() -> None:
+    """ID: SPATIAL_ARCH_151_kinematics_numba_kernels_are_schema_free."""
+    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
+    assert "import xarray" not in numba_text
+    assert "xr." not in numba_text
+    assert "attrs[" not in numba_text
+    assert "set_roles(" not in numba_text
+    assert "set_param_coord(" not in numba_text
+    assert "set_validity(" not in numba_text
+    assert "tal_v2" not in numba_text
+
+
+def test_spatial_arch_152_kinematics_numba_paths_do_not_call_param_engine() -> None:
+    """ID: SPATIAL_ARCH_152_kinematics_numba_paths_do_not_call_param_engine."""
+    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
+    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
+    for text in (numba_text, backend_text):
+        assert "param_engine" not in text
+        assert "build_param_map" not in text
+        assert "apply_param_map" not in text
+
+
+def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() -> None:
+    """ID: SPATIAL_ARCH_154_kinematics_scan_backends_reuse_numba_scan_helpers."""
+    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    assert 'KINEMATICS_TEMPORAL_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def cumulative_trapezoid_block_backend(" in backend_text
+    assert "from .kinematics_temporal_numba_backends import cumulative_trapezoid_block_numba" in backend_text
+    assert "prepare_scan_rows(" in numba_text
+    assert "ScanAxisSpec(" in numba_text
+    assert "ScanInputSpec(" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
+    assert "kinematics_temporal_numba_backends" not in temporal_text
+
+
 def test_arch_spatial_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded() -> None:
     """ID: ARCH_SPATIAL_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded."""
     text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")

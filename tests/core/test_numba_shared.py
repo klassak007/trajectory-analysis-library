@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from tal.utils.block_rows import BlockInputSpec, BlockRows, prepare_block_rows, row_count
+from tal.utils.numba_scan import ScanAxisSpec, ScanInputSpec, ScanRows, prepare_scan_rows
 
 
 def test_numba_shared_001_block_rows_matches_existing_broadcast_shapes() -> None:
@@ -140,3 +141,119 @@ def test_numba_shared_001_block_rows_matches_existing_broadcast_shapes() -> None
             output_core_shape=(),
             owner="numba.shared",
         )
+
+
+def test_numba_scan_001_scan_rows_preserve_primary_ordered_axis() -> None:
+    """ID: NUMBA_SCAN_001_scan_rows_preserve_primary_ordered_axis."""
+    prepared = prepare_scan_rows(
+        (
+            np.zeros((2, 1, 5, 3)),
+            np.zeros((1, 4, 5)),
+            np.ones((2, 4, 5), dtype=bool),
+        ),
+        (
+            ScanInputSpec("values", 1, 1, np.float64),
+            ScanInputSpec("param", 1, 0, np.float64),
+            ScanInputSpec("valid", 1, 0, bool),
+        ),
+        ordered_axes=(ScanAxisSpec("sequence", "scan"),),
+        output_core_shapes=((), (3,)),
+        owner="numba.scan",
+    )
+    assert isinstance(prepared, ScanRows)
+    assert prepared.outer_shape == (2, 4)
+    assert prepared.ordered_shape == (5,)
+    assert prepared.core_shapes == ((3,), (), ())
+    assert prepared.output_shapes == ((2, 4, 5), (2, 4, 5, 3))
+    assert tuple(array.shape for array in prepared.row_arrays) == ((8, 5, 3), (8, 5), (8, 5))
+    assert all(array.flags.c_contiguous for array in prepared.row_arrays)
+
+    with pytest.raises(ValueError, match=r"numba\.scan: block/spec count mismatch"):
+        prepare_scan_rows(
+            (np.zeros((1, 2)),),
+            (),
+            ordered_axes=(ScanAxisSpec("sequence", "scan"),),
+            output_core_shapes=((),),
+            owner="numba.scan",
+        )
+    with pytest.raises(ValueError, match=r"numba\.scan: scan inputs must not be empty"):
+        prepare_scan_rows(
+            (),
+            (),
+            ordered_axes=(ScanAxisSpec("sequence", "scan"),),
+            output_core_shapes=((),),
+            owner="numba.scan",
+        )
+    with pytest.raises(ValueError, match=r"numba\.scan: ordered_axes must not be empty"):
+        prepare_scan_rows(
+            (np.zeros((1, 2)),),
+            (ScanInputSpec("values", 1, 0),),
+            ordered_axes=(),
+            output_core_shapes=((),),
+            owner="numba.scan",
+        )
+    with pytest.raises(ValueError, match=r"numba\.scan: ordered axes must have matching lengths"):
+        prepare_scan_rows(
+            (np.zeros((1, 2, 3)), np.zeros((1, 4))),
+            (ScanInputSpec("values", 1, 1), ScanInputSpec("param", 1, 0)),
+            ordered_axes=(ScanAxisSpec("sequence", "scan"),),
+            output_core_shapes=((),),
+            owner="numba.scan",
+        )
+    with pytest.raises(ValueError, match=r"numba\.scan: block 'bad' must include"):
+        prepare_scan_rows(
+            (np.zeros((2,)),),
+            (ScanInputSpec("bad", 1, 1),),
+            ordered_axes=(ScanAxisSpec("sequence", "scan"),),
+            output_core_shapes=((),),
+            owner="numba.scan",
+        )
+    with pytest.raises(ValueError, match=r"numba\.scan: block 'bad' could not be coerced"):
+        prepare_scan_rows(
+            (np.array(["bad"], dtype=object),),
+            (ScanInputSpec("bad", 1, 0, np.float64),),
+            ordered_axes=(ScanAxisSpec("sequence", "scan"),),
+            output_core_shapes=((),),
+            owner="numba.scan",
+        )
+
+
+def test_numba_scan_002_core_scan_axis_is_owner_declared() -> None:
+    """ID: NUMBA_SCAN_002_core_scan_axis_is_owner_declared."""
+    prepared = prepare_scan_rows(
+        (np.zeros((3, 4, 2)),),
+        (ScanInputSpec("system", 1, 1, np.float64),),
+        ordered_axes=(ScanAxisSpec("state", "core_scan"),),
+        output_core_shapes=((2,),),
+        owner="numba.scan",
+    )
+    assert prepared.outer_shape == (3,)
+    assert prepared.ordered_shape == (4,)
+    assert prepared.core_shapes == ((2,),)
+    assert prepared.output_shapes == ((3, 4, 2),)
+    assert prepared.row_arrays[0].shape == (3, 4, 2)
+
+    with pytest.raises(ValueError, match=r"numba\.scan: block 'system' ordered_ndim must match ordered_axes"):
+        prepare_scan_rows(
+            (np.zeros((3, 4, 2)),),
+            (ScanInputSpec("system", 0, 1),),
+            ordered_axes=(ScanAxisSpec("state", "core_scan"),),
+            output_core_shapes=((2,),),
+            owner="numba.scan",
+        )
+
+
+def test_numba_scan_003_nested_scan_metadata_is_shape_only() -> None:
+    """ID: NUMBA_SCAN_003_nested_scan_metadata_is_shape_only."""
+    prepared = prepare_scan_rows(
+        (np.zeros((2, 3, 4, 5)),),
+        (ScanInputSpec("values", 2, 1, np.float64),),
+        ordered_axes=(ScanAxisSpec("time", "scan"), ScanAxisSpec("chain", "topology")),
+        output_core_shapes=((), (5,)),
+        owner="numba.scan",
+    )
+    assert prepared.outer_shape == (2,)
+    assert prepared.ordered_shape == (3, 4)
+    assert prepared.core_shapes == ((5,),)
+    assert prepared.output_shapes == ((2, 3, 4), (2, 3, 4, 5))
+    assert prepared.row_arrays[0].shape == (2, 3, 4, 5)
