@@ -2187,21 +2187,30 @@ def test_spatial_arch_150_rotation_slerp_numba_backend_owner_routed() -> None:
 
 def test_spatial_arch_151_kinematics_numba_kernels_are_schema_free() -> None:
     """ID: SPATIAL_ARCH_151_kinematics_numba_kernels_are_schema_free."""
-    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
-    assert "import xarray" not in numba_text
-    assert "xr." not in numba_text
-    assert "attrs[" not in numba_text
-    assert "set_roles(" not in numba_text
-    assert "set_param_coord(" not in numba_text
-    assert "set_validity(" not in numba_text
-    assert "tal_v2" not in numba_text
+    for path in [
+        Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+    ]:
+        numba_text = path.read_text(encoding="utf-8")
+        assert "import xarray" not in numba_text
+        assert "xr." not in numba_text
+        assert "attrs[" not in numba_text
+        assert "set_roles(" not in numba_text
+        assert "set_param_coord(" not in numba_text
+        assert "set_validity(" not in numba_text
+        assert "tal_v2" not in numba_text
 
 
 def test_spatial_arch_152_kinematics_numba_paths_do_not_call_param_engine() -> None:
     """ID: SPATIAL_ARCH_152_kinematics_numba_paths_do_not_call_param_engine."""
-    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
-    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
-    for text in (numba_text, backend_text):
+    paths = [
+        Path("tal/spatial/kernels/kinematics_temporal_backends.py"),
+        Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+    ]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
         assert "param_engine" not in text
         assert "build_param_map" not in text
         assert "apply_param_map" not in text
@@ -2224,6 +2233,43 @@ def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() ->
     assert "fastmath=True" not in numba_text
     assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
     assert "kinematics_temporal_numba_backends" not in temporal_text
+
+
+def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_160_local_stencil_numba_backends_are_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/kinematics_smoothing_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    smoothing_ops = Path("tal/spatial/ops/kinematics_smoothing_ops.py").read_text(encoding="utf-8")
+    assert 'KINEMATICS_SMOOTHING_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def moving_average_smoothing_block_backend(" in backend_text
+    assert "def gaussian_smoothing_block_backend(" in backend_text
+    assert "from .kinematics_smoothing_numba_backends import moving_average_smoothing_block_numba" in backend_text
+    assert "from .kinematics_smoothing_numba_backends import gaussian_smoothing_block_numba" in backend_text
+    assert "prepare_block_rows(" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "KINEMATICS_SMOOTHING_BACKEND_NUMBA" not in smoothing_ops
+    assert "kinematics_smoothing_backends" not in smoothing_ops
+
+
+def test_spatial_arch_161_local_stencil_helpers_are_schema_free_if_added() -> None:
+    """ID: SPATIAL_ARCH_161_local_stencil_helpers_are_schema_free_if_added."""
+    helper = Path("tal/utils/numba_stencil.py")
+    assert not helper.exists()
+    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "tal_v2" not in numba_text
+    assert "attrs[" not in numba_text
+
+
+def test_spatial_arch_162_stencil_backends_do_not_reuse_scan_as_generic_executor() -> None:
+    """ID: SPATIAL_ARCH_162_stencil_backends_do_not_reuse_scan_as_generic_executor."""
+    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    assert "prepare_scan_rows" not in numba_text
+    assert "ScanAxisSpec" not in numba_text
+    assert "ScanInputSpec" not in numba_text
+    assert "numba_scan" not in numba_text
 
 
 def test_arch_spatial_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded() -> None:

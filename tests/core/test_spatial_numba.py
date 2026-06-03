@@ -10,6 +10,12 @@ from tal.spatial.kernels.rotation_interp_backends import (
     ROTATION_INTERP_BACKEND_SCIPY,
     slerp_quat_backend,
 )
+from tal.spatial.kernels.kinematics_smoothing_backends import (
+    KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+    KINEMATICS_SMOOTHING_BACKEND_NUMPY,
+    gaussian_smoothing_block_backend,
+    moving_average_smoothing_block_backend,
+)
 from tal.spatial.kernels.kinematics_temporal_backends import (
     KINEMATICS_TEMPORAL_BACKEND_NUMBA,
     KINEMATICS_TEMPORAL_BACKEND_NUMPY,
@@ -50,6 +56,23 @@ def _direct_slerp_pair(
     expected = slerp_quat_backend(q0, q1, alpha, valid, backend=ROTATION_INTERP_BACKEND_SCIPY)
     actual = slerp_quat_backend(q0, q1, alpha, valid, backend=ROTATION_INTERP_BACKEND_NUMBA)
     return actual, expected
+
+
+def _assert_smoothing_status_translations(kernel, **kwargs: object) -> None:
+    values = np.ones((1, 4, 2), dtype=np.float64)
+    param = np.asarray([[0.0, 1.0, 2.0, 3.0]], dtype=np.float64)
+    owner = r"spatial\.kinematics\.temporal\.smoothing_backend"
+    with pytest.raises(ValueError, match=owner + r": valid mask must be left-packed"):
+        kernel(values, param, np.asarray([[True, False, True, False]], dtype=bool), **kwargs)
+    with pytest.raises(ValueError, match=owner + r": temporal operation requires at least 1 valid samples"):
+        kernel(values, param, np.asarray([[False, False, False, False]], dtype=bool), **kwargs)
+    with pytest.raises(ValueError, match=owner + r": param domain must be finite"):
+        kernel(
+            values,
+            np.asarray([[0.0, 1.0, 0.5, 3.0]], dtype=np.float64),
+            np.asarray([[True, True, True, False]], dtype=bool),
+            **kwargs,
+        )
 
 
 def test_spatial_numba_001_slerp_backend_parity() -> None:
@@ -154,6 +177,109 @@ def test_spatial_numba_004_slerp_cold_warm_benchmark_recorded() -> None:
     assert "--cold-case" in text
     assert "slerp numba first-call fresh process" in text
     assert "slerp numba warm median" in text
+
+
+def test_spatial_numba_011_moving_average_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_011_moving_average_backend_parity."""
+    _require_numba()
+    param = np.asarray(
+        [
+            [[0.0, 0.5, 1.5, 3.0, 99.0], [0.0, 1.0, 2.0, 3.0, 4.0]],
+            [[0.0, 0.25, 1.0, 2.5, 4.5], [0.0, 2.0, 4.0, 6.0, 8.0]],
+        ],
+        dtype=np.float64,
+    )
+    valid = np.asarray(
+        [
+            [[True, True, True, True, False], [True, True, True, True, True]],
+            [[True, True, True, True, True], [True, True, True, False, False]],
+        ],
+        dtype=bool,
+    )
+    values = np.stack((param + 1.0, 2.0 * param, param * param), axis=-1)
+    values[0, 0, 4, :] = 1000.0
+    expected = moving_average_smoothing_block_backend(values, param, valid, window=3)
+    actual = moving_average_smoothing_block_backend(
+        values,
+        param,
+        valid,
+        window=3,
+        backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+    )
+    np.testing.assert_allclose(actual, expected, equal_nan=True, rtol=1e-12, atol=1e-12)
+    assert actual.shape == values.shape
+
+    for bad_window in (0, 4):
+        with pytest.raises(ValueError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: window must"):
+            moving_average_smoothing_block_backend(
+                values,
+                param,
+                valid,
+                window=bad_window,
+                backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+            )
+    with pytest.raises(ValueError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: param/valid shapes"):
+        moving_average_smoothing_block_backend(values, param, valid[0], window=3, backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA)
+    with pytest.raises(ValueError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: values non-core shape"):
+        moving_average_smoothing_block_backend(values[0], param, valid, window=3, backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA)
+    _assert_smoothing_status_translations(
+        moving_average_smoothing_block_backend,
+        window=3,
+        backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+    )
+
+
+def test_spatial_numba_012_gaussian_smoothing_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_012_gaussian_smoothing_backend_parity."""
+    _require_numba()
+    param = np.asarray(
+        [
+            [[0.0, 0.1, 10.0, 10.1, 10.2], [0.0, 1.0, 3.0, 6.0, 10.0]],
+            [[0.0, 0.3, 0.9, 2.0, 4.5], [0.0, 2.0, 4.0, 6.0, 8.0]],
+        ],
+        dtype=np.float64,
+    )
+    valid = np.asarray(
+        [
+            [[True, True, True, True, True], [True, True, True, True, False]],
+            [[True, True, True, True, True], [True, True, True, False, False]],
+        ],
+        dtype=bool,
+    )
+    values = np.zeros(param.shape + (3,), dtype=np.float64)
+    values[..., 0] = param
+    values[..., 1] = np.sin(param)
+    values[..., 2] = np.cos(param)
+    expected = gaussian_smoothing_block_backend(values, param, valid, window=5, sigma=1.0)
+    actual = gaussian_smoothing_block_backend(
+        values,
+        param,
+        valid,
+        window=5,
+        sigma=1.0,
+        backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+    )
+    np.testing.assert_allclose(actual, expected, equal_nan=True, rtol=1e-12, atol=1e-12)
+    assert actual.shape == values.shape
+
+    for bad_sigma in (0.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: sigma must"):
+            gaussian_smoothing_block_backend(
+                values,
+                param,
+                valid,
+                window=5,
+                sigma=bad_sigma,
+                backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+            )
+    with pytest.raises(ValueError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: window must"):
+        gaussian_smoothing_block_backend(values, param, valid, window=4, sigma=1.0, backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA)
+    _assert_smoothing_status_translations(
+        gaussian_smoothing_block_backend,
+        window=3,
+        sigma=1.0,
+        backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+    )
 
 
 def test_spatial_numba_013_trapezoid_backend_parity() -> None:
@@ -261,6 +387,20 @@ def test_spatial_numba_015_trapezoid_scan_cold_warm_benchmark_recorded() -> None
     assert "trapezoid numba warm median" in text
 
 
+def test_spatial_numba_020_local_poly_backend_decision_is_explicit() -> None:
+    """ID: SPATIAL_NUMBA_020_local_poly_backend_decision_is_explicit."""
+    import tal.spatial.kernels.kinematics_smoothing_backends as smoothing_backends
+
+    assert not hasattr(smoothing_backends, "local_poly_smoothing_block_backend")
+    assert not hasattr(smoothing_backends, "local_poly_derivative_block_backend")
+    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    ops_text = Path("tal/spatial/ops/kinematics_smoothing_ops.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    assert "local_poly" not in numba_text
+    assert "local_poly_smooth_kernel" in ops_text
+    assert "local_poly_first_derivative_kernel" in temporal_text
+
+
 def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: NUMBA_OPT_006_spatial_backends_skip_cleanly_without_numba."""
     import tal.utils.numba_support as numba_support
@@ -285,6 +425,23 @@ def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: 
         backend=KINEMATICS_TEMPORAL_BACKEND_NUMPY,
     )
     assert integrated.shape == (1, 2, 1)
+    smoothed = moving_average_smoothing_block_backend(
+        np.ones((1, 3, 1), dtype=np.float64),
+        np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+        np.asarray([[True, True, True]], dtype=bool),
+        window=3,
+        backend=KINEMATICS_SMOOTHING_BACKEND_NUMPY,
+    )
+    assert smoothed.shape == (1, 3, 1)
+    gaussian = gaussian_smoothing_block_backend(
+        np.ones((1, 3, 1), dtype=np.float64),
+        np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+        np.asarray([[True, True, True]], dtype=bool),
+        window=3,
+        sigma=1.0,
+        backend=KINEMATICS_SMOOTHING_BACKEND_NUMPY,
+    )
+    assert gaussian.shape == (1, 3, 1)
 
 
 def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without_numba(
@@ -312,4 +469,21 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
             np.asarray([[True, True]], dtype=bool),
             initial_value=0.0,
             backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: numba is required"):
+        moving_average_smoothing_block_backend(
+            np.ones((1, 3, 1), dtype=np.float64),
+            np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+            np.asarray([[True, True, True]], dtype=bool),
+            window=3,
+            backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"spatial\.kinematics\.temporal\.smoothing_backend: numba is required"):
+        gaussian_smoothing_block_backend(
+            np.ones((1, 3, 1), dtype=np.float64),
+            np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+            np.asarray([[True, True, True]], dtype=bool),
+            window=3,
+            sigma=1.0,
+            backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
         )
