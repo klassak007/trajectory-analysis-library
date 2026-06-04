@@ -23,6 +23,7 @@ USER_API_PAGES = (
     "viz.md",
     "catalog.md",
     "ufuncs.md",
+    "numba.md",
     "types/index.md",
     "types/array.md",
     "types/vector.md",

@@ -8,6 +8,15 @@ import tomllib
 from tal.core.param_engine.map_build import build_param_bounds_map, build_param_map
 
 
+def _assert_no_direct_numba_import(text: str) -> None:
+    module = ast.parse(text)
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] != "numba" for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] != "numba"
+
+
 def test_numba_opt_001_numba_extra_is_optional_only() -> None:
     """ID: NUMBA_OPT_001_numba_extra_is_optional_only."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -47,7 +56,7 @@ def test_numba_arch_002_optional_import_helper_has_no_domain_imports() -> None:
     assert "tal.core" not in text
     assert "tal.spatial" not in text
     assert "tal.linalg" not in text
-    assert "import numba" not in text
+    _assert_no_direct_numba_import(text)
 
 
 def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
@@ -122,7 +131,7 @@ def test_numba_arch_006_shared_block_rows_helper_is_schema_free() -> None:
     assert "tal.linalg" not in text
     assert "tal.spatial" not in text
     assert "tal_v2" not in text
-    assert "import numba" not in text
+    _assert_no_direct_numba_import(text)
 
 
 def test_numba_arch_007_shared_block_rows_helper_preserves_owner_boundaries() -> None:
@@ -178,7 +187,7 @@ def test_numba_arch_010_numba_scan_helper_is_schema_free() -> None:
     assert "tal.linalg" not in text
     assert "tal.spatial" not in text
     assert "tal_v2" not in text
-    assert "import numba" not in text
+    _assert_no_direct_numba_import(text)
 
 
 def test_numba_arch_011_numba_scan_helper_preserves_owner_boundaries() -> None:
@@ -217,6 +226,64 @@ def test_numba_arch_013_ordered_axes_are_not_inferred_from_batch_dims() -> None:
     assert "spec.ordered_ndim != len(axes)" in text
     assert "axis.name ==" not in text
     assert "batch" not in text
+
+
+def test_numba_arch_020_public_numba_utility_surface_import_boundaries() -> None:
+    """ID: NUMBA_ARCH_020_public_numba_utility_surface_import_boundaries."""
+    _assert_no_direct_numba_import("from tal.utils import numba as tal_numba")
+    try:
+        _assert_no_direct_numba_import("import numba.core")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("dotted numba import was not rejected")
+
+    facade = Path("tal/utils/numba/__init__.py")
+    stencil = Path("tal/utils/numba_stencil.py")
+    assert facade.exists()
+    assert stencil.exists()
+
+    facade_text = facade.read_text(encoding="utf-8")
+    assert "from tal.utils.block_rows import" in facade_text
+    assert "from tal.utils.numba_scan import" in facade_text
+    assert "from tal.utils.numba_stencil import" in facade_text
+    assert "from tal.utils.numba_support import" in facade_text
+    assert "benchmarks" not in facade_text
+
+    for path in [facade, stencil]:
+        text = path.read_text(encoding="utf-8")
+        _assert_no_direct_numba_import(text)
+        assert "import xarray" not in text
+        assert "tal.core" not in text
+        assert "tal.spatial" not in text
+        assert "tal.linalg" not in text
+        assert "tal_v2" not in text
+
+
+def test_numba_arch_021_public_numba_utility_surface_has_no_domain_policy() -> None:
+    """ID: NUMBA_ARCH_021_public_numba_utility_surface_has_no_domain_policy."""
+    stencil = Path("tal/utils/numba_stencil.py").read_text(encoding="utf-8")
+    facade = Path("tal/utils/numba/__init__.py").read_text(encoding="utf-8")
+    banned = [
+        "valid_mask",
+        "monotonic",
+        "gaussian",
+        "smooth",
+        "interp",
+        "quaternion",
+        "event",
+        "duplicate",
+        "ParamMap",
+        "ParamBoundsMap",
+        "KINEMATICS_",
+        "SPATIAL_",
+        "EVENT_",
+        "PARAM_",
+        "LSTSQ_",
+    ]
+    assert [token for token in banned if token in stencil] == []
+    assert "benchmarks" not in facade
+    assert "_numba_bench" not in facade
 
 
 def test_param_arch_041_param_map_numba_backend_owner_routed() -> None:

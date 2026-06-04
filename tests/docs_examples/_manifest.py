@@ -266,6 +266,7 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.utils.frame_ops.FramesAccessor.remap_ids",
         "tal.utils.frame_ops.FramesAccessor.bind",
         "tal.utils.frame_ops.FramesAccessor.rename_frame",
+        "tal.utils.numba.centered_window_bounds",
     ),
 }
 
@@ -277,7 +278,7 @@ CURATED_SCOPE_COUNTS: dict[str, int] = {
     "io": 9,
     "catalog": 10,
     "viz": 8,
-    "utils": 7,
+    "utils": 8,
 }
 
 SUPPORT_OWNER_SYMBOLS: tuple[str, ...] = (
@@ -452,6 +453,7 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.utils.frame_ops.FramesAccessor.remap_ids": ("UTILS-FRAMES-ACCESSOR",),
     "tal.utils.frame_ops.FramesAccessor.bind": ("UTILS-FRAMES-ACCESSOR",),
     "tal.utils.frame_ops.FramesAccessor.rename_frame": ("UTILS-FRAMES-ACCESSOR",),
+    "tal.utils.numba.centered_window_bounds": ("UTILS-NUMBA-PUBLIC",),
     "tal.utils.topology_operation_families.operation_intent_support_for_operation_family": (
         "UTILS-TOPOLOGY-INTENT-SUPPORT",
     ),

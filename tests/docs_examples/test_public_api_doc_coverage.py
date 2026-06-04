@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 
 from tests.docs_examples._examples import EXECUTABLE_EXAMPLES
@@ -8,6 +9,7 @@ from tests.docs_examples._manifest import (
     DOCSTRING_SECTION_REQUIREMENTS,
     DUUNDER_FAMILY_DOC_OWNER,
     EXAMPLE_REQUIRED_SYMBOLS,
+    _resolve_symbol,
     curated_scope_counts,
     inventory_required_example_ids,
     iter_inventory_example_symbols,
@@ -15,6 +17,17 @@ from tests.docs_examples._manifest import (
     iter_scoped_public_symbols,
     required_example_ids,
 )
+
+
+NUMBA_AUTOSUMMARY_RAISES_SYMBOLS = {
+    "centered_window_bounds",
+    "clipped_window_bounds",
+    "forward_window_bounds",
+    "backward_window_bounds",
+    "prepare_block_rows",
+    "prepare_scan_rows",
+    "require_numba",
+}
 
 
 def _docstring(obj: object) -> str:
@@ -44,8 +57,17 @@ def _extract_examples_block(doc: str) -> str:
     return match.group("body")
 
 
+def _has_section(doc: str, section: str) -> bool:
+    return re.search(rf"(?m)^\s*{re.escape(section)}\s*\n\s*-{{3,}}\s*$", doc) is not None
+
+
+def _numba_autosummary_symbols() -> tuple[str, ...]:
+    text = open("docs/api/numba.md", encoding="utf-8").read()
+    return tuple(re.findall(r"(?m)^\s+(tal\.utils\.numba\.[A-Za-z_][A-Za-z0-9_]*)\s*$", text))
+
+
 def test_curated_scope_counts_match_plan() -> None:
-    expected_total = 235
+    expected_total = 236
     observed = curated_scope_counts()
     assert observed == CURATED_SCOPE_COUNTS
     assert sum(observed.values()) == expected_total
@@ -108,6 +130,29 @@ def test_required_docstring_sections_present() -> None:
             pattern = rf"(?m)^\s*{re.escape(section)}\s*\n\s*-{{3,}}\s*$"
             if re.search(pattern, doc) is None:
                 failures.append(f"{symbol}: missing section '{section}'")
+    assert not failures, "\n".join(failures)
+
+
+def test_numba_public_autosummary_symbols_have_numpy_docstrings() -> None:
+    failures: list[str] = []
+    symbols = _numba_autosummary_symbols()
+    assert symbols, "docs/api/numba.md must list tal.utils.numba autosummary symbols"
+    for symbol in symbols:
+        obj = _resolve_symbol(symbol)
+        doc = _docstring(obj)
+        if not doc.strip():
+            failures.append(f"{symbol}: missing docstring")
+            continue
+        required = ["Parameters"]
+        if inspect.isfunction(obj):
+            required.extend(["Returns", "Examples"])
+        if symbol.rsplit(".", 1)[-1] in NUMBA_AUTOSUMMARY_RAISES_SYMBOLS:
+            required.append("Raises")
+        for section in required:
+            if not _has_section(doc, section):
+                failures.append(f"{symbol}: missing section '{section}'")
+        if inspect.isfunction(obj) and ">>>" not in _extract_examples_block(doc):
+            failures.append(f"{symbol}: Examples block must include runnable '>>>' snippet(s)")
     assert not failures, "\n".join(failures)
 
 

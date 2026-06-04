@@ -10,12 +10,36 @@ from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
 
 @dataclass(frozen=True)
 class ScanAxisSpec:
+    """Describe one explicit ordered scan axis.
+
+    Parameters
+    ----------
+    name
+        Caller-owned label for diagnostics and documentation.
+    kind
+        Mechanical axis kind: ``"scan"``, ``"topology"``, or ``"core_scan"``.
+    """
+
     name: str
     kind: Literal["scan", "topology", "core_scan"]
 
 
 @dataclass(frozen=True)
 class ScanInputSpec:
+    """Describe one input block with ordered and core dimensions.
+
+    Parameters
+    ----------
+    name
+        Caller-owned diagnostic name for the block.
+    ordered_ndim
+        Number of trailing ordered dimensions before the core dimensions.
+    core_ndim
+        Number of trailing core dimensions after the ordered dimensions.
+    dtype
+        Optional NumPy dtype used when coercing the input block.
+    """
+
     name: str
     ordered_ndim: int
     core_ndim: int
@@ -24,6 +48,23 @@ class ScanInputSpec:
 
 @dataclass(frozen=True)
 class ScanRows:
+    """Prepared row arrays and explicit ordered-axis shape metadata.
+
+    Parameters
+    ----------
+    row_arrays
+        Broadcast input arrays reshaped with a leading row dimension.
+    outer_shape
+        Broadcast shape before the ordered dimensions.
+    ordered_shape
+        Shared shape of the explicit ordered axes.
+    core_shapes
+        Per-input core shapes after the ordered dimensions.
+    output_shapes
+        Per-output shapes built from ``outer_shape``, ``ordered_shape``, and
+        the requested output core shapes.
+    """
+
     row_arrays: tuple[np.ndarray, ...]
     outer_shape: tuple[int, ...]
     ordered_shape: tuple[int, ...]
@@ -83,6 +124,49 @@ def prepare_scan_rows(
     owner: str,
     broadcast_shapes: Sequence[tuple[int, ...]] | None = None,
 ) -> ScanRows:
+    """Prepare blocks for row-local scans over explicit ordered axes.
+
+    Parameters
+    ----------
+    blocks
+        Input array-like blocks with trailing ordered and core dimensions.
+    specs
+        One ``ScanInputSpec`` per block.
+    ordered_axes
+        Explicit ordered axes shared by every block.
+    output_core_shapes
+        Output core shapes appended after the ordered axes.
+    owner
+        Error-message prefix for the caller-owned boundary.
+    broadcast_shapes
+        Optional additional outer shapes that participate in broadcasting.
+
+    Returns
+    -------
+    ScanRows
+        Row arrays plus outer, ordered, core, and output shape metadata.
+
+    Raises
+    ------
+    ValueError
+        If ordered axes are empty or inconsistent, block/spec counts mismatch,
+        ranks are invalid, dtype coercion fails, or shapes cannot broadcast.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from tal.utils import numba as tal_numba
+    >>> rows = tal_numba.prepare_scan_rows(
+    ...     (np.zeros((2, 5, 3)),),
+    ...     (tal_numba.ScanInputSpec("values", 1, 1, np.float64),),
+    ...     ordered_axes=(tal_numba.ScanAxisSpec("sequence", "scan"),),
+    ...     output_core_shapes=((3,),),
+    ...     owner="docs",
+    ... )
+    >>> rows.outer_shape, rows.ordered_shape, rows.core_shapes
+    ((2,), (5,), ((3,),))
+    """
+
     block_tuple = tuple(blocks)
     spec_tuple = tuple(specs)
     axis_tuple = tuple(ordered_axes)

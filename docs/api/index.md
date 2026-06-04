@@ -25,6 +25,7 @@ events
 reducers
 schema
 ufuncs
+numba
 catalog
 frames
 io

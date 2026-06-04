@@ -18,6 +18,15 @@ def _function_nodes(module: ast.Module) -> list[ast.FunctionDef]:
     return out
 
 
+def _assert_no_direct_import(text: str, module_name: str) -> None:
+    module = ast.parse(text)
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] != module_name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] != module_name
+
+
 def _assert_agents_budget(path: Path) -> None:
     assert file_loc(path=path) <= 600, f"{path} exceeds file budget."
     for name, length in function_lengths(path).items():
@@ -2254,8 +2263,23 @@ def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> Non
 
 def test_spatial_arch_161_local_stencil_helpers_are_schema_free_if_added() -> None:
     """ID: SPATIAL_ARCH_161_local_stencil_helpers_are_schema_free_if_added."""
+    _assert_no_direct_import("from tal.utils import numba as tal_numba", "numba")
+    try:
+        _assert_no_direct_import("import numba.core", "numba")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("dotted numba import was not rejected")
+
     helper = Path("tal/utils/numba_stencil.py")
-    assert not helper.exists()
+    assert helper.exists()
+    helper_text = helper.read_text(encoding="utf-8")
+    assert "import xarray" not in helper_text
+    _assert_no_direct_import(helper_text, "numba")
+    assert "tal.core" not in helper_text
+    assert "tal.spatial" not in helper_text
+    assert "tal.linalg" not in helper_text
+    assert "tal_v2" not in helper_text
     numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
     assert "import xarray" not in numba_text
     assert "from scipy" not in numba_text

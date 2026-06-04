@@ -1226,6 +1226,31 @@ def example_utils_xarray_rename_dims() -> None:
     assert out.dims == ("y", "x")
 
 
+def example_utils_numba_public() -> None:
+    from tal.utils import numba as tal_numba
+
+    values = np.arange(24.0, dtype=np.float64).reshape(2, 4, 3)
+    rows = tal_numba.prepare_block_rows(
+        (values,),
+        (tal_numba.BlockInputSpec("values", 2, np.float64),),
+        output_core_shape=(4, 3),
+        owner="docs.numba",
+    )
+    bounds = tal_numba.centered_window_bounds(4, radius=1, owner="docs.numba")
+
+    def row_kernel_shape(value_rows, start, stop):
+        return value_rows.shape[0], start.shape[0], stop.shape[0]
+
+    assert row_kernel_shape(rows.row_arrays[0], bounds.start, bounds.stop) == (2, 4, 4)
+    try:
+        numba = tal_numba.require_numba("docs.numba")
+    except ImportError:
+        compiled = None
+    else:
+        compiled = tal_numba.njit_kernel(numba, row_kernel_shape)
+    assert compiled is None or callable(compiled)
+
+
 EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "CORE-AO-FROM-DATA": example_core_ao_from_data,
     "CORE-AO-SET-ROLES": example_core_ao_set_roles,
@@ -1282,6 +1307,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UTILS-FRAMES-ACCESSOR": example_utils_frames_accessor,
     "UTILS-FRAME-SCHEMA-GET": example_utils_frame_schema_get,
     "UTILS-FRAME-SCHEMA-SET": example_utils_frame_schema_set,
+    "UTILS-NUMBA-PUBLIC": example_utils_numba_public,
     "UTILS-TOPOLOGY-INTENT-SUPPORT": example_utils_topology_intent_support,
     "UTILS-XARRAY-RENAME-DIMS": example_utils_xarray_rename_dims,
 }
