@@ -2225,6 +2225,48 @@ def test_spatial_arch_152_kinematics_numba_paths_do_not_call_param_engine() -> N
         assert "apply_param_map" not in text
 
 
+def test_spatial_arch_153_fixed_size_spatial_numba_backends_are_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_153_fixed_size_spatial_numba_backends_are_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/fixed_size_backends.py").read_text(encoding="utf-8")
+    common_text = Path("tal/spatial/kernels/_fixed_size_common.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/fixed_size_numba_backends.py").read_text(encoding="utf-8")
+    primitive_text = Path("tal/spatial/kernels/fixed_size_primitives.py").read_text(encoding="utf-8")
+    topology_text = Path("tal/spatial/kernels/topology_scan_numba_backends.py").read_text(encoding="utf-8")
+    assert 'SPATIAL_FIXED_BACKEND_NUMBA = "numba"' in backend_text
+    assert 'SPATIAL_FIXED_BACKEND_SCIPY = "scipy"' in backend_text
+    assert "from .fixed_size_numba_backends import" in backend_text
+    assert "_run_scipy_kernel(" in backend_text
+    assert "baseline fixed-size scipy kernel failed" in backend_text
+    assert "prepare_block_rows(" in common_text
+    assert "validate_quat_rows(" in common_text
+    assert "validate_matrix_rows(" in common_text
+    assert "prepare_binary_quat_rows(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "quat_multiply" in primitive_text
+    assert "rotate_vec3" in primitive_text
+    assert "fixed_size_primitives import" in Path("tal/spatial/kernels/rotation_interp_numba_backends.py").read_text(encoding="utf-8")
+    assert "fixed_size_primitives import" in topology_text
+    assert "quat_multiply as _quat_multiply" not in topology_text
+    assert "rotate_vec3 as _rotate_vec3" not in topology_text
+    assert "_quat_multiply = njit_kernel" not in topology_text
+    assert "_rotate_vec3 = njit_kernel" not in topology_text
+    public_paths = [
+        Path("tal/spatial/ops/pose_kernel_adapters.py"),
+        Path("tal/spatial/ops/rotation_apply_ops.py"),
+        Path("tal/spatial/ops/pose_ops.py"),
+        Path("tal/spatial/rotation.py"),
+    ]
+    for path in public_paths:
+        text = path.read_text(encoding="utf-8")
+        assert "fixed_size_backends" not in text
+        assert "fixed_size_numba_backends" not in text
+
+
 def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() -> None:
     """ID: SPATIAL_ARCH_154_kinematics_scan_backends_reuse_numba_scan_helpers."""
     backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")

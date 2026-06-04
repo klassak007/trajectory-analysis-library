@@ -81,6 +81,7 @@ def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
         Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
         Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
         Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
+        Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
     ]:
         text = path.read_text(encoding="utf-8")
         assert [token for token in banned if token in text] == []
@@ -165,6 +166,7 @@ def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
         Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py"),
         Path("benchmarks/bench_spatial_kinematics_stencil_numba_backends.py"),
         Path("benchmarks/bench_spatial_topology_scan_numba_backends.py"),
+        Path("benchmarks/bench_spatial_fixed_size_numba_backends.py"),
     ]:
         text = path.read_text(encoding="utf-8")
         assert "from _numba_bench import" in text

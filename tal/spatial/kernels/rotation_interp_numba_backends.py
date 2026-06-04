@@ -7,6 +7,9 @@ import numpy as np
 from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
 from tal.utils.numba_support import njit_kernel, require_numba
 
+from .fixed_size_primitives import normalize_quat_row as _normalized_quat
+from .fixed_size_primitives import normalize_quat_tuple as _normalize_quat_tuple
+
 _QUAT_SIZE = 4
 _LERP_DOT_THRESHOLD = 0.9995
 _STATUS_OK = 0
@@ -22,9 +25,10 @@ def _compiled_slerp_block():
 
 
 def _jit_kernel_helpers(numba) -> None:
-    global _fill_nan, _normalized_quat, _slerp_sample, _write_lerp, _write_normalized_tuple, _write_slerp
+    global _fill_nan, _normalize_quat_tuple, _normalized_quat, _slerp_sample, _write_lerp, _write_normalized_tuple, _write_slerp
     _fill_nan = njit_kernel(numba, _fill_nan)
     _normalized_quat = njit_kernel(numba, _normalized_quat)
+    _normalize_quat_tuple = njit_kernel(numba, _normalize_quat_tuple)
     _write_normalized_tuple = njit_kernel(numba, _write_normalized_tuple)
     _write_lerp = njit_kernel(numba, _write_lerp)
     _write_slerp = njit_kernel(numba, _write_slerp)
@@ -113,35 +117,15 @@ def _fill_nan(out):
     out.fill(np.nan)
 
 
-def _normalized_quat(values, row, idx):
-    total = 0.0
-    for comp in range(_QUAT_SIZE):
-        value = values[row, idx, comp]
-        if not np.isfinite(value):
-            return _STATUS_INVALID_QUAT, 0.0, 0.0, 0.0, 0.0
-        total += value * value
-    if not np.isfinite(total) or total <= 0.0:
-        return _STATUS_INVALID_QUAT, 0.0, 0.0, 0.0, 0.0
-    norm = np.sqrt(total)
-    return (
-        _STATUS_OK,
-        values[row, idx, 0] / norm,
-        values[row, idx, 1] / norm,
-        values[row, idx, 2] / norm,
-        values[row, idx, 3] / norm,
-    )
-
-
 def _write_normalized_tuple(out, row, idx, quat):
-    x, y, z, w = quat
-    norm = np.sqrt(x * x + y * y + z * z + w * w)
-    if not np.isfinite(norm) or norm <= 0.0:
+    status, x, y, z, w = _normalize_quat_tuple(quat)
+    if status != _STATUS_OK:
         return _STATUS_INVALID_QUAT
-    out[row, idx, 0] = x / norm
-    out[row, idx, 1] = y / norm
-    out[row, idx, 2] = z / norm
-    out[row, idx, 3] = w / norm
-    return _STATUS_OK
+    out[row, idx, 0] = x
+    out[row, idx, 1] = y
+    out[row, idx, 2] = z
+    out[row, idx, 3] = w
+    return status
 
 
 def _write_lerp(out, row, idx, q0, q1, t):

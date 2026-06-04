@@ -21,6 +21,18 @@ from tal.spatial.kernels.kinematics_temporal_backends import (
     KINEMATICS_TEMPORAL_BACKEND_NUMPY,
     cumulative_trapezoid_block_backend,
 )
+from tal.spatial.kernels.fixed_size_backends import (
+    SPATIAL_FIXED_BACKEND_NUMBA,
+    SPATIAL_FIXED_BACKEND_SCIPY,
+    matrix_to_quat_block_backend,
+    pose_compose_translation_block_backend,
+    pose_components_to_matrix_block_backend,
+    pose_inverse_translation_block_backend,
+    quat_compose_block_backend,
+    quat_inverse_block_backend,
+    quat_to_matrix_block_backend,
+    rotate_vec3_block_backend,
+)
 from tal.spatial.kernels.topology_scan_backends import (
     SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
     SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMPY,
@@ -36,6 +48,29 @@ def _require_numba() -> None:
 def _z_quat(degrees: float) -> np.ndarray:
     radians = np.deg2rad(degrees)
     return np.asarray([0.0, 0.0, np.sin(0.5 * radians), np.cos(0.5 * radians)], dtype=np.float64)
+
+
+def _x_quat(degrees: float) -> np.ndarray:
+    radians = np.deg2rad(degrees)
+    return np.asarray([np.sin(0.5 * radians), 0.0, 0.0, np.cos(0.5 * radians)], dtype=np.float64)
+
+
+def _fixed_quat_blocks() -> tuple[np.ndarray, np.ndarray]:
+    left = np.asarray(
+        [
+            [2.0 * _z_quat(0.0), _x_quat(20.0), _z_quat(-45.0)],
+            [_x_quat(90.0), _z_quat(120.0), 0.5 * _x_quat(-30.0)],
+        ],
+        dtype=np.float64,
+    )
+    right = np.asarray(
+        [
+            [_z_quat(15.0), 1.5 * _x_quat(-10.0), _z_quat(30.0)],
+            [_z_quat(-80.0), _x_quat(5.0), 3.0 * _z_quat(180.0)],
+        ],
+        dtype=np.float64,
+    )
+    return left, right
 
 
 def _assert_quat_equivalent(actual: np.ndarray, expected: np.ndarray, *, atol: float = 1e-7) -> None:
@@ -427,6 +462,146 @@ def test_spatial_numba_020_local_poly_backend_decision_is_explicit() -> None:
     assert "local_poly_first_derivative_kernel" in temporal_text
 
 
+def test_spatial_numba_030_quat_compose_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_030_quat_compose_backend_parity."""
+    _require_numba()
+    left, right = _fixed_quat_blocks()
+    expected = quat_compose_block_backend(left, right, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = quat_compose_block_backend(left, right, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    _assert_quat_equivalent(actual, expected, atol=1e-12)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: left and right quaternion shapes must match"):
+        quat_compose_block_backend(left[:1], right, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    bad = left.copy()
+    bad[0, 1, :] = 0.0
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        quat_compose_block_backend(bad, right, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        quat_compose_block_backend(bad, right, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+
+
+def test_spatial_numba_031_quat_inverse_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_031_quat_inverse_backend_parity."""
+    _require_numba()
+    from tal.spatial.kernels.fixed_size_numba_backends import quat_inverse_block_numba
+
+    left, _ = _fixed_quat_blocks()
+    expected = quat_inverse_block_backend(left, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = quat_inverse_block_backend(left, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    _assert_quat_equivalent(actual, expected, atol=1e-12)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quat must have trailing shape"):
+        quat_inverse_block_backend(np.zeros((2, 3, 3)), backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    bad = left.copy()
+    bad[0, 0, :] = 0.0
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        quat_inverse_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"custom\.fixed: quaternion norm must be finite and > 0"):
+        quat_inverse_block_numba(bad, owner="custom.fixed")
+
+
+def test_spatial_numba_032_quat_to_matrix_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_032_quat_to_matrix_backend_parity."""
+    _require_numba()
+    from tal.spatial.kernels.fixed_size_numba_backends import quat_to_matrix_block_numba
+
+    left, _ = _fixed_quat_blocks()
+    expected = quat_to_matrix_block_backend(left, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = quat_to_matrix_block_backend(left, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    assert actual.shape == left.shape[:-1] + (3, 3)
+    bad = left.copy()
+    bad[1, 0, 0] = np.inf
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        quat_to_matrix_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        quat_to_matrix_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    with pytest.raises(ValueError, match=r"custom\.fixed: quaternion norm must be finite and > 0"):
+        quat_to_matrix_block_numba(bad, owner="custom.fixed")
+
+
+def test_spatial_numba_033_matrix_to_quat_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_033_matrix_to_quat_backend_parity."""
+    _require_numba()
+    from tal.spatial.kernels.fixed_size_numba_backends import matrix_to_quat_block_numba
+
+    left, _ = _fixed_quat_blocks()
+    matrix = quat_to_matrix_block_backend(left, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    expected = matrix_to_quat_block_backend(matrix, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = matrix_to_quat_block_backend(matrix, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    _assert_quat_equivalent(actual, expected, atol=1e-12)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix must have trailing shape"):
+        matrix_to_quat_block_backend(np.zeros((2, 3, 4, 4)), backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    bad = matrix.copy()
+    bad[0, 0, 0, 0] = np.nan
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix values must be finite"):
+        matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix values must be finite"):
+        matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    with pytest.raises(ValueError, match=r"custom\.fixed: matrix values must be finite"):
+        matrix_to_quat_block_numba(bad, owner="custom.fixed")
+    bad = matrix.copy()
+    bad[0, 0, 0, 0] += 0.01
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix is not orthonormal"):
+        matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix is not orthonormal"):
+        matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    bad = matrix.copy()
+    bad[0, 0, :, :] *= -1.0
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix determinant must be 1"):
+        matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix determinant must be 1"):
+        matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+
+
+def test_spatial_numba_034_rotate_vec3_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_034_rotate_vec3_backend_parity."""
+    _require_numba()
+    _, quat = _fixed_quat_blocks()
+    values = np.asarray(
+        [
+            [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.5, 0.5, 1.0]],
+            [[0.0, 0.0, 3.0], [1.0, -1.0, 0.25], [2.0, 0.0, -0.5]],
+        ],
+        dtype=np.float64,
+    )
+    expected = rotate_vec3_block_backend(values, quat, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = rotate_vec3_block_backend(values, quat, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: values and quat non-core shapes must match"):
+        rotate_vec3_block_backend(values[:1], quat, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    bad = quat.copy()
+    bad[0, 0, :] = 0.0
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        rotate_vec3_block_backend(values, bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+
+
+def test_spatial_numba_035_pose_components_backend_parity() -> None:
+    """ID: SPATIAL_NUMBA_035_pose_components_backend_parity."""
+    _require_numba()
+    _, quat = _fixed_quat_blocks()
+    left_t = np.arange(18.0, dtype=np.float64).reshape(2, 3, 3) / 10.0
+    right_t = left_t[..., ::-1] + 0.25
+    expected = pose_compose_translation_block_backend(left_t, right_t, quat, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = pose_compose_translation_block_backend(left_t, right_t, quat, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    expected = pose_inverse_translation_block_backend(right_t, quat, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual = pose_inverse_translation_block_backend(right_t, quat, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    expected_matrix = pose_components_to_matrix_block_backend(right_t, quat, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    actual_matrix = pose_components_to_matrix_block_backend(right_t, quat, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    np.testing.assert_allclose(actual_matrix, expected_matrix, rtol=1e-12, atol=1e-12)
+    assert actual_matrix.shape == right_t.shape[:-1] + (4, 4)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: translation and quat non-core shapes must match"):
+        pose_components_to_matrix_block_backend(right_t[:1], quat, backend=SPATIAL_FIXED_BACKEND_NUMBA)
+    bad = quat.copy()
+    bad[0, 0, :] = 0.0
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        pose_compose_translation_block_backend(left_t, right_t, bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        pose_inverse_translation_block_backend(right_t, bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: quaternion norm must be finite and > 0"):
+        pose_components_to_matrix_block_backend(right_t, bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+
+
 def test_spatial_topo_numba_001_chain_pose_compose_backend_parity() -> None:
     """ID: SPATIAL_TOPO_NUMBA_001_chain_pose_compose_backend_parity."""
     _require_numba()
@@ -612,6 +787,11 @@ def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: 
     )
     assert topo_t.shape == (1, 1, 3)
     assert topo_q.shape == (1, 1, 4)
+    matrix = quat_to_matrix_block_backend(
+        np.asarray([[_z_quat(0.0)]], dtype=np.float64),
+        backend=SPATIAL_FIXED_BACKEND_SCIPY,
+    )
+    assert matrix.shape == (1, 1, 3, 3)
 
 
 def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without_numba(
@@ -664,4 +844,9 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
             np.asarray([[True]], dtype=bool),
             np.asarray([[1]], dtype=np.int64),
             backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"spatial\.fixed_size_backend: numba is required"):
+        quat_to_matrix_block_backend(
+            np.asarray([[_z_quat(0.0)]], dtype=np.float64),
+            backend=SPATIAL_FIXED_BACKEND_NUMBA,
         )
