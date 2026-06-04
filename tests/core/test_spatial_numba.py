@@ -21,6 +21,12 @@ from tal.spatial.kernels.kinematics_temporal_backends import (
     KINEMATICS_TEMPORAL_BACKEND_NUMPY,
     cumulative_trapezoid_block_backend,
 )
+from tal.spatial.kernels.topology_scan_backends import (
+    SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+    SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMPY,
+    chain_pose_compose_block_backend,
+)
+from tal.utils.numba_scan import ScanAxisSpec, ScanInputSpec, prepare_scan_rows
 
 
 def _require_numba() -> None:
@@ -73,6 +79,26 @@ def _assert_smoothing_status_translations(kernel, **kwargs: object) -> None:
             np.asarray([[True, True, True, False]], dtype=bool),
             **kwargs,
         )
+
+
+def _topology_chain_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    translation = np.asarray(
+        [
+            [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.5, 0.0, 1.0], [999.0, 999.0, 999.0], [-5.0, -5.0, -5.0]],
+            [[0.0, 1.0, 0.0], [2.0, 0.0, 0.0], [0.0, 0.0, 3.0], [1.0, 1.0, 0.0], [0.25, 0.0, 0.5]],
+        ],
+        dtype=np.float64,
+    )
+    quat = np.asarray(
+        [
+            [2.0 * _z_quat(0.0), 1.5 * _z_quat(30.0), _z_quat(-20.0), np.zeros(4), np.zeros(4)],
+            [_z_quat(10.0), 0.5 * _z_quat(45.0), _z_quat(90.0), _z_quat(-30.0), _z_quat(15.0)],
+        ],
+        dtype=np.float64,
+    )
+    valid = np.asarray([[True, True, True, False, False], [True, True, True, True, True]], dtype=bool)
+    direction = np.asarray([[1, -1, 1, 99, 99], [1, 1, -1, 1, -1]], dtype=np.int64)
+    return translation, quat, valid, direction
 
 
 def test_spatial_numba_001_slerp_backend_parity() -> None:
@@ -401,6 +427,141 @@ def test_spatial_numba_020_local_poly_backend_decision_is_explicit() -> None:
     assert "local_poly_first_derivative_kernel" in temporal_text
 
 
+def test_spatial_topo_numba_001_chain_pose_compose_backend_parity() -> None:
+    """ID: SPATIAL_TOPO_NUMBA_001_chain_pose_compose_backend_parity."""
+    _require_numba()
+    translation, quat, valid, direction = _topology_chain_inputs()
+    expected_t, expected_q = chain_pose_compose_block_backend(
+        translation,
+        quat,
+        valid,
+        direction,
+        backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMPY,
+    )
+    actual_t, actual_q = chain_pose_compose_block_backend(
+        translation,
+        quat,
+        valid,
+        direction,
+        backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+    )
+    np.testing.assert_allclose(actual_t, expected_t, equal_nan=True, rtol=1e-12, atol=1e-12)
+    _assert_quat_equivalent(actual_q, expected_q, atol=1e-12)
+    assert np.isnan(actual_t[0, 3:]).all()
+    assert np.isnan(actual_q[0, 3:]).all()
+
+
+def test_spatial_topo_numba_002_chain_pose_invalid_inputs_fail_closed() -> None:
+    """ID: SPATIAL_TOPO_NUMBA_002_chain_pose_invalid_inputs_fail_closed."""
+    _require_numba()
+    owner = r"spatial\.topology_scan\.pose_backend"
+    translation, quat, valid, direction = _topology_chain_inputs()
+    with pytest.raises(ValueError, match=owner + r": translation, quat, valid, and direction shapes must match exactly"):
+        chain_pose_compose_block_backend(
+            np.zeros((1, 3, 3)),
+            np.zeros((2, 3, 4)),
+            np.ones((2, 3), dtype=bool),
+            np.ones((2, 3), dtype=np.int64),
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+    with pytest.raises(ValueError, match=owner + r": translation must have trailing vector dim length 3"):
+        chain_pose_compose_block_backend(
+            np.zeros((1, 3, 2)),
+            np.zeros((1, 3, 4)),
+            np.ones((1, 3), dtype=bool),
+            np.ones((1, 3), dtype=np.int64),
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+    with pytest.raises(ValueError, match=owner + r": quat must have trailing quaternion dim length 4"):
+        chain_pose_compose_block_backend(
+            np.zeros((1, 3, 3)),
+            np.zeros((1, 3, 3)),
+            np.ones((1, 3), dtype=bool),
+            np.ones((1, 3), dtype=np.int64),
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+    bad_quat = quat.copy()
+    bad_quat[0, 1, :] = 0.0
+    with pytest.raises(ValueError, match=owner + r": quaternion norm must be finite and > 0"):
+        chain_pose_compose_block_backend(translation, bad_quat, valid, direction, backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA)
+    bad_direction = direction.copy()
+    bad_direction[1, 2] = 0
+    with pytest.raises(ValueError, match=owner + r": direction values must be 1 or -1"):
+        chain_pose_compose_block_backend(
+            translation,
+            quat,
+            valid,
+            bad_direction,
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+    with pytest.raises(ValueError, match=owner + r": topology scan requires at least 1 valid edge"):
+        chain_pose_compose_block_backend(
+            translation[:1],
+            quat[:1],
+            np.zeros((1, valid.shape[1]), dtype=bool),
+            direction[:1],
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+    non_left_packed = valid.copy()
+    non_left_packed[0] = np.asarray([True, False, True, False, False])
+    with pytest.raises(ValueError, match=owner + r": valid mask must be left-packed"):
+        chain_pose_compose_block_backend(
+            translation,
+            quat,
+            non_left_packed,
+            direction,
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+        )
+
+
+def test_spatial_topo_numba_003_topology_scan_batch_isolation_preserved() -> None:
+    """ID: SPATIAL_TOPO_NUMBA_003_topology_scan_batch_isolation_preserved."""
+    _require_numba()
+    translation, quat, valid, direction = _topology_chain_inputs()
+    all_t, all_q = chain_pose_compose_block_backend(
+        translation,
+        quat,
+        valid,
+        direction,
+        backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+    )
+    row0_t, row0_q = chain_pose_compose_block_backend(
+        translation[:1],
+        quat[:1],
+        valid[:1],
+        direction[:1],
+        backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+    )
+    row1_t, row1_q = chain_pose_compose_block_backend(
+        translation[1:],
+        quat[1:],
+        valid[1:],
+        direction[1:],
+        backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
+    )
+    np.testing.assert_allclose(all_t[:1], row0_t, equal_nan=True, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(all_t[1:], row1_t, equal_nan=True, rtol=1e-12, atol=1e-12)
+    _assert_quat_equivalent(all_q[:1], row0_q, atol=1e-12)
+    _assert_quat_equivalent(all_q[1:], row1_q, atol=1e-12)
+
+
+def test_spatial_topo_numba_004_nested_time_chain_scan_decision_is_explicit() -> None:
+    """ID: SPATIAL_TOPO_NUMBA_004_nested_time_chain_scan_decision_is_explicit."""
+    prepared = prepare_scan_rows(
+        (np.zeros((2, 3, 4, 3)), np.ones((2, 3, 4), dtype=bool)),
+        (ScanInputSpec("translation", 2, 1, np.float64), ScanInputSpec("valid", 2, 0, bool)),
+        ordered_axes=(ScanAxisSpec("time", "scan"), ScanAxisSpec("chain", "topology")),
+        output_core_shapes=((3,),),
+        owner="spatial.topology_scan.metadata",
+    )
+    assert prepared.outer_shape == (2,)
+    assert prepared.ordered_shape == (3, 4)
+    assert prepared.output_shapes == ((2, 3, 4, 3),)
+    backend_text = Path("tal/spatial/kernels/_topology_scan_common.py").read_text(encoding="utf-8")
+    assert 'ScanAxisSpec("chain", "topology")' in backend_text
+    assert 'ScanAxisSpec("time", "scan")' not in backend_text
+
+
 def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: NUMBA_OPT_006_spatial_backends_skip_cleanly_without_numba."""
     import tal.utils.numba_support as numba_support
@@ -442,6 +603,15 @@ def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: 
         backend=KINEMATICS_SMOOTHING_BACKEND_NUMPY,
     )
     assert gaussian.shape == (1, 3, 1)
+    topo_t, topo_q = chain_pose_compose_block_backend(
+        np.asarray([[[1.0, 0.0, 0.0]]], dtype=np.float64),
+        np.asarray([[2.0 * _z_quat(0.0)]], dtype=np.float64),
+        np.asarray([[True]], dtype=bool),
+        np.asarray([[1]], dtype=np.int64),
+        backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMPY,
+    )
+    assert topo_t.shape == (1, 1, 3)
+    assert topo_q.shape == (1, 1, 4)
 
 
 def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without_numba(
@@ -486,4 +656,12 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
             window=3,
             sigma=1.0,
             backend=KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"spatial\.topology_scan\.pose_backend: numba is required"):
+        chain_pose_compose_block_backend(
+            np.asarray([[[1.0, 0.0, 0.0]]], dtype=np.float64),
+            np.asarray([[_z_quat(0.0)]], dtype=np.float64),
+            np.asarray([[True]], dtype=bool),
+            np.asarray([[1]], dtype=np.int64),
+            backend=SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
         )

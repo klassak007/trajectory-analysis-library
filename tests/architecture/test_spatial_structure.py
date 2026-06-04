@@ -2296,6 +2296,53 @@ def test_spatial_arch_162_stencil_backends_do_not_reuse_scan_as_generic_executor
     assert "numba_scan" not in numba_text
 
 
+def test_spatial_arch_170_ordered_topology_scan_axes_are_owner_declared() -> None:
+    """ID: SPATIAL_ARCH_170_ordered_topology_scan_axes_are_owner_declared."""
+    backend_text = Path("tal/spatial/kernels/topology_scan_backends.py").read_text(encoding="utf-8")
+    common_text = Path("tal/spatial/kernels/_topology_scan_common.py").read_text(encoding="utf-8")
+    path_solve_text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
+    assert 'SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def chain_pose_compose_block_backend(" in backend_text
+    assert "from .topology_scan_numba_backends import chain_pose_compose_block_numba" in backend_text
+    assert 'ScanAxisSpec("chain", "topology")' in common_text
+    assert "prepare_scan_rows(" in common_text
+    assert "topology_scan_backends" not in path_solve_text
+    assert "SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA" not in path_solve_text
+
+
+def test_spatial_arch_171_topology_scan_does_not_reclassify_batch_by_default() -> None:
+    """ID: SPATIAL_ARCH_171_topology_scan_does_not_reclassify_batch_by_default."""
+    common_text = Path("tal/spatial/kernels/_topology_scan_common.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/topology_scan_numba_backends.py").read_text(encoding="utf-8")
+    assert "t_shape[:-1] == q_shape[:-1] == valid_shape == direction_shape" in common_text
+    assert "ordered_axes=(ScanAxisSpec(\"chain\", \"topology\"),)" in common_text
+    assert "broadcast-compatible" not in common_text
+    assert "batch" not in numba_text
+    assert "FrameGraph" not in numba_text
+
+
+def test_spatial_arch_172_topology_scan_backends_are_schema_free() -> None:
+    """ID: SPATIAL_ARCH_172_topology_scan_backends_are_schema_free."""
+    paths = [
+        Path("tal/spatial/kernels/_topology_scan_common.py"),
+        Path("tal/spatial/kernels/topology_scan_backends.py"),
+        Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
+    ]
+    banned = ["import xarray", "xr.", "attrs[", "set_roles(", "set_param_coord(", "set_validity(", "tal_v2"]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert [token for token in banned if token in text] == []
+        assert "find_path" not in text
+        assert "fold_path" not in text
+        assert "FrameGraph" not in text
+    numba_text = paths[-1].read_text(encoding="utf-8")
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "from scipy" not in numba_text
+
+
 def test_arch_spatial_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded() -> None:
     """ID: ARCH_SPATIAL_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded."""
     text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
