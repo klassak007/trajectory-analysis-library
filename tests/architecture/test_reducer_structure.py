@@ -20,9 +20,13 @@ def test_arch_reduce_p9c_002_typed_classes_delegate_and_remain_thin() -> None:
     """ID: ARCH_REDUCE_P9C_002_typed_classes_delegate_and_remain_thin."""
     rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
     owner_text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
+    kernel_text = Path("tal/spatial/kernels/rotation_mean_kernels.py").read_text(encoding="utf-8")
     assert "install_rotation_reducer_methods" in rotation_text
-    assert "_quat_mean_kernel" in owner_text
-    assert "np.linalg.eigh" in owner_text
+    assert "from ..kernels.rotation_mean_kernels import quat_mean_kernel" in owner_text
+    assert "quat_mean_kernel," in owner_text
+    assert "np.linalg.eigh" not in owner_text
+    assert "def quat_mean_kernel(" in kernel_text
+    assert "np.linalg.eigh" in kernel_text
 
 
 def test_arch_reduce_p9c_003_rotation_reduce_owner_split_and_budget_locked() -> None:

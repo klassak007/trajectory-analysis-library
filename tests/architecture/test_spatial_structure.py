@@ -2286,6 +2286,28 @@ def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() ->
     assert "kinematics_temporal_numba_backends" not in temporal_text
 
 
+def test_spatial_arch_180_rotation_mean_numba_decision_is_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_180_rotation_mean_numba_decision_is_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/rotation_mean_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/rotation_mean_numba_backends.py").read_text(encoding="utf-8")
+    reducer_text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_rotation_mean_numba_backends.py").read_text(encoding="utf-8")
+    assert 'ROTATION_MEAN_BACKEND_NUMBA = "numba"' in backend_text
+    assert 'ROTATION_MEAN_BACKEND_NUMPY = "numpy"' in backend_text
+    assert "def quat_mean_block_backend(" in backend_text
+    assert "from .rotation_mean_numba_backends import quat_mean_block_numba" in backend_text
+    assert "prepare_quat_mean_rows(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "import xarray" not in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "rotation_mean_backends" not in reducer_text
+    assert "rotation_mean_numba_backends" not in reducer_text
+    assert "quat_mean_kernel," in reducer_text
+    assert "many-row >=20% warm win" in bench_text
+
+
 def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> None:
     """ID: SPATIAL_ARCH_160_local_stencil_numba_backends_are_owner_routed."""
     backend_text = Path("tal/spatial/kernels/kinematics_smoothing_backends.py").read_text(encoding="utf-8")

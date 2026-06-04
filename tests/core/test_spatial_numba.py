@@ -10,6 +10,11 @@ from tal.spatial.kernels.rotation_interp_backends import (
     ROTATION_INTERP_BACKEND_SCIPY,
     slerp_quat_backend,
 )
+from tal.spatial.kernels.rotation_mean_backends import (
+    ROTATION_MEAN_BACKEND_NUMBA,
+    ROTATION_MEAN_BACKEND_NUMPY,
+    quat_mean_block_backend,
+)
 from tal.spatial.kernels.kinematics_smoothing_backends import (
     KINEMATICS_SMOOTHING_BACKEND_NUMBA,
     KINEMATICS_SMOOTHING_BACKEND_NUMPY,
@@ -602,6 +607,71 @@ def test_spatial_numba_035_pose_components_backend_parity() -> None:
         pose_components_to_matrix_block_backend(right_t, bad, backend=SPATIAL_FIXED_BACKEND_SCIPY)
 
 
+def test_spatial_numba_040_rotation_mean_backend_decision_is_explicit() -> None:
+    """ID: SPATIAL_NUMBA_040_rotation_mean_backend_decision_is_explicit."""
+    backend_text = Path("tal/spatial/kernels/rotation_mean_backends.py").read_text(encoding="utf-8")
+    reducer_text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_rotation_mean_numba_backends.py").read_text(encoding="utf-8")
+    assert 'ROTATION_MEAN_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def quat_mean_block_backend(" in backend_text
+    assert "from .rotation_mean_numba_backends import quat_mean_block_numba" in backend_text
+    assert "rotation_mean_backends" not in reducer_text
+    assert "from ..kernels.rotation_mean_kernels import quat_mean_kernel" in reducer_text
+    assert "many-row >=20% warm win" in bench_text
+    assert "eligible many-row <=10% slowdowns" in bench_text
+
+
+def test_spatial_numba_041_rotation_mean_backend_parity_if_implemented() -> None:
+    """ID: SPATIAL_NUMBA_041_rotation_mean_backend_parity_if_implemented."""
+    _require_numba()
+    q0 = _z_quat(0.0)
+    q45 = _z_quat(45.0)
+    q90 = _z_quat(90.0)
+    values = np.asarray(
+        [
+            [q0, q45, q90, np.full(4, np.nan)],
+            [q0, -q45, q90, q45],
+            [np.full(4, np.nan), np.full(4, np.nan), np.full(4, np.nan), np.full(4, np.nan)],
+            [q0, q45, q90, q45],
+        ],
+        dtype=np.float64,
+    )
+    weights = np.asarray(
+        [
+            [1.0, 2.0, 1.0, 1.0],
+            [1.0, 1.0, 2.0, 3.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    expected = quat_mean_block_backend(values, weights, backend=ROTATION_MEAN_BACKEND_NUMPY)
+    actual = quat_mean_block_backend(values, weights, backend=ROTATION_MEAN_BACKEND_NUMBA)
+    _assert_quat_equivalent(actual, expected, atol=1e-10)
+    assert actual.shape == values.shape[:-2] + (4,)
+    assert actual.dtype == np.float64
+    assert np.isnan(actual[2]).all()
+    assert np.isnan(actual[3]).all()
+
+    scalar_expected = quat_mean_block_backend(values[:2], 1.0, backend=ROTATION_MEAN_BACKEND_NUMPY)
+    scalar_actual = quat_mean_block_backend(values[:2], 1.0, backend=ROTATION_MEAN_BACKEND_NUMBA)
+    _assert_quat_equivalent(scalar_actual, scalar_expected, atol=1e-10)
+
+    broadcast_weights = np.asarray([1.0, 2.0, 1.0, 0.5], dtype=np.float64)
+    broadcast_expected = quat_mean_block_backend(values[:2], broadcast_weights, backend=ROTATION_MEAN_BACKEND_NUMPY)
+    broadcast_actual = quat_mean_block_backend(values[:2], broadcast_weights, backend=ROTATION_MEAN_BACKEND_NUMBA)
+    _assert_quat_equivalent(broadcast_actual, broadcast_expected, atol=1e-10)
+
+    overflow_weights = np.asarray([[1.0e308, 1.0e308, 1.0e308, 1.0e308]], dtype=np.float64)
+    overflow_out = quat_mean_block_backend(values[:1], overflow_weights, backend=ROTATION_MEAN_BACKEND_NUMBA)
+    assert np.isnan(overflow_out).all()
+
+    with pytest.raises(ValueError, match=r"spatial\.rotation\.mean_backend: values must have trailing quaternion"):
+        quat_mean_block_backend(np.zeros((2, 3, 3)), 1.0, backend=ROTATION_MEAN_BACKEND_NUMBA)
+    with pytest.raises(ValueError, match=r"spatial\.rotation\.mean_backend: weights must be broadcastable"):
+        quat_mean_block_backend(values, np.ones((2, 3)), backend=ROTATION_MEAN_BACKEND_NUMBA)
+
+
 def test_spatial_topo_numba_001_chain_pose_compose_backend_parity() -> None:
     """ID: SPATIAL_TOPO_NUMBA_001_chain_pose_compose_backend_parity."""
     _require_numba()
@@ -792,6 +862,12 @@ def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: 
         backend=SPATIAL_FIXED_BACKEND_SCIPY,
     )
     assert matrix.shape == (1, 1, 3, 3)
+    mean = quat_mean_block_backend(
+        np.asarray([[_z_quat(0.0), _z_quat(30.0)]], dtype=np.float64),
+        np.asarray([[1.0, 1.0]], dtype=np.float64),
+        backend=ROTATION_MEAN_BACKEND_NUMPY,
+    )
+    assert mean.shape == (1, 4)
 
 
 def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without_numba(
@@ -849,4 +925,10 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
         quat_to_matrix_block_backend(
             np.asarray([[_z_quat(0.0)]], dtype=np.float64),
             backend=SPATIAL_FIXED_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"spatial\.rotation\.mean_backend: numba is required"):
+        quat_mean_block_backend(
+            np.asarray([[_z_quat(0.0), _z_quat(30.0)]], dtype=np.float64),
+            np.asarray([[1.0, 1.0]], dtype=np.float64),
+            backend=ROTATION_MEAN_BACKEND_NUMBA,
         )
