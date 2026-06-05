@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+import warnings
+
 import numpy as np
 import pytest
 
@@ -129,3 +132,155 @@ def test_numba_public_004_public_numba_topology_substrate_requires_explicit_axes
             output_core_shapes=((4,),),
             owner="numba.public",
         )
+
+
+def test_numba_public_005_public_numba_window_iteration_metadata_is_policy_free() -> None:
+    """ID: NUMBA_PUBLIC_005_public_numba_window_iteration_metadata_is_policy_free."""
+    bounds = tal_numba.WindowBounds(
+        start=np.asarray([0.0, 1, 1.0], dtype=object),
+        stop=np.asarray([1, 2.0, 3], dtype=object),
+    )
+    rows = tal_numba.prepare_window_rows(bounds, owner="numba.public")
+    assert isinstance(rows, tal_numba.WindowRows)
+    assert rows.length == 3
+    assert rows.bounds.start.dtype == np.dtype(np.int64)
+    assert rows.bounds.stop.dtype == np.dtype(np.int64)
+    assert rows.bounds.start.tolist() == [0, 1, 1]
+    assert rows.bounds.stop.tolist() == [1, 2, 3]
+    assert rows.widths.tolist() == [1, 1, 2]
+    assert rows.max_width == 2
+
+    safe_float = tal_numba.prepare_window_rows(
+        tal_numba.WindowBounds(np.asarray([0.0]), np.asarray([1.0])),
+        owner="numba.public",
+    )
+    assert safe_float.bounds.start.tolist() == [0]
+    assert safe_float.bounds.stop.tolist() == [1]
+
+    empty = tal_numba.prepare_window_rows(
+        tal_numba.WindowBounds(np.asarray([], dtype=float), np.asarray([], dtype=object)),
+        owner="numba.public",
+    )
+    assert empty.length == 0
+    assert empty.widths.dtype == np.dtype(np.int64)
+    assert empty.widths.tolist() == []
+    assert empty.max_width == 0
+
+    invalid_bounds = [
+        object(),
+        tal_numba.WindowBounds(np.asarray([[0]], dtype=np.int64), np.asarray([[1]], dtype=np.int64)),
+        tal_numba.WindowBounds(np.asarray([False]), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray([0.5]), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray([np.inf]), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray(["0"]), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray([10**100], dtype=object), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray([0, 1]), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray([-1]), np.asarray([1])),
+        tal_numba.WindowBounds(np.asarray([1]), np.asarray([0])),
+        tal_numba.WindowBounds(np.asarray([0]), np.asarray([2])),
+    ]
+    for invalid in invalid_bounds:
+        with pytest.raises(ValueError, match=r"numba\.public:"):
+            tal_numba.prepare_window_rows(invalid, owner="numba.public")  # type: ignore[arg-type]
+
+    unsafe_float_stop = tal_numba.WindowBounds(
+        np.asarray([0.0]),
+        np.asarray([float(np.iinfo(np.int64).max)]),
+    )
+    unsafe_object_stop = tal_numba.WindowBounds(
+        np.asarray([0.0], dtype=object),
+        np.asarray([float(np.iinfo(np.int64).max)], dtype=object),
+    )
+    for invalid in (unsafe_float_stop, unsafe_object_stop):
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always", RuntimeWarning)
+            with pytest.raises(ValueError, match=r"numba\.public: window stop bounds must fit int64"):
+                tal_numba.prepare_window_rows(invalid, owner="numba.public")
+        assert recorded == []
+
+
+def test_numba_public_006_public_numba_topology_rows_require_explicit_axis() -> None:
+    """ID: NUMBA_PUBLIC_006_public_numba_topology_rows_require_explicit_axis."""
+    values = np.zeros((2, 4, 3), dtype=np.float64)
+    rows = tal_numba.prepare_topology_rows(
+        (values,),
+        (tal_numba.ScanInputSpec("links", 1, 1, np.float64),),
+        topology_axis="chain",
+        output_core_shapes=((3,),),
+        owner="numba.public",
+    )
+    assert rows.outer_shape == (2,)
+    assert rows.ordered_shape == (4,)
+    assert rows.output_shapes == ((2, 4, 3),)
+
+    nested = tal_numba.prepare_scan_rows(
+        (np.zeros((2, 5, 4, 3), dtype=np.float64),),
+        (tal_numba.ScanInputSpec("links", 2, 1, np.float64),),
+        ordered_axes=(
+            tal_numba.ScanAxisSpec("time", "scan"),
+            tal_numba.ScanAxisSpec("chain", "topology"),
+        ),
+        output_core_shapes=((3,),),
+        owner="numba.public",
+    )
+    assert nested.outer_shape == (2,)
+    assert nested.ordered_shape == (5, 4)
+
+    for invalid_axis in ("", "   ", 3, None):
+        with pytest.raises(ValueError, match=r"numba\.public: topology_axis must be a non-empty string"):
+            tal_numba.prepare_topology_rows(
+                (values,),
+                (tal_numba.ScanInputSpec("links", 1, 1, np.float64),),
+                topology_axis=invalid_axis,  # type: ignore[arg-type]
+                output_core_shapes=((3,),),
+                owner="numba.public",
+            )
+
+    with pytest.raises(ValueError, match=r"numba\.public: block 'links' ordered_ndim must match ordered_axes"):
+        tal_numba.prepare_topology_rows(
+            (np.zeros((2, 5, 4, 3), dtype=np.float64),),
+            (tal_numba.ScanInputSpec("links", 2, 1, np.float64),),
+            topology_axis="chain",
+            output_core_shapes=((3,),),
+            owner="numba.public",
+        )
+
+
+def test_numba_public_007_public_numba_benchmark_helpers_are_optional_dependency_safe(
+    tmp_path,
+) -> None:
+    """ID: NUMBA_PUBLIC_007_public_numba_benchmark_helpers_are_optional_dependency_safe."""
+    assert tal_numba.time_once(lambda value: value + 1, 1) >= 0.0
+    assert tal_numba.warm_median(lambda value: value + 1, 1, repeats=1) >= 0.0
+    assert tal_numba.break_even_calls(10.0, 25.0, 5.0) == 4.0
+    assert np.isinf(tal_numba.break_even_calls(10.0, 25.0, 10.0))
+
+    for repeats in (0, True, 1.5):
+        with pytest.raises(ValueError, match=r"repeats must be a positive integer"):
+            tal_numba.warm_median(lambda: None, repeats=repeats)  # type: ignore[arg-type]
+
+    success = tmp_path / "success.py"
+    success.write_text(
+        "import os\n"
+        "from pathlib import Path\n"
+        "cache = os.environ.get('NUMBA_CACHE_DIR', '')\n"
+        "print('0.125' if cache and Path(cache).is_dir() else 'bad')\n",
+        encoding="utf-8",
+    )
+    assert tal_numba.cold_subprocess(str(success), (), cache_prefix="tal-test-numba-") == 0.125
+
+    bad_stdout = tmp_path / "bad_stdout.py"
+    bad_stdout.write_text("print('not-a-float')\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"cold subprocess stdout must contain a float"):
+        tal_numba.cold_subprocess(str(bad_stdout), (), cache_prefix="tal-test-numba-")
+
+    failure = tmp_path / "failure.py"
+    failure.write_text(
+        "import sys\n"
+        "sys.stderr.write('boom')\n"
+        "raise SystemExit(3)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        tal_numba.cold_subprocess(str(failure), (), cache_prefix="tal-test-numba-")
+    assert "boom" in exc_info.value.stderr

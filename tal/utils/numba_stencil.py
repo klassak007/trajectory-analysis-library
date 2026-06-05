@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from numbers import Integral
+from numbers import Integral, Real
 
 import numpy as np
 
 _INT64_MAX = np.iinfo(np.int64).max
+_INT64_MIN = np.iinfo(np.int64).min
+_INT64_FLOAT_MAX_EXCLUSIVE = float(_INT64_MAX)
+_INT64_FLOAT_MIN_INCLUSIVE = float(_INT64_MIN)
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,28 @@ class WindowBounds:
     stop: np.ndarray
 
 
+@dataclass(frozen=True)
+class WindowRows:
+    """Prepared window metadata for row-local loops.
+
+    Parameters
+    ----------
+    bounds
+        Normalized exclusive start and stop bounds with ``int64`` dtype.
+    length
+        Number of positions, equal to ``len(bounds.start)``.
+    widths
+        Per-position window widths, computed as ``stop - start``.
+    max_width
+        Maximum window width, or zero when ``length`` is zero.
+    """
+
+    bounds: WindowBounds
+    length: int
+    widths: np.ndarray
+    max_width: int
+
+
 def _coerce_int(value: object, *, name: str, owner: str) -> int:
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral):
         raise ValueError(f"{owner}: {name} must be an integer.")
@@ -35,6 +60,71 @@ def _validate_length(length: int, *, owner: str) -> None:
         raise ValueError(f"{owner}: length must be >= 0.")
     if length > _INT64_MAX:
         raise ValueError(f"{owner}: length must fit int64.")
+
+
+def _raise_bound_value_error(*, name: str, owner: str) -> None:
+    raise ValueError(f"{owner}: window {name} bounds must be exact integer-like values.")
+
+
+def _check_int64_range(value: int, *, name: str, owner: str) -> None:
+    if value < _INT64_MIN or value > _INT64_MAX:
+        raise ValueError(f"{owner}: window {name} bounds must fit int64.")
+
+
+def _coerce_object_bound_value(value: object, *, name: str, owner: str) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        _raise_bound_value_error(name=name, owner=owner)
+    if isinstance(value, Integral):
+        out = int(value)
+        _check_int64_range(out, name=name, owner=owner)
+        return out
+    if isinstance(value, Real):
+        numeric = float(value)
+        if not np.isfinite(numeric) or not numeric.is_integer():
+            _raise_bound_value_error(name=name, owner=owner)
+        if numeric < _INT64_FLOAT_MIN_INCLUSIVE or numeric >= _INT64_FLOAT_MAX_EXCLUSIVE:
+            raise ValueError(f"{owner}: window {name} bounds must fit int64.")
+        return int(numeric)
+    _raise_bound_value_error(name=name, owner=owner)
+
+
+def _coerce_integer_bounds(array: np.ndarray, *, name: str, owner: str) -> np.ndarray:
+    if np.issubdtype(array.dtype, np.unsignedinteger):
+        if np.any(array > _INT64_MAX):
+            raise ValueError(f"{owner}: window {name} bounds must fit int64.")
+    elif np.any((array < _INT64_MIN) | (array > _INT64_MAX)):
+        raise ValueError(f"{owner}: window {name} bounds must fit int64.")
+    return array.astype(np.int64, copy=False)
+
+
+def _coerce_float_bounds(array: np.ndarray, *, name: str, owner: str) -> np.ndarray:
+    if not np.all(np.isfinite(array)) or not np.all(np.floor(array) == array):
+        _raise_bound_value_error(name=name, owner=owner)
+    if np.any((array < _INT64_FLOAT_MIN_INCLUSIVE) | (array >= _INT64_FLOAT_MAX_EXCLUSIVE)):
+        raise ValueError(f"{owner}: window {name} bounds must fit int64.")
+    return array.astype(np.int64)
+
+
+def _coerce_object_bounds(array: np.ndarray, *, name: str, owner: str) -> np.ndarray:
+    out = np.empty(array.shape, dtype=np.int64)
+    for idx, value in enumerate(array):
+        out[idx] = _coerce_object_bound_value(value, name=name, owner=owner)
+    return out
+
+
+def _coerce_window_bounds(values: object, *, name: str, owner: str) -> np.ndarray:
+    array = np.asarray(values)
+    if array.ndim != 1:
+        raise ValueError(f"{owner}: window {name} bounds must be one-dimensional.")
+    if np.issubdtype(array.dtype, np.bool_):
+        _raise_bound_value_error(name=name, owner=owner)
+    if np.issubdtype(array.dtype, np.integer):
+        return _coerce_integer_bounds(array, name=name, owner=owner)
+    if np.issubdtype(array.dtype, np.floating):
+        return _coerce_float_bounds(array, name=name, owner=owner)
+    if array.dtype == np.dtype(object):
+        return _coerce_object_bounds(array, name=name, owner=owner)
+    _raise_bound_value_error(name=name, owner=owner)
 
 
 def _stop_bounds(idx: np.ndarray, *, length: int, after: int) -> np.ndarray:
@@ -206,10 +296,66 @@ def backward_window_bounds(length: object, *, width: object, owner: str) -> Wind
     return clipped_window_bounds(length, before=w - 1, after=0, owner=owner)
 
 
+def prepare_window_rows(bounds: WindowBounds, *, owner: str) -> WindowRows:
+    """Normalize window bounds and derive loop metadata.
+
+    Parameters
+    ----------
+    bounds
+        Exclusive start and stop arrays. Exact integer-like values are accepted
+        and normalized to ``int64``.
+    owner
+        Error-message prefix for the caller-owned boundary.
+
+    Returns
+    -------
+    WindowRows
+        Normalized bounds, row count, per-position widths, and maximum width.
+
+    Raises
+    ------
+    ValueError
+        If ``bounds`` is not a ``WindowBounds`` object, if start and stop
+        arrays are not one-dimensional matching exact integer-like values, or
+        if any bound is outside the normalized mechanical range.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from tal.utils import numba as tal_numba
+    >>> bounds = tal_numba.WindowBounds(
+    ...     start=np.asarray([0.0, 1.0], dtype=object),
+    ...     stop=np.asarray([1, 2], dtype=object),
+    ... )
+    >>> rows = tal_numba.prepare_window_rows(bounds, owner="docs")
+    >>> rows.length, rows.widths.tolist(), rows.max_width
+    (2, [1, 1], 1)
+    """
+
+    if not isinstance(bounds, WindowBounds):
+        raise ValueError(f"{owner}: bounds must be a WindowBounds object.")
+    start = _coerce_window_bounds(bounds.start, name="start", owner=owner)
+    stop = _coerce_window_bounds(bounds.stop, name="stop", owner=owner)
+    if start.shape != stop.shape:
+        raise ValueError(f"{owner}: window start and stop bounds must share shape.")
+    if np.any(start < 0):
+        raise ValueError(f"{owner}: window start bounds must be >= 0.")
+    if np.any(stop < start):
+        raise ValueError(f"{owner}: window stop bounds must be >= start.")
+    length = int(start.shape[0])
+    if np.any(stop > length):
+        raise ValueError(f"{owner}: window stop bounds must be <= length.")
+    widths = stop - start
+    max_width = int(np.max(widths)) if widths.size else 0
+    return WindowRows(WindowBounds(start=start, stop=stop), length, widths.astype(np.int64, copy=False), max_width)
+
+
 __all__ = [
     "WindowBounds",
+    "WindowRows",
     "backward_window_bounds",
     "centered_window_bounds",
     "clipped_window_bounds",
     "forward_window_bounds",
+    "prepare_window_rows",
 ]

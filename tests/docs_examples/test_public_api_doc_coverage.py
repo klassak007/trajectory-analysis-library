@@ -26,7 +26,11 @@ NUMBA_AUTOSUMMARY_RAISES_SYMBOLS = {
     "backward_window_bounds",
     "prepare_block_rows",
     "prepare_scan_rows",
+    "prepare_topology_rows",
+    "prepare_window_rows",
     "require_numba",
+    "warm_median",
+    "cold_subprocess",
 }
 
 

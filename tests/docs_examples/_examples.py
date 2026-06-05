@@ -1237,11 +1237,45 @@ def example_utils_numba_public() -> None:
         owner="docs.numba",
     )
     bounds = tal_numba.centered_window_bounds(4, radius=1, owner="docs.numba")
+    window_rows = tal_numba.prepare_window_rows(bounds, owner="docs.numba")
 
     def row_kernel_shape(value_rows, start, stop):
         return value_rows.shape[0], start.shape[0], stop.shape[0]
 
     assert row_kernel_shape(rows.row_arrays[0], bounds.start, bounds.stop) == (2, 4, 4)
+    assert window_rows.length == 4
+    assert window_rows.max_width == 3
+
+    topology_rows = tal_numba.prepare_topology_rows(
+        (values,),
+        (tal_numba.ScanInputSpec("links", 1, 1, np.float64),),
+        topology_axis="chain",
+        output_core_shapes=((3,),),
+        owner="docs.numba",
+    )
+    assert topology_rows.outer_shape == (2,)
+    assert topology_rows.ordered_shape == (4,)
+
+    nested_rows = tal_numba.prepare_scan_rows(
+        (np.zeros((2, 5, 4, 3), dtype=np.float64),),
+        (tal_numba.ScanInputSpec("links", 2, 1, np.float64),),
+        ordered_axes=(
+            tal_numba.ScanAxisSpec("time", "scan"),
+            tal_numba.ScanAxisSpec("chain", "topology"),
+        ),
+        output_core_shapes=((3,),),
+        owner="docs.numba",
+    )
+    assert nested_rows.ordered_shape == (5, 4)
+
+    assert tal_numba.time_once(lambda value: value + 1, 1) >= 0.0
+    assert tal_numba.warm_median(lambda value: value + 1, 1, repeats=1) >= 0.0
+    assert tal_numba.break_even_calls(10.0, 25.0, 5.0) == 4.0
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "bench.py"
+        script.write_text("print('0.0')\n", encoding="utf-8")
+        assert tal_numba.cold_subprocess(str(script), (), cache_prefix="docs-numba-") == 0.0
+
     try:
         numba = tal_numba.require_numba("docs.numba")
     except ImportError:

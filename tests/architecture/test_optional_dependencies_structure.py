@@ -156,9 +156,12 @@ def test_numba_arch_008_numba_compile_policy_helper_is_minimal() -> None:
 
 def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
     """ID: NUMBA_ARCH_009_numba_benchmark_protocol_is_shared."""
-    helper = Path("benchmarks/_numba_bench.py").read_text(encoding="utf-8")
+    helper = Path("tal/utils/numba_bench.py").read_text(encoding="utf-8")
+    shim = Path("benchmarks/_numba_bench.py").read_text(encoding="utf-8")
     assert "NUMBA_CACHE_DIR" in helper
     assert "TemporaryDirectory" in helper
+    assert "sys.executable" in helper
+    assert "from tal.utils.numba_bench import" in shim
     for path in [
         Path("benchmarks/bench_param_numba_backends.py"),
         Path("benchmarks/bench_event_numba_backends.py"),
@@ -246,17 +249,20 @@ def test_numba_arch_020_public_numba_utility_surface_import_boundaries() -> None
 
     facade = Path("tal/utils/numba/__init__.py")
     stencil = Path("tal/utils/numba_stencil.py")
+    bench = Path("tal/utils/numba_bench.py")
     assert facade.exists()
     assert stencil.exists()
+    assert bench.exists()
 
     facade_text = facade.read_text(encoding="utf-8")
     assert "from tal.utils.block_rows import" in facade_text
+    assert "from tal.utils.numba_bench import" in facade_text
     assert "from tal.utils.numba_scan import" in facade_text
     assert "from tal.utils.numba_stencil import" in facade_text
     assert "from tal.utils.numba_support import" in facade_text
     assert "benchmarks" not in facade_text
 
-    for path in [facade, stencil]:
+    for path in [facade, stencil, bench]:
         text = path.read_text(encoding="utf-8")
         _assert_no_direct_numba_import(text)
         assert "import xarray" not in text
@@ -290,6 +296,75 @@ def test_numba_arch_021_public_numba_utility_surface_has_no_domain_policy() -> N
     assert [token for token in banned if token in stencil] == []
     assert "benchmarks" not in facade
     assert "_numba_bench" not in facade
+
+
+def test_numba_arch_022_public_numba_benchmark_helpers_are_schema_free() -> None:
+    """ID: NUMBA_ARCH_022_public_numba_benchmark_helpers_are_schema_free."""
+    path = Path("tal/utils/numba_bench.py")
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == [
+        "__future__",
+        "math",
+        "numbers",
+        "os",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "statistics",
+        "time",
+        "typing",
+    ]
+    text = path.read_text(encoding="utf-8")
+    assert "NUMBA_CACHE_DIR" in text
+    assert "sys.executable" in text
+    assert "subprocess.run" in text
+    _assert_no_direct_numba_import(text)
+    assert "xarray" not in text
+    assert "tal.core" not in text
+    assert "tal.spatial" not in text
+    assert "tal.linalg" not in text
+    assert "tal_v2" not in text
+
+
+def test_numba_arch_023_public_numba_window_topology_helpers_stay_policy_free() -> None:
+    """ID: NUMBA_ARCH_023_public_numba_window_topology_helpers_stay_policy_free."""
+    texts = [
+        Path("tal/utils/numba_stencil.py").read_text(encoding="utf-8"),
+        Path("tal/utils/numba_scan.py").read_text(encoding="utf-8"),
+        Path("tal/utils/numba/__init__.py").read_text(encoding="utf-8"),
+    ]
+    banned = [
+        "valid_mask",
+        "monotonic",
+        "gaussian",
+        "smooth",
+        "interp",
+        "quaternion",
+        "event",
+        "duplicate",
+        "ParamMap",
+        "ParamBoundsMap",
+        "KINEMATICS_",
+        "SPATIAL_",
+        "EVENT_",
+        "PARAM_",
+        "LSTSQ_",
+    ]
+    for text in texts:
+        assert [token for token in banned if token in text] == []
+    stencil = texts[0]
+    scan = texts[1]
+    assert "def prepare_window_rows(" in stencil
+    assert "def prepare_topology_rows(" in scan
+    assert 'ScanAxisSpec(axis_name, "topology")' in scan
+    assert "def scan(" not in scan
+    assert "Callable" not in scan
 
 
 def test_param_arch_041_param_map_numba_backend_owner_routed() -> None:

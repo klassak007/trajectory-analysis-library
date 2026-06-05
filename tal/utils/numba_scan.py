@@ -87,6 +87,12 @@ def _validate_axes(axes: tuple[ScanAxisSpec, ...], *, owner: str) -> None:
             raise ValueError(f"{owner}: scan axis {axis.name!r} has unsupported kind {axis.kind!r}.")
 
 
+def _validate_axis_name(name: object, *, owner: str) -> str:
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"{owner}: topology_axis must be a non-empty string.")
+    return name
+
+
 def _validate_specs(specs: tuple[ScanInputSpec, ...], axes: tuple[ScanAxisSpec, ...], *, owner: str) -> None:
     for spec in specs:
         if spec.ordered_ndim < 0 or spec.core_ndim < 0:
@@ -194,4 +200,68 @@ def prepare_scan_rows(
     return ScanRows(prepared.row_arrays, prepared.outer_shape, ordered, core_shapes, output_shapes)
 
 
-__all__ = ["ScanAxisSpec", "ScanInputSpec", "ScanRows", "prepare_scan_rows"]
+def prepare_topology_rows(
+    blocks: Sequence[object],
+    specs: Sequence[ScanInputSpec],
+    *,
+    topology_axis: str,
+    output_core_shapes: Sequence[tuple[int, ...]],
+    owner: str,
+    broadcast_shapes: Sequence[tuple[int, ...]] | None = None,
+) -> ScanRows:
+    """Prepare blocks for row-local work over one topology axis.
+
+    Parameters
+    ----------
+    blocks
+        Input array-like blocks with one trailing topology axis before any core
+        dimensions.
+    specs
+        One ``ScanInputSpec`` per block. Each spec must use ``ordered_ndim=1``.
+    topology_axis
+        Explicit caller-owned topology-axis name.
+    output_core_shapes
+        Output core shapes appended after the topology axis.
+    owner
+        Error-message prefix for the caller-owned boundary.
+    broadcast_shapes
+        Optional additional outer shapes that participate in broadcasting.
+
+    Returns
+    -------
+    ScanRows
+        Row arrays plus outer, topology, core, and output shape metadata.
+
+    Raises
+    ------
+    ValueError
+        If ``topology_axis`` is empty, block/spec counts mismatch, ranks are
+        invalid, dtype coercion fails, or shapes cannot broadcast.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from tal.utils import numba as tal_numba
+    >>> rows = tal_numba.prepare_topology_rows(
+    ...     (np.zeros((2, 4, 3)),),
+    ...     (tal_numba.ScanInputSpec("links", 1, 1, np.float64),),
+    ...     topology_axis="chain",
+    ...     output_core_shapes=((3,),),
+    ...     owner="docs",
+    ... )
+    >>> rows.outer_shape, rows.ordered_shape
+    ((2,), (4,))
+    """
+
+    axis_name = _validate_axis_name(topology_axis, owner=owner)
+    return prepare_scan_rows(
+        blocks,
+        specs,
+        ordered_axes=(ScanAxisSpec(axis_name, "topology"),),
+        output_core_shapes=output_core_shapes,
+        owner=owner,
+        broadcast_shapes=broadcast_shapes,
+    )
+
+
+__all__ = ["ScanAxisSpec", "ScanInputSpec", "ScanRows", "prepare_scan_rows", "prepare_topology_rows"]
