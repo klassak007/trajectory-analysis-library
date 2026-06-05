@@ -29,14 +29,15 @@ def _compiled_intervals_block():
 
 def _jit_kernel_helpers(numba) -> None:
     global _HELPERS_JITTED
-    global _append_boundary, _boundary_row_impl, _collect_interval_segments, _dedupe_boundaries
+    global _append_boundary, _append_transition, _boundary_row_impl, _collect_interval_segments, _dedupe_boundaries
     global _edge_rank, _interval_has_trigger_collision
-    global _intervals_row_impl, _sort_boundaries, _transition_candidates
+    global _intervals_row_impl, _skip_interval_segment, _sort_boundaries, _transition_candidates
     global _trigger_candidates, _write_interval_segments
     if _HELPERS_JITTED:
         return
     _edge_rank = njit_kernel(numba, _edge_rank)
     _append_boundary = njit_kernel(numba, _append_boundary)
+    _append_transition = njit_kernel(numba, _append_transition)
     _sort_boundaries = njit_kernel(numba, _sort_boundaries)
     _dedupe_boundaries = njit_kernel(numba, _dedupe_boundaries)
     _transition_candidates = njit_kernel(numba, _transition_candidates)
@@ -44,6 +45,7 @@ def _jit_kernel_helpers(numba) -> None:
     _boundary_row_impl = njit_kernel(numba, _boundary_row_impl)
     _interval_has_trigger_collision = njit_kernel(numba, _interval_has_trigger_collision)
     _collect_interval_segments = njit_kernel(numba, _collect_interval_segments)
+    _skip_interval_segment = njit_kernel(numba, _skip_interval_segment)
     _write_interval_segments = njit_kernel(numba, _write_interval_segments)
     _intervals_row_impl = njit_kernel(numba, _intervals_row_impl)
     _HELPERS_JITTED = True
@@ -186,6 +188,20 @@ def _append_boundary(count, time, edge, before, after, next_time, next_edge, nex
     return count + 1, _STATUS_OK
 
 
+def _append_transition(count, current_clock, current_mask, previous, idx, include_initial, candidates):
+    has_previous, prev_mask, prev_idx, prev_clock = previous
+    time, edge, before, after = candidates
+    if not has_previous:
+        if not include_initial or not current_mask:
+            return count, _STATUS_OK
+        return _append_boundary(count, time, edge, before, after, current_clock, EDGE_ENTER, SAMPLE_SENTINEL, idx)
+    if (not prev_mask) and current_mask:
+        return _append_boundary(count, time, edge, before, after, current_clock, EDGE_ENTER, prev_idx, idx)
+    if prev_mask and (not current_mask):
+        return _append_boundary(count, time, edge, before, after, prev_clock, EDGE_EXIT, prev_idx, idx)
+    return count, _STATUS_OK
+
+
 def _sort_boundaries(count, time, edge, before, after):
     for idx in range(1, count):
         t = time[idx]
@@ -240,21 +256,10 @@ def _transition_candidates(mask, valid, clock, include_initial, candidates):
             continue
         current_mask = bool(mask[idx])
         current_clock = clock[idx]
-        if not has_previous:
-            if include_initial and current_mask:
-                count, status = _append_boundary(
-                    count, time, edge, before, after, current_clock, EDGE_ENTER, SAMPLE_SENTINEL, idx
-                )
-                if status != _STATUS_OK:
-                    return count, status
-        elif (not prev_mask) and current_mask:
-            count, status = _append_boundary(count, time, edge, before, after, current_clock, EDGE_ENTER, prev_idx, idx)
-            if status != _STATUS_OK:
-                return count, status
-        elif prev_mask and (not current_mask):
-            count, status = _append_boundary(count, time, edge, before, after, prev_clock, EDGE_EXIT, prev_idx, idx)
-            if status != _STATUS_OK:
-                return count, status
+        previous = (has_previous, prev_mask, prev_idx, prev_clock)
+        count, status = _append_transition(count, current_clock, current_mask, previous, idx, include_initial, candidates)
+        if status != _STATUS_OK:
+            return count, status
         has_previous = True
         prev_idx = idx
         prev_mask = current_mask
@@ -269,10 +274,11 @@ def _transition_candidates(mask, valid, clock, include_initial, candidates):
 def _trigger_candidates(mask, valid, clock, count, candidates):
     time, edge, before, after = candidates
     for idx in range(mask.shape[0]):
-        if valid[idx] and bool(mask[idx]):
-            count, status = _append_boundary(count, time, edge, before, after, clock[idx], EDGE_TRIGGER, idx, idx)
-            if status != _STATUS_OK:
-                return count, status
+        if not valid[idx] or not bool(mask[idx]):
+            continue
+        count, status = _append_boundary(count, time, edge, before, after, clock[idx], EDGE_TRIGGER, idx, idx)
+        if status != _STATUS_OK:
+            return count, status
     return count, _STATUS_OK
 
 
@@ -323,9 +329,10 @@ def _interval_has_trigger_collision(index, count, segments):
     for other in range(count):
         if not trigger[other]:
             continue
-        if time0[index] == time0[other] and time1[index] == time1[other]:
-            if sample0[index] == sample0[other] and sample1[index] == sample1[other]:
-                return True
+        if time0[index] != time0[other] or time1[index] != time1[other]:
+            continue
+        if sample0[index] == sample0[other] and sample1[index] == sample1[other]:
+            return True
     return False
 
 
@@ -364,24 +371,32 @@ def _collect_interval_segments(time, edge, before, after, segments):
     return count
 
 
+def _skip_interval_segment(index, count, segments):
+    seg_t0, seg_t1, seg_s0, seg_s1, seg_trigger = segments
+    if seg_trigger[index]:
+        return False
+    if seg_t0[index] != seg_t1[index] or seg_s0[index] != seg_s1[index]:
+        return False
+    return _interval_has_trigger_collision(index, count, segments)
+
+
 def _write_interval_segments(row, count, segments, outputs):
     seg_t0, seg_t1, seg_s0, seg_s1, seg_trigger = segments
     out_time, out_sample, out_trigger, out_valid = outputs
     written = 0
     max_segments = out_valid.shape[1]
     for idx in range(count):
-        degenerate = seg_t0[idx] == seg_t1[idx] and seg_s0[idx] == seg_s1[idx]
-        if (not seg_trigger[idx]) and degenerate:
-            if _interval_has_trigger_collision(idx, count, segments):
-                continue
-        if written < max_segments:
-            out_time[row, written, 0] = seg_t0[idx]
-            out_time[row, written, 1] = seg_t1[idx]
-            out_sample[row, written, 0] = seg_s0[idx]
-            out_sample[row, written, 1] = seg_s1[idx]
-            out_trigger[row, written] = seg_trigger[idx]
-            out_valid[row, written] = True
-            written += 1
+        if _skip_interval_segment(idx, count, segments):
+            continue
+        if written >= max_segments:
+            continue
+        out_time[row, written, 0] = seg_t0[idx]
+        out_time[row, written, 1] = seg_t1[idx]
+        out_sample[row, written, 0] = seg_s0[idx]
+        out_sample[row, written, 1] = seg_s1[idx]
+        out_trigger[row, written] = seg_trigger[idx]
+        out_valid[row, written] = True
+        written += 1
 
 
 def _intervals_row_impl(row, time, edge, before, after, outputs):

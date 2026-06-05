@@ -17,6 +17,58 @@ def _assert_no_direct_numba_import(text: str) -> None:
             assert node.module.split(".")[0] != "numba"
 
 
+_NUMBA_IMPL_PATHS = (
+    Path("tal/core/param_engine/numba_backends.py"),
+    Path("tal/core/event_ops/numba_backends.py"),
+    Path("tal/linalg/ops/numba_backends.py"),
+    Path("tal/spatial/kernels/rotation_interp_numba_backends.py"),
+    Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+    Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+    Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
+    Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
+    Path("tal/spatial/kernels/rotation_mean_numba_backends.py"),
+)
+
+_NUMBA_CLEANED_NESTING_FUNCTIONS = (
+    ("tal/core/param_engine/numba_backends.py", "_fill_source"),
+    ("tal/core/param_engine/numba_backends.py", "_nearest_pick"),
+    ("tal/core/param_engine/numba_backends.py", "_map_nearest_row"),
+    ("tal/core/param_engine/numba_backends.py", "_map_linear_interior"),
+    ("tal/core/param_engine/numba_backends.py", "_map_linear_query"),
+    ("tal/core/param_engine/numba_backends.py", "_map_linear_row"),
+    ("tal/core/param_engine/numba_backends.py", "_map_row"),
+    ("tal/core/param_engine/numba_backends.py", "_map_block_impl"),
+    ("tal/core/event_ops/numba_backends.py", "_append_transition"),
+    ("tal/core/event_ops/numba_backends.py", "_transition_candidates"),
+    ("tal/core/event_ops/numba_backends.py", "_trigger_candidates"),
+    ("tal/core/event_ops/numba_backends.py", "_interval_has_trigger_collision"),
+    ("tal/core/event_ops/numba_backends.py", "_skip_interval_segment"),
+    ("tal/core/event_ops/numba_backends.py", "_write_interval_segments"),
+    ("tal/spatial/kernels/topology_scan_numba_backends.py", "_compose_next_pose"),
+    ("tal/spatial/kernels/topology_scan_numba_backends.py", "_write_pose_output"),
+    ("tal/spatial/kernels/topology_scan_numba_backends.py", "_chain_pose_row_impl"),
+)
+
+
+def _param_count(node: ast.FunctionDef) -> int:
+    return len(node.args.posonlyargs) + len(node.args.args) + len(node.args.kwonlyargs)
+
+
+def _max_nesting(node: ast.AST, depth: int = 0) -> int:
+    nested_node = isinstance(
+        node,
+        (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.AsyncFor, ast.AsyncWith, ast.Match),
+    )
+    next_depth = depth + (1 if nested_node else 0)
+    child_depths = [_max_nesting(child, next_depth) for child in ast.iter_child_nodes(node)]
+    return max([next_depth, *child_depths])
+
+
+def _function_index(path: Path) -> dict[str, ast.FunctionDef]:
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    return {node.name: node for node in ast.walk(module) if isinstance(node, ast.FunctionDef)}
+
+
 def test_numba_opt_001_numba_extra_is_optional_only() -> None:
     """ID: NUMBA_OPT_001_numba_extra_is_optional_only."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -365,6 +417,29 @@ def test_numba_arch_023_public_numba_window_topology_helpers_stay_policy_free() 
     assert 'ScanAxisSpec(axis_name, "topology")' in scan
     assert "def scan(" not in scan
     assert "Callable" not in scan
+
+
+def test_numba_arch_024_numba_sidecar_helper_signature_budget_closeout() -> None:
+    """ID: NUMBA_ARCH_024_numba_sidecar_helper_signature_budget_closeout."""
+    failures = []
+    for path in _NUMBA_IMPL_PATHS:
+        for name, node in _function_index(path).items():
+            count = _param_count(node)
+            if count > 10:
+                failures.append(f"{path.as_posix()}:{name} has {count} parameters")
+    assert failures == []
+
+
+def test_numba_arch_025_cleaned_numba_kernel_helpers_respect_nesting_budget() -> None:
+    """ID: NUMBA_ARCH_025_cleaned_numba_kernel_helpers_respect_nesting_budget."""
+    failures = []
+    for path_text, name in _NUMBA_CLEANED_NESTING_FUNCTIONS:
+        path = Path(path_text)
+        node = _function_index(path)[name]
+        depth = _max_nesting(node)
+        if depth > 2:
+            failures.append(f"{path.as_posix()}:{name} nesting={depth}")
+    assert failures == []
 
 
 def test_param_arch_041_param_map_numba_backend_owner_routed() -> None:

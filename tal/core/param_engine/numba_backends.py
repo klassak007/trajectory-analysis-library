@@ -39,7 +39,8 @@ def _compiled_bounds_block():
 
 def _jit_kernel_helpers(numba) -> None:
     global _HELPERS_JITTED
-    global _fill_source, _map_linear_interior, _map_linear_row, _map_nearest_row
+    global _fill_source, _map_linear_interior, _map_linear_query, _map_linear_row, _map_nearest_row, _map_row
+    global _nearest_pick
     global _search_left, _search_right, _write_bounds_edge, _write_bounds_empty
     global _write_bounds_span, _write_constant, _write_duplicate
     if _HELPERS_JITTED:
@@ -49,9 +50,12 @@ def _jit_kernel_helpers(numba) -> None:
     _search_right = njit_kernel(numba, _search_right)
     _write_constant = njit_kernel(numba, _write_constant)
     _write_duplicate = njit_kernel(numba, _write_duplicate)
+    _nearest_pick = njit_kernel(numba, _nearest_pick)
     _map_nearest_row = njit_kernel(numba, _map_nearest_row)
     _map_linear_interior = njit_kernel(numba, _map_linear_interior)
+    _map_linear_query = njit_kernel(numba, _map_linear_query)
     _map_linear_row = njit_kernel(numba, _map_linear_row)
+    _map_row = njit_kernel(numba, _map_row)
     _write_bounds_empty = njit_kernel(numba, _write_bounds_empty)
     _write_bounds_edge = njit_kernel(numba, _write_bounds_edge)
     _write_bounds_span = njit_kernel(numba, _write_bounds_span)
@@ -165,14 +169,15 @@ def _fill_source(param_row, valid_row, src_idx, src_vals):
     have_previous = False
     for idx in range(param_row.shape[0]):
         value = param_row[idx]
-        if valid_row[idx] and np.isfinite(value):
-            if have_previous and value < previous:
-                return count, _STATUS_MONOTONIC
-            src_idx[count] = idx
-            src_vals[count] = value
-            previous = value
-            have_previous = True
-            count += 1
+        if not valid_row[idx] or not np.isfinite(value):
+            continue
+        if have_previous and value < previous:
+            return count, _STATUS_MONOTONIC
+        src_idx[count] = idx
+        src_vals[count] = value
+        previous = value
+        have_previous = True
+        count += 1
     return count, _STATUS_OK
 
 
@@ -200,14 +205,15 @@ def _search_right(values, count, query):
     return lo
 
 
-def _write_constant(row, col, pick, src_idx, i0, i1, valid):
+def _write_constant(row, col, pick, src_idx, outputs):
+    i0, i1, _, valid = outputs
     source_index = src_idx[pick]
     i0[row, col] = source_index
     i1[row, col] = source_index
     valid[row, col] = True
 
 
-def _write_duplicate(row, col, dup_code, left_pick, right_pick, src_idx, i0, i1, valid):
+def _write_duplicate(row, col, dup_code, left_pick, right_pick, src_idx, outputs):
     if dup_code == 3:
         return _STATUS_DUPLICATE
     if dup_code == 0:
@@ -215,35 +221,38 @@ def _write_duplicate(row, col, dup_code, left_pick, right_pick, src_idx, i0, i1,
     pick = left_pick
     if dup_code != 1:
         pick = right_pick
-    _write_constant(row, col, pick, src_idx, i0, i1, valid)
+    _write_constant(row, col, pick, src_idx, outputs)
     return _STATUS_OK
 
 
-def _map_nearest_row(row, src_idx, src_vals, count, query_row, i0, i1, valid):
+def _nearest_pick(query, src_vals, count):
+    right = _search_left(src_vals, count, query)
+    if right >= count:
+        return count - 1
+    if right <= 0:
+        return 0
+    left = right - 1
+    if abs(query - src_vals[left]) <= abs(src_vals[right] - query):
+        return left
+    return right
+
+
+def _map_nearest_row(row, src_idx, src_vals, count, query_row, outputs):
     for col in range(query_row.shape[0]):
         query = query_row[col]
         if not np.isfinite(query):
             continue
-        right = _search_left(src_vals, count, query)
-        pick = 0
-        if right >= count:
-            pick = count - 1
-        elif right > 0:
-            left = right - 1
-            if abs(query - src_vals[left]) <= abs(src_vals[right] - query):
-                pick = left
-            else:
-                pick = right
-        _write_constant(row, col, pick, src_idx, i0, i1, valid)
+        _write_constant(row, col, _nearest_pick(query, src_vals, count), src_idx, outputs)
 
 
-def _map_linear_interior(row, col, query, lo, dup_code, src_idx, src_vals, i0, i1, alpha, valid):
+def _map_linear_interior(row, col, query, lo, dup_code, src_idx, src_vals, outputs):
+    i0, i1, alpha, valid = outputs
     left = lo - 1
     right = lo
     t0 = src_vals[left]
     t1 = src_vals[right]
     if t1 == t0:
-        return _write_duplicate(row, col, dup_code, left, right, src_idx, i0, i1, valid)
+        return _write_duplicate(row, col, dup_code, left, right, src_idx, outputs)
     i0[row, col] = src_idx[left]
     i1[row, col] = src_idx[right]
     alpha[row, col] = (query - t0) / (t1 - t0)
@@ -251,25 +260,37 @@ def _map_linear_interior(row, col, query, lo, dup_code, src_idx, src_vals, i0, i
     return _STATUS_OK
 
 
-def _map_linear_row(row, src_idx, src_vals, count, query_row, dup_code, i0, i1, alpha, valid):
+def _map_linear_query(row, col, query, src_idx, src_vals, count, dup_code, outputs):
+    lo = _search_left(src_vals, count, query)
+    hi = _search_right(src_vals, count, query)
+    if hi - lo > 1:
+        return _write_duplicate(row, col, dup_code, lo, hi - 1, src_idx, outputs)
+    if (lo == 0 and query == src_vals[0]) or (lo >= count and query == src_vals[count - 1]):
+        _write_constant(row, col, 0 if lo == 0 else count - 1, src_idx, outputs)
+        return _STATUS_OK
+    if lo > 0 and lo < count:
+        return _map_linear_interior(row, col, query, lo, dup_code, src_idx, src_vals, outputs)
+    return _STATUS_OK
+
+
+def _map_linear_row(row, src_idx, src_vals, count, query_row, dup_code, outputs):
     for col in range(query_row.shape[0]):
         query = query_row[col]
         if not np.isfinite(query):
             continue
-        lo = _search_left(src_vals, count, query)
-        hi = _search_right(src_vals, count, query)
-        if hi - lo > 1:
-            status = _write_duplicate(row, col, dup_code, lo, hi - 1, src_idx, i0, i1, valid)
-        elif (lo == 0 and query == src_vals[0]) or (lo >= count and query == src_vals[count - 1]):
-            _write_constant(row, col, 0 if lo == 0 else count - 1, src_idx, i0, i1, valid)
-            status = _STATUS_OK
-        elif lo > 0 and lo < count:
-            status = _map_linear_interior(row, col, query, lo, dup_code, src_idx, src_vals, i0, i1, alpha, valid)
-        else:
-            status = _STATUS_OK
+        status = _map_linear_query(row, col, query, src_idx, src_vals, count, dup_code, outputs)
         if status != _STATUS_OK:
             return status
     return _STATUS_OK
+
+
+def _map_row(row, method_code, dup_code, src_idx, src_vals, count, query_row, outputs):
+    if count == 0:
+        return _STATUS_OK
+    if method_code == _METHOD_NEAREST:
+        _map_nearest_row(row, src_idx, src_vals, count, query_row, outputs)
+        return _STATUS_OK
+    return _map_linear_row(row, src_idx, src_vals, count, query_row, dup_code, outputs)
 
 
 def _map_block_impl(param, valid_in, query, method_code, dup_code):
@@ -280,20 +301,16 @@ def _map_block_impl(param, valid_in, query, method_code, dup_code):
     i1 = np.zeros((rows, query_size), dtype=np.int64)
     alpha = np.zeros((rows, query_size), dtype=np.float64)
     valid = np.zeros((rows, query_size), dtype=np.bool_)
+    outputs = (i0, i1, alpha, valid)
     src_idx = np.empty(seq_size, dtype=np.int64)
     src_vals = np.empty(seq_size, dtype=np.float64)
     for row in range(rows):
         count, status = _fill_source(param[row], valid_in[row], src_idx, src_vals)
         if status != _STATUS_OK:
             return i0, i1, alpha, valid, status
-        if count == 0:
-            continue
-        if method_code == _METHOD_NEAREST:
-            _map_nearest_row(row, src_idx, src_vals, count, query[row], i0, i1, valid)
-        else:
-            status = _map_linear_row(row, src_idx, src_vals, count, query[row], dup_code, i0, i1, alpha, valid)
-            if status != _STATUS_OK:
-                return i0, i1, alpha, valid, status
+        status = _map_row(row, method_code, dup_code, src_idx, src_vals, count, query[row], outputs)
+        if status != _STATUS_OK:
+            return i0, i1, alpha, valid, status
     return i0, i1, alpha, valid, _STATUS_OK
 
 

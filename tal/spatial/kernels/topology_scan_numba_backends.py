@@ -27,12 +27,15 @@ def _compiled_chain_pose_block():
 
 
 def _jit_kernel_helpers(numba) -> None:
-    global _chain_pose_row_impl, _compose_pose, _count_valid, _inverse_pose, _load_local, _normalize_quat
+    global _chain_pose_row_impl, _compose_next_pose, _compose_pose, _count_valid, _inverse_pose
+    global _load_local, _normalize_quat, _write_pose_output
     _count_valid = njit_kernel(numba, _count_valid)
     _normalize_quat = njit_kernel(numba, _normalize_quat)
     _inverse_pose = njit_kernel(numba, _inverse_pose)
     _compose_pose = njit_kernel(numba, _compose_pose)
     _load_local = njit_kernel(numba, _load_local)
+    _compose_next_pose = njit_kernel(numba, _compose_next_pose)
+    _write_pose_output = njit_kernel(numba, _write_pose_output)
     _chain_pose_row_impl = njit_kernel(numba, _chain_pose_row_impl)
 
 
@@ -83,6 +86,21 @@ def _load_local(translation, quat, direction, row, idx):
     return STATUS_OK, local_t, local_q
 
 
+def _compose_next_pose(translation, quat, direction, row, idx, acc_t, acc_q):
+    status, local_t, local_q = _load_local(translation, quat, direction, row, idx)
+    if status != STATUS_OK:
+        return status, acc_t, acc_q
+    next_t, next_q = _compose_pose(acc_t, acc_q, local_t, local_q)
+    return STATUS_OK, next_t, next_q
+
+
+def _write_pose_output(row, idx, acc_t, acc_q, out_t, out_q):
+    for comp in range(3):
+        out_t[row, idx, comp] = acc_t[comp]
+    for comp in range(4):
+        out_q[row, idx, comp] = acc_q[comp]
+
+
 def _chain_pose_row_impl(translation, quat, valid, direction, row, out_t, out_q):
     count = _count_valid(valid[row])
     if count < 0:
@@ -92,16 +110,12 @@ def _chain_pose_row_impl(translation, quat, valid, direction, row, out_t, out_q)
     status, acc_t, acc_q = _load_local(translation, quat, direction, row, 0)
     if status != STATUS_OK:
         return status
-    for idx in range(count):
-        if idx > 0:
-            status, local_t, local_q = _load_local(translation, quat, direction, row, idx)
-            if status != STATUS_OK:
-                return status
-            acc_t, acc_q = _compose_pose(acc_t, acc_q, local_t, local_q)
-        for comp in range(3):
-            out_t[row, idx, comp] = acc_t[comp]
-        for comp in range(4):
-            out_q[row, idx, comp] = acc_q[comp]
+    _write_pose_output(row, 0, acc_t, acc_q, out_t, out_q)
+    for idx in range(1, count):
+        status, acc_t, acc_q = _compose_next_pose(translation, quat, direction, row, idx, acc_t, acc_q)
+        if status != STATUS_OK:
+            return status
+        _write_pose_output(row, idx, acc_t, acc_q, out_t, out_q)
     return STATUS_OK
 
 
