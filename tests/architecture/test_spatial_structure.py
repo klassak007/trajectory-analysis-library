@@ -2336,18 +2336,32 @@ def test_spatial_arch_180_rotation_mean_numba_decision_is_owner_routed() -> None
 def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> None:
     """ID: SPATIAL_ARCH_160_local_stencil_numba_backends_are_owner_routed."""
     backend_text = Path("tal/spatial/kernels/kinematics_smoothing_backends.py").read_text(encoding="utf-8")
+    local_poly_text = Path("tal/spatial/kernels/kinematics_local_poly_backends.py").read_text(encoding="utf-8")
     numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
     smoothing_ops = Path("tal/spatial/ops/kinematics_smoothing_ops.py").read_text(encoding="utf-8")
+    temporal_ops = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_kinematics_local_poly_numba_backends.py").read_text(encoding="utf-8")
     assert 'KINEMATICS_SMOOTHING_BACKEND_NUMBA = "numba"' in backend_text
     assert "def moving_average_smoothing_block_backend(" in backend_text
     assert "def gaussian_smoothing_block_backend(" in backend_text
     assert "from .kinematics_smoothing_numba_backends import moving_average_smoothing_block_numba" in backend_text
     assert "from .kinematics_smoothing_numba_backends import gaussian_smoothing_block_numba" in backend_text
+    assert 'KINEMATICS_LOCAL_POLY_BACKEND_NUMBA = "numba"' in local_poly_text
+    assert "def local_poly_smoothing_block_backend(" in local_poly_text
+    assert "def local_poly_derivative_block_backend(" in local_poly_text
+    assert "numba local-poly backend is not retained" in local_poly_text
+    assert "kinematics_local_poly_numba_backends" not in local_poly_text
+    assert "local-poly retention gate" in bench_text
+    assert "retain numba backend:                     False" in bench_text
     assert "prepare_block_rows(" in numba_text
     assert "njit_kernel(" in numba_text
     assert "require_numba(owner)" in numba_text
     assert "KINEMATICS_SMOOTHING_BACKEND_NUMBA" not in smoothing_ops
     assert "kinematics_smoothing_backends" not in smoothing_ops
+    assert "KINEMATICS_LOCAL_POLY_BACKEND_NUMBA" not in smoothing_ops
+    assert "kinematics_local_poly_backends" not in smoothing_ops
+    assert "KINEMATICS_LOCAL_POLY_BACKEND_NUMBA" not in temporal_ops
+    assert "kinematics_local_poly_backends" not in temporal_ops
 
 
 def test_spatial_arch_161_local_stencil_helpers_are_schema_free_if_added() -> None:
@@ -2378,11 +2392,15 @@ def test_spatial_arch_161_local_stencil_helpers_are_schema_free_if_added() -> No
 
 def test_spatial_arch_162_stencil_backends_do_not_reuse_scan_as_generic_executor() -> None:
     """ID: SPATIAL_ARCH_162_stencil_backends_do_not_reuse_scan_as_generic_executor."""
-    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
-    assert "prepare_scan_rows" not in numba_text
-    assert "ScanAxisSpec" not in numba_text
-    assert "ScanInputSpec" not in numba_text
-    assert "numba_scan" not in numba_text
+    texts = [
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8"),
+        Path("tal/spatial/kernels/kinematics_local_poly_backends.py").read_text(encoding="utf-8"),
+    ]
+    for text in texts:
+        assert "prepare_scan_rows" not in text
+        assert "ScanAxisSpec" not in text
+        assert "ScanInputSpec" not in text
+        assert "numba_scan" not in text
 
 
 def test_spatial_arch_170_ordered_topology_scan_axes_are_owner_declared() -> None:

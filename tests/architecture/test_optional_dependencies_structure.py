@@ -229,6 +229,7 @@ def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
         Path("benchmarks/bench_spatial_slerp_numba_backends.py"),
         Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py"),
         Path("benchmarks/bench_spatial_kinematics_stencil_numba_backends.py"),
+        Path("benchmarks/bench_spatial_kinematics_local_poly_numba_backends.py"),
         Path("benchmarks/bench_spatial_topology_scan_numba_backends.py"),
         Path("benchmarks/bench_spatial_fixed_size_numba_backends.py"),
         Path("benchmarks/bench_spatial_rotation_mean_numba_backends.py"),

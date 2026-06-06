@@ -22,6 +22,12 @@ from tal.spatial.kernels.kinematics_smoothing_backends import (
     gaussian_smoothing_block_backend,
     moving_average_smoothing_block_backend,
 )
+from tal.spatial.kernels.kinematics_local_poly_backends import (
+    KINEMATICS_LOCAL_POLY_BACKEND_NUMBA,
+    KINEMATICS_LOCAL_POLY_BACKEND_NUMPY,
+    local_poly_derivative_block_backend,
+    local_poly_smoothing_block_backend,
+)
 from tal.spatial.kernels.kinematics_temporal_backends import (
     KINEMATICS_TEMPORAL_BACKEND_NUMBA,
     KINEMATICS_TEMPORAL_BACKEND_NUMPY,
@@ -595,16 +601,69 @@ def test_spatial_numba_018_simpson_validation_fail_closed_if_retained() -> None:
 
 def test_spatial_numba_020_local_poly_backend_decision_is_explicit() -> None:
     """ID: SPATIAL_NUMBA_020_local_poly_backend_decision_is_explicit."""
-    import tal.spatial.kernels.kinematics_smoothing_backends as smoothing_backends
+    import tal.spatial.kernels.kinematics_local_poly_backends as local_poly_backends
 
-    assert not hasattr(smoothing_backends, "local_poly_smoothing_block_backend")
-    assert not hasattr(smoothing_backends, "local_poly_derivative_block_backend")
-    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    assert hasattr(local_poly_backends, "local_poly_smoothing_block_backend")
+    assert hasattr(local_poly_backends, "local_poly_derivative_block_backend")
+    assert not Path("tal/spatial/kernels/kinematics_local_poly_numba_backends.py").exists()
+    backend_text = Path("tal/spatial/kernels/kinematics_local_poly_backends.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_kinematics_local_poly_numba_backends.py").read_text(encoding="utf-8")
+    contract_text = Path("contracts/118-spatial-local-stencil-window-numba-backends-slice-f2e2.md").read_text(
+        encoding="utf-8"
+    )
     ops_text = Path("tal/spatial/ops/kinematics_smoothing_ops.py").read_text(encoding="utf-8")
     temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
-    assert "local_poly" not in numba_text
+    assert "numba local-poly backend is not retained" in backend_text
+    assert "local-poly retention gate" in bench_text
+    assert "retain numba backend:                     False" in bench_text
+    assert "Local-polynomial Numba is not retained" in contract_text
     assert "local_poly_smooth_kernel" in ops_text
     assert "local_poly_first_derivative_kernel" in temporal_text
+    assert "kinematics_local_poly_backends" not in ops_text
+    assert "kinematics_local_poly_backends" not in temporal_text
+
+    values = np.arange(10.0, dtype=np.float64).reshape(1, 5, 2)
+    param = np.asarray([[0.0, 1.0, 2.0, 3.0, 4.0]], dtype=np.float64)
+    valid = np.ones((1, 5), dtype=bool)
+    smoothed = local_poly_smoothing_block_backend(
+        values,
+        param,
+        valid,
+        window=5,
+        poly_order=2,
+        backend=KINEMATICS_LOCAL_POLY_BACKEND_NUMPY,
+    )
+    derived = local_poly_derivative_block_backend(
+        values,
+        param,
+        valid,
+        window=5,
+        poly_order=2,
+        backend=KINEMATICS_LOCAL_POLY_BACKEND_NUMPY,
+    )
+    assert smoothed.shape == values.shape
+    assert derived.shape == values.shape
+    with pytest.raises(
+        ValueError,
+        match=r"spatial\.kinematics\.temporal\.local_poly_backend: numba local-poly backend is not retained",
+    ):
+        local_poly_smoothing_block_backend(
+            values,
+            param,
+            valid,
+            window=5,
+            poly_order=2,
+            backend=KINEMATICS_LOCAL_POLY_BACKEND_NUMBA,
+        )
+    with pytest.raises(ValueError, match=r"local_poly_backend: poly_order must be a positive integer"):
+        local_poly_derivative_block_backend(
+            values,
+            param,
+            valid,
+            window=5,
+            poly_order=0,
+            backend=KINEMATICS_LOCAL_POLY_BACKEND_NUMPY,
+        )
 
 
 def test_spatial_numba_030_quat_compose_backend_parity() -> None:
