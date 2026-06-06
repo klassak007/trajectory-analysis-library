@@ -47,6 +47,14 @@ _NUMBA_CLEANED_NESTING_FUNCTIONS = (
     ("tal/spatial/kernels/topology_scan_numba_backends.py", "_compose_next_pose"),
     ("tal/spatial/kernels/topology_scan_numba_backends.py", "_write_pose_output"),
     ("tal/spatial/kernels/topology_scan_numba_backends.py", "_chain_pose_row_impl"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_param_at"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_value_at"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_subinterval_integral"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_forward_unequal_interval"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_reverse_unequal_interval"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_interval_integral"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_row_impl"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_block_impl"),
 )
 
 

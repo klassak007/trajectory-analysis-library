@@ -2274,16 +2274,41 @@ def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() ->
     temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
     assert 'KINEMATICS_TEMPORAL_BACKEND_NUMBA = "numba"' in backend_text
     assert "def cumulative_trapezoid_block_backend(" in backend_text
+    assert "def cumulative_simpson_block_backend(" in backend_text
     assert "from .kinematics_temporal_numba_backends import cumulative_trapezoid_block_numba" in backend_text
+    assert "from .kinematics_temporal_numba_backends import cumulative_simpson_block_numba" in backend_text
+    assert "_HELPERS_JITTED = False" in numba_text
+    assert "if _HELPERS_JITTED:" in numba_text
     assert "prepare_scan_rows(" in numba_text
     assert "ScanAxisSpec(" in numba_text
     assert "ScanInputSpec(" in numba_text
     assert "njit_kernel(" in numba_text
     assert "require_numba(owner)" in numba_text
+    assert "def _simpson_forward_unequal_interval(" in numba_text
+    assert "def _simpson_reverse_unequal_interval(" in numba_text
+    assert "def _simpson_subinterval_integral(" in numba_text
     assert "parallel=True" not in numba_text
     assert "fastmath=True" not in numba_text
     assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
     assert "kinematics_temporal_numba_backends" not in temporal_text
+
+
+def test_spatial_arch_155_simpson_scan_backend_decision_is_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_155_simpson_scan_backend_decision_is_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py").read_text(encoding="utf-8")
+    assert "cumulative_simpson_kernel(values, param, valid" in backend_text
+    assert "cumulative_simpson_block_numba(" in backend_text
+    assert "def cumulative_simpson_block_numba(" in numba_text
+    assert "_compiled_simpson_block()" in numba_text
+    assert "_simpson_interval_integral(" in numba_text
+    assert "simpson retention gate" in bench_text
+    assert "retain numba backend:" in bench_text
+    assert "cumulative_simpson_kernel" in temporal_text
+    assert "cumulative_simpson_block_backend" not in temporal_text
+    assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
 
 
 def test_spatial_arch_180_rotation_mean_numba_decision_is_owner_routed() -> None:

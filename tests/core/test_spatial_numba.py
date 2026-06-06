@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,7 @@ from tal.spatial.kernels.kinematics_smoothing_backends import (
 from tal.spatial.kernels.kinematics_temporal_backends import (
     KINEMATICS_TEMPORAL_BACKEND_NUMBA,
     KINEMATICS_TEMPORAL_BACKEND_NUMPY,
+    cumulative_simpson_block_backend,
     cumulative_trapezoid_block_backend,
 )
 from tal.spatial.kernels.fixed_size_backends import (
@@ -448,9 +450,147 @@ def test_spatial_numba_015_trapezoid_scan_cold_warm_benchmark_recorded() -> None
     text = Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py").read_text(encoding="utf-8")
     assert "from _numba_bench import break_even_calls, cold_subprocess, time_once, warm_median" in text
     assert 'return ("many-short", "fewer-long", "high-core")' in text
+    assert 'return ("simpson-many-short", "simpson-fewer-long", "simpson-high-core")' in text
     assert "--cold-case" in text
     assert "trapezoid numba first-call fresh process" in text
     assert "trapezoid numba warm median" in text
+
+
+def test_spatial_numba_016_simpson_scan_backend_decision_is_explicit() -> None:
+    """ID: SPATIAL_NUMBA_016_simpson_scan_backend_decision_is_explicit."""
+    import tal.spatial.kernels.kinematics_temporal_numba_backends as numba_backends
+
+    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    assert "def cumulative_simpson_block_backend(" in backend_text
+    assert "from .kinematics_temporal_numba_backends import cumulative_simpson_block_numba" in backend_text
+    assert hasattr(numba_backends, "cumulative_simpson_block_numba")
+    assert "simpson retention gate" in bench_text
+    assert "retain numba backend:" in bench_text
+    assert "simpson numba first-call fresh process" in bench_text
+    assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
+    assert "cumulative_simpson_block_backend" not in temporal_text
+
+    out = cumulative_simpson_block_backend(
+        np.ones((1, 3, 1), dtype=np.float64),
+        np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+        np.asarray([[True, True, True]], dtype=bool),
+        initial_value=1.0,
+        backend=KINEMATICS_TEMPORAL_BACKEND_NUMPY,
+    )
+    assert out.shape == (1, 3, 1)
+
+
+def test_spatial_numba_017_simpson_backend_parity_if_retained() -> None:
+    """ID: SPATIAL_NUMBA_017_simpson_backend_parity_if_retained."""
+    _require_numba()
+    from tal.spatial.kernels.kinematics_temporal_numba_backends import _compiled_simpson_block
+
+    param = np.asarray(
+        [
+            [[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], [0.0, 0.5, 2.0, 3.0, 5.0, 8.0]],
+            [[0.0, 1.5, 2.5, 4.0, 6.0, 9.0], [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]],
+        ],
+        dtype=np.float64,
+    )
+    valid = np.asarray(
+        [
+            [[True, True, True, True, True, True], [True, True, True, True, True, False]],
+            [[True, True, True, True, False, False], [True, True, True, True, True, True]],
+        ],
+        dtype=bool,
+    )
+    values = np.empty(param.shape + (3,), dtype=np.float64)
+    values[..., 0] = param + 1.0
+    values[..., 1] = np.sin(param)
+    values[..., 2] = param * param
+    values[0, 1, 5, :] = 1000.0
+    values[1, 1, 1, 0] = np.nan
+    values[1, 1, 2, 1] = np.inf
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        expected = cumulative_simpson_block_backend(
+            values,
+            param,
+            valid,
+            initial_value=2.5,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMPY,
+        )
+        actual = cumulative_simpson_block_backend(
+            values,
+            param,
+            valid,
+            initial_value=2.5,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
+    np.testing.assert_allclose(actual, expected, equal_nan=True, rtol=1e-10, atol=1e-10)
+    assert actual.shape == values.shape
+    assert _compiled_simpson_block().nopython_signatures
+
+
+def test_spatial_numba_018_simpson_validation_fail_closed_if_retained() -> None:
+    """ID: SPATIAL_NUMBA_018_simpson_validation_fail_closed_if_retained."""
+    _require_numba()
+    values = np.ones((1, 4, 2), dtype=np.float64)
+    param = np.asarray([[0.0, 1.0, 2.0, 3.0]], dtype=np.float64)
+    owner = r"spatial\.kinematics\.temporal\.integral_backend"
+    with pytest.raises(ValueError, match=owner + r": valid mask must be left-packed"):
+        cumulative_simpson_block_backend(
+            values,
+            param,
+            np.asarray([[True, False, True, False]], dtype=bool),
+            initial_value=0.0,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
+    for valid in (
+        np.asarray([[True, True, False, False]], dtype=bool),
+        np.asarray([[False, False, False, False]], dtype=bool),
+    ):
+        with pytest.raises(ValueError, match=owner + r": temporal operation requires at least 3 valid samples"):
+            cumulative_simpson_block_backend(
+                values,
+                param,
+                valid,
+                initial_value=0.0,
+                backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+            )
+    for bad_param in (
+        np.asarray([[0.0, 1.0, 0.5, 3.0]], dtype=np.float64),
+        np.asarray([[0.0, 1.0, np.nan, 3.0]], dtype=np.float64),
+    ):
+        with pytest.raises(ValueError, match=owner + r": param domain must be finite"):
+            cumulative_simpson_block_backend(
+                values,
+                bad_param,
+                np.asarray([[True, True, True, False]], dtype=bool),
+                initial_value=0.0,
+                backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+            )
+    with pytest.raises(ValueError, match=owner + r": param/valid shapes must match"):
+        cumulative_simpson_block_backend(
+            values,
+            param,
+            np.ones((4,), dtype=bool),
+            initial_value=0.0,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
+    with pytest.raises(ValueError, match=owner + r": values non-core shape must match"):
+        cumulative_simpson_block_backend(
+            np.ones((2, 4, 2), dtype=np.float64),
+            param,
+            np.ones((1, 4), dtype=bool),
+            initial_value=0.0,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
+    with pytest.raises(ValueError, match=owner + r": values must include"):
+        cumulative_simpson_block_backend(
+            np.ones((4,), dtype=np.float64),
+            param,
+            np.ones((1, 4), dtype=bool),
+            initial_value=0.0,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
 
 
 def test_spatial_numba_020_local_poly_backend_decision_is_explicit() -> None:
@@ -831,6 +971,14 @@ def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: 
         backend=KINEMATICS_TEMPORAL_BACKEND_NUMPY,
     )
     assert integrated.shape == (1, 2, 1)
+    simpson = cumulative_simpson_block_backend(
+        np.ones((1, 3, 1), dtype=np.float64),
+        np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+        np.asarray([[True, True, True]], dtype=bool),
+        initial_value=0.0,
+        backend=KINEMATICS_TEMPORAL_BACKEND_NUMPY,
+    )
+    assert simpson.shape == (1, 3, 1)
     smoothed = moving_average_smoothing_block_backend(
         np.ones((1, 3, 1), dtype=np.float64),
         np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
@@ -893,6 +1041,14 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
             np.ones((1, 2, 1), dtype=np.float64),
             np.asarray([[0.0, 1.0]], dtype=np.float64),
             np.asarray([[True, True]], dtype=bool),
+            initial_value=0.0,
+            backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
+        )
+    with pytest.raises(ImportError, match=r"spatial\.kinematics\.temporal\.integral_backend: numba is required"):
+        cumulative_simpson_block_backend(
+            np.ones((1, 3, 1), dtype=np.float64),
+            np.asarray([[0.0, 1.0, 2.0]], dtype=np.float64),
+            np.asarray([[True, True, True]], dtype=bool),
             initial_value=0.0,
             backend=KINEMATICS_TEMPORAL_BACKEND_NUMBA,
         )
