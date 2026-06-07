@@ -521,12 +521,17 @@ def test_event_arch_046_bounded_event_stopgaps_route_through_backend_owner() -> 
     boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
     intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
     backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
-    assert "from .backends import EVENT_BOUNDARY_BACKEND_NUMPY_ROW, boundary_bounded_row_backend" in boundary
-    assert "boundary_bounded_row_backend" in boundary
-    assert "from .backends import EVENT_INTERVALS_BACKEND_NUMPY_ROW, intervals_bounded_row_backend" in intervals
-    assert "intervals_bounded_row_backend" in intervals
-    assert "def boundary_bounded_row_backend(" in backends
-    assert "def intervals_bounded_row_backend(" in backends
+    block_prep = Path("tal/core/event_ops/block_prep.py").read_text(encoding="utf-8")
+    assert "boundary_bounded_block_backend" in boundary
+    assert "intervals_bounded_block_backend" in intervals
+    assert "EVENT_BOUNDARY_BACKEND_NUMPY_BLOCK" in backends
+    assert "EVENT_INTERVALS_BACKEND_NUMPY_BLOCK" in backends
+    assert "def boundary_bounded_block_backend(" in backends
+    assert "def intervals_bounded_block_backend(" in backends
+    assert "prepare_boundary_block_rows(" in block_prep
+    assert "prepare_intervals_block_rows(" in block_prep
+    assert "boundary_bounded_row_backend" not in backends
+    assert "intervals_bounded_row_backend" not in backends
 
 
 def test_event_arch_047_boundary_bounded_numba_backend_owner_routed() -> None:
@@ -547,11 +552,10 @@ def test_event_arch_048_intervals_bounded_numba_backend_owner_routed() -> None:
 
 def test_event_arch_049_bounded_event_numba_paths_are_blockwise_vectorize_false() -> None:
     """ID: EVENT_ARCH_049_bounded_event_numba_paths_are_blockwise_vectorize_false."""
-    boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
-    intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
     numba_backends = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
-    assert "boundary_bounded_block_backend" not in boundary
-    assert "intervals_bounded_block_backend" not in intervals
+    assert "prepare_boundary_block_rows" in numba_backends
+    assert "prepare_intervals_block_rows" in numba_backends
+    assert "xr.apply_ufunc" not in numba_backends
     assert "vectorize=True" not in numba_backends
 
 
@@ -559,10 +563,13 @@ def test_event_arch_050_baseline_event_stopgaps_remain_explicit_until_f2c() -> N
     """ID: EVENT_ARCH_050_baseline_event_stopgaps_remain_explicit_until_f2c."""
     boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
     intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
-    assert '"backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW' in boundary
-    assert '"backend": EVENT_INTERVALS_BACKEND_NUMPY_ROW' in intervals
-    assert "EVENT_BOUNDARY_BACKEND_NUMBA" not in boundary
-    assert "EVENT_INTERVALS_BACKEND_NUMBA" not in intervals
+    contract = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    assert "Decision: migrated" in contract.split("### event_boundary", 1)[1].split("\n### ", 1)[0]
+    assert "Decision: migrated" in contract.split("### event_intervals", 1)[1].split("\n### ", 1)[0]
+    assert "EVENT_BOUNDARY_BACKEND_NUMPY_ROW" not in boundary
+    assert "EVENT_INTERVALS_BACKEND_NUMPY_ROW" not in intervals
+    assert "boundary_bounded_row_backend" not in boundary
+    assert "intervals_bounded_row_backend" not in intervals
 
 
 def test_event_arch_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed() -> None:
@@ -574,17 +581,37 @@ def test_event_arch_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed
     boundary_section = boundary.split("def _extract_bounded(", 1)[1]
     intervals_section = intervals.split("def _extract_bounded(", 1)[1]
     assert "Status: Draft" in contract_083
-    assert "event/linalg closeout open" in contract_083
+    assert "param/event targets closed; linalg remains open" in contract_083
     assert "### event_boundary" in contract_114
     assert "### event_intervals" in contract_114
-    assert "Decision: promote" in contract_114.split("### event_boundary", 1)[1].split("\n### ", 1)[0]
-    assert "Decision: promote" in contract_114.split("### event_intervals", 1)[1].split("\n### ", 1)[0]
-    assert '"backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW' in boundary_section
-    assert '"backend": EVENT_INTERVALS_BACKEND_NUMPY_ROW' in intervals_section
-    assert "vectorize=True" in boundary_section
-    assert "vectorize=True" in intervals_section
-    assert "EVENT_BOUNDARY_BACKEND_NUMBA" not in boundary
-    assert "EVENT_INTERVALS_BACKEND_NUMBA" not in intervals
+    assert "Decision: migrated" in contract_114.split("### event_boundary", 1)[1].split("\n### ", 1)[0]
+    assert "Decision: migrated" in contract_114.split("### event_intervals", 1)[1].split("\n### ", 1)[0]
+    assert '"backend": _select_boundary_normal_backend()' in boundary_section
+    assert '"backend": _select_intervals_normal_backend()' in intervals_section
+    assert "vectorize=False" in boundary_section
+    assert "vectorize=False" in intervals_section
+    assert "vectorize=True" not in boundary_section
+    assert "vectorize=True" not in intervals_section
+    assert "boundary_bounded_row_backend" not in boundary
+    assert "intervals_bounded_row_backend" not in intervals
+
+
+def test_event_arch_053_boundary_normal_path_vectorize_true_removed() -> None:
+    """ID: EVENT_ARCH_053_boundary_normal_path_vectorize_true_removed."""
+    text = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    section = text.split("def _extract_bounded(", 1)[1]
+    assert "boundary_bounded_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+
+
+def test_event_arch_054_intervals_normal_path_vectorize_true_removed() -> None:
+    """ID: EVENT_ARCH_054_intervals_normal_path_vectorize_true_removed."""
+    text = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    section = text.split("def _extract_bounded(", 1)[1]
+    assert "intervals_bounded_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
 
 
 def test_event_arch_052_bounded_event_numba_helper_parameter_budget() -> None:

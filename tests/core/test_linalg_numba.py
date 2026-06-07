@@ -102,7 +102,8 @@ def test_linalg_f2c_001_lstsq_default_or_baseline_migration_decision() -> None:
     assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
     contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
     assert "Status: Draft" in contract_083
-    assert "event/linalg closeout open" in contract_083
+    assert "linalg closeout open" in contract_083
+    assert "param/event targets closed; linalg remains open" in contract_083
 
 
 def test_linalg_numba_001_lstsq_backend_decision_is_explicit() -> None:

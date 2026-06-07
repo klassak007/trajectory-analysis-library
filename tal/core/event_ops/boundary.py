@@ -5,7 +5,11 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
-from .backends import EVENT_BOUNDARY_BACKEND_NUMPY_ROW, boundary_bounded_row_backend
+from .backends import (
+    EVENT_BOUNDARY_BACKEND_NUMBA,
+    EVENT_BOUNDARY_BACKEND_NUMPY_BLOCK,
+    boundary_bounded_block_backend,
+)
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from .event_primitives import (
     EDGE_ENTER,
@@ -18,6 +22,7 @@ from .event_primitives import (
 )
 from .resolve import EventEvalContext
 from .types import CompareNode, Condition, EventExtractOptions
+from tal.utils.numba_support import _numba_available
 
 _INTERNAL_EVENT_DIM = "__tal_event__"
 
@@ -271,6 +276,12 @@ def _extract_dynamic(
     )
 
 
+def _select_boundary_normal_backend() -> str:
+    if _numba_available():
+        return EVENT_BOUNDARY_BACKEND_NUMBA
+    return EVENT_BOUNDARY_BACKEND_NUMPY_BLOCK
+
+
 def _extract_bounded(
     *,
     effective_mask: xr.DataArray,
@@ -290,7 +301,7 @@ def _extract_bounded(
         "dedupe_atol": float(opts.dedupe_atol),
         "max_events": max_events,
         "owner": owner,
-        "backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW,
+        "backend": _select_boundary_normal_backend(),
     }
     ufunc_kwargs: dict[str, object] = {}
     if chunked:
@@ -299,14 +310,14 @@ def _extract_bounded(
             "allow_rechunk": True,
         }
     time, edge, before, after = xr.apply_ufunc(
-        boundary_bounded_row_backend,
+        boundary_bounded_block_backend,
         effective_mask.astype(bool),
         context.valid_mask.astype(bool),
         context.clock.astype("float64"),
         input_core_dims=[[context.runtime.sequence_dim]] * 3,
         output_core_dims=[[_INTERNAL_EVENT_DIM]] * 4,
         kwargs=kwargs,
-        vectorize=True,
+        vectorize=False,
         dask=dask_mode,
         output_dtypes=[np.float64, np.int8, np.int64, np.int64],
         **ufunc_kwargs,

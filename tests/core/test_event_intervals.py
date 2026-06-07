@@ -196,13 +196,14 @@ def test_event_hard_023_intervals_bounded_stopgap_backend_interface_lock(
 ) -> None:
     """ID: EVENT_HARD_023_intervals_bounded_stopgap_backend_interface_lock."""
     calls = {"n": 0}
-    original = intervals_mod.intervals_bounded_row_backend
+    original = intervals_mod.intervals_bounded_block_backend
 
     def _count(*args: object, **kwargs: object):
         calls["n"] += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(intervals_mod, "intervals_bounded_row_backend", _count)
+    monkeypatch.setattr(intervals_mod, "_numba_available", lambda: False)
+    monkeypatch.setattr(intervals_mod, "intervals_bounded_block_backend", _count)
     ao = _ao_series(values=[0.0, 1.0, 0.0], time=[0.0, 1.0, 2.0])
     _ = ao.events.intervals(
         Condition.compare(Condition.var("value"), "gt", 0.5),

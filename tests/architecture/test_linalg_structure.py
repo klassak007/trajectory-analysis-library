@@ -990,7 +990,8 @@ def test_linalg_arch_070_lstsq_normal_path_status_is_explicit() -> None:
     lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
     decision = contract_114.split("### linalg_lstsq", 1)[1].split("\n## ", 1)[0]
     assert "Status: Draft" in contract_083
-    assert "event/linalg closeout open" in contract_083
+    assert "linalg closeout open" in contract_083
+    assert "param/event targets closed; linalg remains open" in contract_083
     assert "Decision: promote" in decision
     assert "Gate result: PASS" in decision
     assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
