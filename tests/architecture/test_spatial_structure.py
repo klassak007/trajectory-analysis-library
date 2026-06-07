@@ -2333,6 +2333,36 @@ def test_spatial_arch_180_rotation_mean_numba_decision_is_owner_routed() -> None
     assert "many-row >=20% warm win" in bench_text
 
 
+def test_spatial_arch_181_higher_order_interp_numba_decision_is_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_181_higher_order_interp_numba_decision_is_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/higher_order_interp_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/higher_order_interp_numba_backends.py").read_text(encoding="utf-8")
+    primitive_text = Path("tal/spatial/kernels/higher_order_interp_primitives.py").read_text(encoding="utf-8")
+    rotation_ops = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
+    pose_ops = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_higher_order_interp_numba_backends.py").read_text(encoding="utf-8")
+    assert 'ROTATION_HIGHER_ORDER_BACKEND_NUMBA = "numba"' in backend_text
+    assert 'POSE_HIGHER_ORDER_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def squad_quat_block_backend(" in backend_text
+    assert "def pose_cubic_squad_block_backend(" in backend_text
+    assert "from .higher_order_interp_numba_backends import squad_quat_block_numba" in backend_text
+    assert "from .higher_order_interp_numba_backends import pose_cubic_squad_block_numba" in backend_text
+    assert "prepare_squad_rows(" in numba_text
+    assert "prepare_pose_cubic_rows(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "tal_v2" not in numba_text
+    assert "squad_quat(" in primitive_text
+    assert "catmull_rom_vec3(" in primitive_text
+    assert "se3" not in primitive_text.lower()
+    assert "higher_order_interp_backends" not in rotation_ops
+    assert "higher_order_interp_backends" not in pose_ops
+    assert "higher-order quaternion retention gate" in bench_text
+    assert "higher-order pose retention gate" in bench_text
+
+
 def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> None:
     """ID: SPATIAL_ARCH_160_local_stencil_numba_backends_are_owner_routed."""
     backend_text = Path("tal/spatial/kernels/kinematics_smoothing_backends.py").read_text(encoding="utf-8")

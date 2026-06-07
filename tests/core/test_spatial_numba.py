@@ -16,6 +16,16 @@ from tal.spatial.kernels.rotation_mean_backends import (
     ROTATION_MEAN_BACKEND_NUMPY,
     quat_mean_block_backend,
 )
+from tal.spatial.kernels.higher_order_interp_backends import (
+    POSE_HIGHER_ORDER_BACKEND_NUMBA,
+    POSE_HIGHER_ORDER_BACKEND_NUMPY,
+    ROTATION_HIGHER_ORDER_BACKEND_NUMBA,
+    ROTATION_HIGHER_ORDER_BACKEND_NUMPY,
+    PoseInterpWindow,
+    QuatInterpWindow,
+    pose_cubic_squad_block_backend,
+    squad_quat_block_backend,
+)
 from tal.spatial.kernels.kinematics_smoothing_backends import (
     KINEMATICS_SMOOTHING_BACKEND_NUMBA,
     KINEMATICS_SMOOTHING_BACKEND_NUMPY,
@@ -147,6 +157,51 @@ def _topology_chain_inputs() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
     valid = np.asarray([[True, True, True, False, False], [True, True, True, True, True]], dtype=bool)
     direction = np.asarray([[1, -1, 1, 99, 99], [1, 1, -1, 1, -1]], dtype=np.int64)
     return translation, quat, valid, direction
+
+
+def _higher_order_windows() -> tuple[QuatInterpWindow, PoseInterpWindow, np.ndarray, np.ndarray]:
+    q_prev = np.asarray(
+        [
+            [_z_quat(-20.0), _z_quat(0.0), _z_quat(30.0), np.zeros(4)],
+            [_x_quat(10.0), _x_quat(20.0), -_x_quat(30.0), _x_quat(40.0)],
+        ],
+        dtype=np.float64,
+    )
+    q0 = np.asarray(
+        [
+            [_z_quat(0.0), _z_quat(20.0), _z_quat(50.0), np.zeros(4)],
+            [_x_quat(20.0), _x_quat(30.0), -_x_quat(40.0), _x_quat(50.0)],
+        ],
+        dtype=np.float64,
+    )
+    q1 = np.asarray(
+        [
+            [_z_quat(20.0), _z_quat(40.0), _z_quat(70.0), np.zeros(4)],
+            [_x_quat(30.0), _x_quat(40.0), -_x_quat(50.0), _x_quat(60.0)],
+        ],
+        dtype=np.float64,
+    )
+    q_next = np.asarray(
+        [
+            [_z_quat(40.0), _z_quat(60.0), _z_quat(90.0), np.zeros(4)],
+            [_x_quat(40.0), _x_quat(50.0), -_x_quat(60.0), _x_quat(70.0)],
+        ],
+        dtype=np.float64,
+    )
+    base = np.arange(24.0, dtype=np.float64).reshape(2, 4, 3) / 10.0
+    pose_window = PoseInterpWindow(
+        base - 0.5,
+        base,
+        base + 0.5,
+        base + 1.0,
+        q_prev,
+        q0,
+        q1,
+        q_next,
+    )
+    alpha = np.asarray([[0.0, 0.25, 1.0, np.inf], [0.5, 0.75, 0.1, 0.4]], dtype=np.float64)
+    valid = np.asarray([[True, True, True, False], [True, True, True, True]], dtype=bool)
+    return QuatInterpWindow(q_prev, q0, q1, q_next), pose_window, alpha, valid
 
 
 def test_spatial_numba_001_slerp_backend_parity() -> None:
@@ -871,6 +926,128 @@ def test_spatial_numba_041_rotation_mean_backend_parity_if_implemented() -> None
         quat_mean_block_backend(values, np.ones((2, 3)), backend=ROTATION_MEAN_BACKEND_NUMBA)
 
 
+def test_spatial_numba_060_quaternion_higher_order_interp_backend_decision_is_explicit() -> None:
+    """ID: SPATIAL_NUMBA_060_quaternion_higher_order_interp_backend_decision_is_explicit."""
+    quat_window, _, alpha, valid = _higher_order_windows()
+    out = squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMPY)
+    assert out.shape == alpha.shape + (4,)
+    assert out.dtype == np.float64
+    assert np.isnan(out[0, 3]).all()
+    _assert_quat_equivalent(out[valid], out[valid], atol=1e-12)
+
+    invalid_window = QuatInterpWindow(quat_window.q_prev[:1], quat_window.q0, quat_window.q1, quat_window.q_next)
+    with pytest.raises(ValueError, match=r"spatial\.rotation\.higher_order_interp_backend: quaternion window shapes"):
+        squad_quat_block_backend(invalid_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMPY)
+    bad_tail = QuatInterpWindow(np.zeros((1, 2, 3)), np.zeros((1, 2, 3)), np.zeros((1, 2, 3)), np.zeros((1, 2, 3)))
+    with pytest.raises(ValueError, match=r"spatial\.rotation\.higher_order_interp_backend: q_prev must have trailing"):
+        squad_quat_block_backend(bad_tail, np.zeros((1, 2)), np.ones((1, 2), dtype=bool))
+    bad_alpha = alpha.copy()
+    bad_alpha[0, 0] = 1.5
+    with pytest.raises(ValueError, match=r"spatial\.rotation\.higher_order_interp_backend: finite alpha values"):
+        squad_quat_block_backend(quat_window, bad_alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMPY)
+    bad_quat = np.asarray(quat_window.q_prev).copy()
+    bad_quat[0, 0, :] = 0.0
+    with pytest.raises(ValueError, match=r"spatial\.rotation\.higher_order_interp_backend: quaternion norm"):
+        squad_quat_block_backend(
+            QuatInterpWindow(bad_quat, quat_window.q0, quat_window.q1, quat_window.q_next),
+            alpha,
+            valid,
+        )
+    bench_text = Path("benchmarks/bench_spatial_higher_order_interp_numba_backends.py").read_text(encoding="utf-8")
+    rotation_ops = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
+    assert "higher-order quaternion retention gate" in bench_text
+    assert "retain numba backend:" in bench_text
+    assert "higher_order_interp_backends" not in rotation_ops
+    assert "squad" not in rotation_ops.lower()
+
+
+def test_spatial_numba_061_pose_higher_order_interp_backend_decision_is_explicit() -> None:
+    """ID: SPATIAL_NUMBA_061_pose_higher_order_interp_backend_decision_is_explicit."""
+    _, pose_window, alpha, valid = _higher_order_windows()
+    out_t, out_q = pose_cubic_squad_block_backend(pose_window, alpha, valid, backend=POSE_HIGHER_ORDER_BACKEND_NUMPY)
+    assert out_t.shape == alpha.shape + (3,)
+    assert out_q.shape == alpha.shape + (4,)
+    assert np.isnan(out_t[0, 3]).all()
+    assert np.isnan(out_q[0, 3]).all()
+    a = float(alpha[1, 0])
+    p0 = pose_window.t_prev[1, 0]
+    p1 = pose_window.t0[1, 0]
+    p2 = pose_window.t1[1, 0]
+    p3 = pose_window.t_next[1, 0]
+    expected_t = 0.5 * (
+        (2.0 * p1)
+        + (-p0 + p2) * a
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * a * a
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * a * a * a
+    )
+    np.testing.assert_allclose(out_t[1, 0], expected_t, rtol=1e-12, atol=1e-12)
+
+    invalid_window = PoseInterpWindow(
+        pose_window.t_prev[:1],
+        pose_window.t0,
+        pose_window.t1,
+        pose_window.t_next,
+        pose_window.q_prev,
+        pose_window.q0,
+        pose_window.q1,
+        pose_window.q_next,
+    )
+    with pytest.raises(ValueError, match=r"spatial\.pose\.higher_order_interp_backend: translation window shapes"):
+        pose_cubic_squad_block_backend(invalid_window, alpha, valid, backend=POSE_HIGHER_ORDER_BACKEND_NUMPY)
+    bad_alpha = alpha.copy()
+    bad_alpha[0, 1] = np.nan
+    with pytest.raises(ValueError, match=r"spatial\.pose\.higher_order_interp_backend: finite alpha values"):
+        pose_cubic_squad_block_backend(pose_window, bad_alpha, valid, backend=POSE_HIGHER_ORDER_BACKEND_NUMPY)
+    pose_ops = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
+    assert "higher_order_interp_backends" not in pose_ops
+
+
+def test_spatial_numba_062_quaternion_squad_backend_parity_if_retained() -> None:
+    """ID: SPATIAL_NUMBA_062_quaternion_squad_backend_parity_if_retained."""
+    _require_numba()
+    quat_window, _, alpha, valid = _higher_order_windows()
+    expected = squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMPY)
+    actual = squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMBA)
+    _assert_quat_equivalent(actual, expected, atol=1e-10)
+    from tal.spatial.kernels.higher_order_interp_numba_backends import squad_quat_block_numba
+
+    bad_quat = np.asarray(quat_window.q0).copy()
+    bad_quat[1, 0, :] = 0.0
+    with pytest.raises(ValueError, match=r"custom\.squad: quaternion norm must be finite and > 0"):
+        squad_quat_block_numba(
+            QuatInterpWindow(quat_window.q_prev, bad_quat, quat_window.q1, quat_window.q_next),
+            alpha,
+            valid,
+            owner="custom.squad",
+        )
+
+
+def test_spatial_numba_063_pose_cubic_squad_backend_parity_if_retained() -> None:
+    """ID: SPATIAL_NUMBA_063_pose_cubic_squad_backend_parity_if_retained."""
+    _require_numba()
+    _, pose_window, alpha, valid = _higher_order_windows()
+    expected_t, expected_q = pose_cubic_squad_block_backend(
+        pose_window,
+        alpha,
+        valid,
+        backend=POSE_HIGHER_ORDER_BACKEND_NUMPY,
+    )
+    actual_t, actual_q = pose_cubic_squad_block_backend(
+        pose_window,
+        alpha,
+        valid,
+        backend=POSE_HIGHER_ORDER_BACKEND_NUMBA,
+    )
+    np.testing.assert_allclose(actual_t, expected_t, equal_nan=True, rtol=1e-10, atol=1e-10)
+    _assert_quat_equivalent(actual_q, expected_q, atol=1e-10)
+    from tal.spatial.kernels.higher_order_interp_numba_backends import pose_cubic_squad_block_numba
+
+    bad_alpha = alpha.copy()
+    bad_alpha[1, 1] = -0.1
+    with pytest.raises(ValueError, match=r"custom\.pose: finite alpha values must be within"):
+        pose_cubic_squad_block_numba(pose_window, bad_alpha, valid, owner="custom.pose")
+
+
 def test_spatial_topo_numba_001_chain_pose_compose_backend_parity() -> None:
     """ID: SPATIAL_TOPO_NUMBA_001_chain_pose_compose_backend_parity."""
     _require_numba()
@@ -1075,6 +1252,12 @@ def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: 
         backend=ROTATION_MEAN_BACKEND_NUMPY,
     )
     assert mean.shape == (1, 4)
+    quat_window, pose_window, alpha, valid = _higher_order_windows()
+    squad = squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMPY)
+    pose_t, pose_q = pose_cubic_squad_block_backend(pose_window, alpha, valid, backend=POSE_HIGHER_ORDER_BACKEND_NUMPY)
+    assert squad.shape == alpha.shape + (4,)
+    assert pose_t.shape == alpha.shape + (3,)
+    assert pose_q.shape == alpha.shape + (4,)
 
 
 def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without_numba(
@@ -1147,3 +1330,8 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
             np.asarray([[1.0, 1.0]], dtype=np.float64),
             backend=ROTATION_MEAN_BACKEND_NUMBA,
         )
+    quat_window, pose_window, alpha, valid = _higher_order_windows()
+    with pytest.raises(ImportError, match=r"spatial\.rotation\.higher_order_interp_backend: numba is required"):
+        squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMBA)
+    with pytest.raises(ImportError, match=r"spatial\.pose\.higher_order_interp_backend: numba is required"):
+        pose_cubic_squad_block_backend(pose_window, alpha, valid, backend=POSE_HIGHER_ORDER_BACKEND_NUMBA)

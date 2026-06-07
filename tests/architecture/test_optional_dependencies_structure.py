@@ -27,6 +27,7 @@ _NUMBA_IMPL_PATHS = (
     Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
     Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
     Path("tal/spatial/kernels/rotation_mean_numba_backends.py"),
+    Path("tal/spatial/kernels/higher_order_interp_numba_backends.py"),
 )
 
 _NUMBA_CLEANED_NESTING_FUNCTIONS = (
@@ -55,6 +56,10 @@ _NUMBA_CLEANED_NESTING_FUNCTIONS = (
     ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_interval_integral"),
     ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_row_impl"),
     ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_block_impl"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_squad_sample"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_pose_sample"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_squad_block_impl"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_pose_block_impl"),
 )
 
 
@@ -233,6 +238,7 @@ def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
         Path("benchmarks/bench_spatial_topology_scan_numba_backends.py"),
         Path("benchmarks/bench_spatial_fixed_size_numba_backends.py"),
         Path("benchmarks/bench_spatial_rotation_mean_numba_backends.py"),
+        Path("benchmarks/bench_spatial_higher_order_interp_numba_backends.py"),
     ]:
         text = path.read_text(encoding="utf-8")
         assert "from _numba_bench import" in text
