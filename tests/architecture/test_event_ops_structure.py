@@ -565,6 +565,28 @@ def test_event_arch_050_baseline_event_stopgaps_remain_explicit_until_f2c() -> N
     assert "EVENT_INTERVALS_BACKEND_NUMBA" not in intervals
 
 
+def test_event_arch_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed() -> None:
+    """ID: EVENT_ARCH_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed."""
+    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
+    contract_114 = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    boundary_section = boundary.split("def _extract_bounded(", 1)[1]
+    intervals_section = intervals.split("def _extract_bounded(", 1)[1]
+    assert "Status: Draft" in contract_083
+    assert "event/linalg closeout open" in contract_083
+    assert "### event_boundary" in contract_114
+    assert "### event_intervals" in contract_114
+    assert "Decision: promote" in contract_114.split("### event_boundary", 1)[1].split("\n### ", 1)[0]
+    assert "Decision: promote" in contract_114.split("### event_intervals", 1)[1].split("\n### ", 1)[0]
+    assert '"backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW' in boundary_section
+    assert '"backend": EVENT_INTERVALS_BACKEND_NUMPY_ROW' in intervals_section
+    assert "vectorize=True" in boundary_section
+    assert "vectorize=True" in intervals_section
+    assert "EVENT_BOUNDARY_BACKEND_NUMBA" not in boundary
+    assert "EVENT_INTERVALS_BACKEND_NUMBA" not in intervals
+
+
 def test_event_arch_052_bounded_event_numba_helper_parameter_budget() -> None:
     """ID: EVENT_ARCH_052_bounded_event_numba_helper_parameter_budget."""
     module = ast.parse(Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8"))

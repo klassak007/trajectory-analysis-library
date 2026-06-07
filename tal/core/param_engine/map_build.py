@@ -6,12 +6,15 @@ import numpy as np
 import xarray as xr
 
 from .backends import (
-    PARAM_BOUNDS_BACKEND_NUMPY_ROW,
-    PARAM_MAP_BACKEND_NUMPY_ROW,
-    bounds_row_backend,
-    map_row_backend,
+    PARAM_BOUNDS_BACKEND_NUMBA,
+    PARAM_BOUNDS_BACKEND_NUMPY_BLOCK,
+    PARAM_MAP_BACKEND_NUMBA,
+    PARAM_MAP_BACKEND_NUMPY_BLOCK,
+    bounds_block_backend,
+    map_block_backend,
 )
 from .types import ParamBoundsMap, ParamMap, ParamMapOptions
+from tal.utils.numba_support import _numba_available
 
 _DUPLICATE_CODES = {"invalid": 0, "left": 1, "right": 2, "raise": 3}
 _DUPLICATE_BRACKET_ERROR = (
@@ -320,7 +323,19 @@ def _prepare_map_inputs(
     return opts, aligned[0], aligned[1], aligned[2]
 
 
-def _apply_param_map_numpy_row(
+def _select_map_normal_backend() -> str:
+    if _numba_available():
+        return PARAM_MAP_BACKEND_NUMBA
+    return PARAM_MAP_BACKEND_NUMPY_BLOCK
+
+
+def _select_bounds_normal_backend() -> str:
+    if _numba_available():
+        return PARAM_BOUNDS_BACKEND_NUMBA
+    return PARAM_BOUNDS_BACKEND_NUMPY_BLOCK
+
+
+def _apply_param_map_block(
     *,
     param_da: xr.DataArray,
     mask_da: xr.DataArray,
@@ -329,19 +344,20 @@ def _apply_param_map_numpy_row(
     query_dim: str,
     opts: ParamMapOptions,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    backend = _select_map_normal_backend()
     return xr.apply_ufunc(
-        map_row_backend,
+        map_block_backend,
         param_da,
         mask_da,
         query_da,
         kwargs={
             "method": opts.method,
             "dup_code": _DUPLICATE_CODES[opts.duplicate_policy],
-            "backend": PARAM_MAP_BACKEND_NUMPY_ROW,
+            "backend": backend,
         },
         input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
         output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim]],
-        vectorize=True,
+        vectorize=False,
         dask="parallelized",
         dask_gufunc_kwargs={"allow_rechunk": True},
         output_dtypes=[np.int64, np.int64, np.float64, bool],
@@ -391,7 +407,7 @@ def build_param_map(
         valid_mask=valid_mask,
         options=options,
     )
-    i0, i1, alpha, valid = _apply_param_map_numpy_row(
+    i0, i1, alpha, valid = _apply_param_map_block(
         param_da=param_da,
         mask_da=mask_da,
         query_da=query_da,
@@ -425,7 +441,7 @@ def _prepare_bounds_inputs(
     return aligned[0], aligned[1], aligned[2], aligned[3]
 
 
-def _apply_param_bounds_numpy_row(
+def _apply_param_bounds_block(
     *,
     param_da: xr.DataArray,
     mask_da: xr.DataArray,
@@ -433,16 +449,17 @@ def _apply_param_bounds_numpy_row(
     stop_da: xr.DataArray,
     sequence_dim: str,
 ) -> tuple[xr.DataArray, xr.DataArray]:
+    backend = _select_bounds_normal_backend()
     return xr.apply_ufunc(
-        bounds_row_backend,
+        bounds_block_backend,
         param_da,
         mask_da,
         start_da,
         stop_da,
-        kwargs={"backend": PARAM_BOUNDS_BACKEND_NUMPY_ROW},
+        kwargs={"backend": backend},
         input_core_dims=[[sequence_dim], [sequence_dim], [], []],
         output_core_dims=[[], []],
-        vectorize=True,
+        vectorize=False,
         dask="parallelized",
         dask_gufunc_kwargs={"allow_rechunk": True},
         output_dtypes=[np.int64, np.int64],
@@ -488,7 +505,7 @@ def build_param_bounds_map(
         sequence_dim=sequence_dim,
         valid_mask=valid_mask,
     )
-    i0, i1 = _apply_param_bounds_numpy_row(
+    i0, i1 = _apply_param_bounds_block(
         param_da=param_da,
         mask_da=mask_da,
         start_da=start_da,

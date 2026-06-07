@@ -7,6 +7,13 @@ def _import_numba():
     return importlib.import_module("numba")
 
 
+def _numba_available() -> bool:
+    if importlib.util.find_spec("numba") is None:
+        return False
+    _import_numba()
+    return True
+
+
 def require_numba(owner: str):
     """Import Numba lazily for an owner-prefixed optional boundary.
 

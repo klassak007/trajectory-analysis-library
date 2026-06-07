@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -69,6 +71,38 @@ def _assert_lstsq_parity(
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
     np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
+
+
+def _decision_section(target: str) -> str:
+    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    section = text.split(f"### {target}", 1)[1]
+    return section.split("\n### ", 1)[0]
+
+
+def test_linalg_f2c_001_lstsq_default_or_baseline_migration_decision() -> None:
+    """ID: LINALG_F2C_001_lstsq_default_or_baseline_migration_decision."""
+    section = _decision_section("linalg_lstsq")
+    for required in (
+        "Decision: promote",
+        "Gate result: PASS",
+        "Benchmark evidence:",
+        "Reason:",
+        "Public routing status:",
+        "No-Numba behavior:",
+        "Next F2C-B action:",
+    ):
+        assert required in section
+    assert "benchmarks/bench_linalg_lstsq_numba_backends.py" in section
+    assert "small-4x2-vector-4096" in section
+    assert "fewer-large" in section
+    solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
+    lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
+    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
+    assert "vectorize=True" in lstsq_section
+    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
+    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
+    assert "Status: Draft" in contract_083
+    assert "event/linalg closeout open" in contract_083
 
 
 def test_linalg_numba_001_lstsq_backend_decision_is_explicit() -> None:

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -104,6 +106,58 @@ def _assert_intervals_equal(
     np.testing.assert_array_equal(actual[1], expected[1])
     np.testing.assert_array_equal(actual[2], expected[2])
     np.testing.assert_array_equal(actual[3], expected[3])
+
+
+def _decision_section(target: str) -> str:
+    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    section = text.split(f"### {target}", 1)[1]
+    return section.split("\n### ", 1)[0]
+
+
+def _assert_decision_record(target: str, benchmark: str, cases: tuple[str, ...]) -> None:
+    section = _decision_section(target)
+    for required in (
+        "Decision: promote",
+        "Gate result: PASS",
+        "Benchmark evidence:",
+        "Reason:",
+        "Public routing status:",
+        "No-Numba behavior:",
+        "Next F2C-B action:",
+    ):
+        assert required in section
+    assert benchmark in section
+    for case in cases:
+        assert case in section
+    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
+    assert "Status: Draft" in contract_083
+    assert "event/linalg closeout open" in contract_083
+
+
+def test_event_f2c_001_boundary_default_or_baseline_migration_decision() -> None:
+    """ID: EVENT_F2C_001_boundary_default_or_baseline_migration_decision."""
+    _assert_decision_record(
+        "event_boundary",
+        "benchmarks/bench_event_numba_backends.py",
+        ("boundary-dense-many-short", "boundary-sparse-many-short", "boundary-dense-fewer-long"),
+    )
+    text = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    assert '"backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW' in text
+    assert "EVENT_BOUNDARY_BACKEND_NUMBA" not in text
+    assert "vectorize=True" in text.split("def _extract_bounded(", 1)[1]
+
+
+def test_event_f2c_002_intervals_default_or_baseline_migration_decision() -> None:
+    """ID: EVENT_F2C_002_intervals_default_or_baseline_migration_decision."""
+    _assert_decision_record(
+        "event_intervals",
+        "benchmarks/bench_event_numba_backends.py",
+        ("intervals-many-short", "intervals-fewer-long"),
+    )
+    text = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    assert '"backend": EVENT_INTERVALS_BACKEND_NUMPY_ROW' in text
+    assert "EVENT_INTERVALS_BACKEND_NUMBA" not in text
+    assert "vectorize=True" in text.split("def _extract_bounded(", 1)[1]
 
 
 def test_event_numba_001_boundary_bounded_transition_parity() -> None:

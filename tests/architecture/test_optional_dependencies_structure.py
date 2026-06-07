@@ -82,6 +82,16 @@ def _function_index(path: Path) -> dict[str, ast.FunctionDef]:
     return {node.name: node for node in ast.walk(module) if isinstance(node, ast.FunctionDef)}
 
 
+def _contract_114_section(target: str) -> str:
+    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    section = text.split(f"### {target}", 1)[1]
+    return section.split("\n### ", 1)[0]
+
+
+def _function_section(text: str, start: str, end: str) -> str:
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
 def test_numba_opt_001_numba_extra_is_optional_only() -> None:
     """ID: NUMBA_OPT_001_numba_extra_is_optional_only."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -479,15 +489,105 @@ def test_param_arch_043_param_numba_paths_are_blockwise_vectorize_false() -> Non
     numba_backends = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
     assert "_build_param_map_numba" not in map_build
     assert "_build_param_bounds_map_numba" not in map_build
-    assert "map_block_backend" not in map_build
-    assert "bounds_block_backend" not in map_build
+    assert "backend = _select_map_normal_backend()" in map_build
+    assert "backend = _select_bounds_normal_backend()" in map_build
     assert "vectorize=True" not in numba_backends
 
 
 def test_param_arch_044_baseline_param_stopgaps_remain_explicit_until_f2c() -> None:
     """ID: PARAM_ARCH_044_baseline_param_stopgaps_remain_explicit_until_f2c."""
     text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
-    assert '"backend": PARAM_MAP_BACKEND_NUMPY_ROW' in text
-    assert '"backend": PARAM_BOUNDS_BACKEND_NUMPY_ROW' in text
-    assert "PARAM_MAP_BACKEND_NUMBA" not in text
-    assert "PARAM_BOUNDS_BACKEND_NUMBA" not in text
+    assert "def _apply_param_map_numpy_row(" not in text
+    assert "def _apply_param_bounds_numpy_row(" not in text
+    assert "PARAM_MAP_BACKEND_NUMPY_ROW" not in text
+    assert "PARAM_BOUNDS_BACKEND_NUMPY_ROW" not in text
+    assert "Decision: migrated" in _contract_114_section("param_map")
+    assert "Decision: migrated" in _contract_114_section("param_bounds")
+
+
+def test_param_arch_045_param_normal_paths_are_f2_stopgap_free_if_closed() -> None:
+    """ID: PARAM_ARCH_045_param_normal_paths_are_f2_stopgap_free_if_closed."""
+    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
+    assert "Status: Draft" in contract_083
+    assert "event/linalg closeout open" in contract_083
+    assert "param targets closed; event/linalg remain open" in contract_083
+    assert "Decision: migrated" in _contract_114_section("param_map")
+    assert "Decision: migrated" in _contract_114_section("param_bounds")
+    text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
+    map_section = _function_section(text, "def _apply_param_map_block(", "def build_param_map(")
+    bounds_section = _function_section(text, "def _apply_param_bounds_block(", "def build_param_bounds_map(")
+    assert "vectorize=False" in map_section
+    assert "vectorize=False" in bounds_section
+    assert "vectorize=True" not in map_section
+    assert "vectorize=True" not in bounds_section
+    assert "PARAM_MAP_BACKEND_NUMBA" in text
+    assert "PARAM_BOUNDS_BACKEND_NUMBA" in text
+
+
+def test_param_arch_046_param_map_normal_path_vectorize_true_removed() -> None:
+    """ID: PARAM_ARCH_046_param_map_normal_path_vectorize_true_removed."""
+    text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
+    section = _function_section(text, "def _apply_param_map_block(", "def build_param_map(")
+    assert "map_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+    assert "_apply_param_map_numpy_row" not in text
+
+
+def test_param_arch_047_param_bounds_normal_path_vectorize_true_removed() -> None:
+    """ID: PARAM_ARCH_047_param_bounds_normal_path_vectorize_true_removed."""
+    text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
+    section = _function_section(text, "def _apply_param_bounds_block(", "def build_param_bounds_map(")
+    assert "bounds_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+    assert "_apply_param_bounds_numpy_row" not in text
+
+
+def test_numba_opt_008_default_migration_preserves_no_numba_install() -> None:
+    """ID: NUMBA_OPT_008_default_migration_preserves_no_numba_install."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert all(not dep.startswith("numba") for dep in pyproject["project"]["dependencies"])
+    contract = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    assert "F2C-A" in contract
+    assert "F2C-B1" in contract
+    assert "No-Numba behavior: numpy_block fallback" in contract
+    param_text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
+    param_backends = Path("tal/core/param_engine/backends.py").read_text(encoding="utf-8")
+    helper = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    boundary_text = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    intervals_text = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
+    lstsq_section = _function_section(solve_text, "def compute_lstsq_kernel(", "def compute_solve(")
+    assert "def _numba_available(" in helper
+    assert "if importlib.util.find_spec(\"numba\") is None:" in helper
+    assert "PARAM_MAP_BACKEND_NUMPY_BLOCK" in param_text
+    assert "PARAM_BOUNDS_BACKEND_NUMPY_BLOCK" in param_text
+    assert "return PARAM_MAP_BACKEND_NUMPY_BLOCK" in param_text
+    assert "return PARAM_BOUNDS_BACKEND_NUMPY_BLOCK" in param_text
+    assert "PARAM_MAP_BACKEND_NUMPY_ROW" not in param_backends
+    assert "PARAM_BOUNDS_BACKEND_NUMPY_ROW" not in param_backends
+    assert "def map_row_backend(" not in param_backends
+    assert "def bounds_row_backend(" not in param_backends
+    assert "EVENT_BOUNDARY_BACKEND_NUMBA" not in boundary_text
+    assert "EVENT_INTERVALS_BACKEND_NUMBA" not in intervals_text
+    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
+    assert '"backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW' in boundary_text
+    assert '"backend": EVENT_INTERVALS_BACKEND_NUMPY_ROW' in intervals_text
+    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
+
+
+def test_numba_opt_009_explicit_numba_failures_do_not_fallback_silently() -> None:
+    """ID: NUMBA_OPT_009_explicit_numba_failures_do_not_fallback_silently."""
+    helper = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    assert "def require_numba(" in helper
+    assert "raise ImportError" in helper
+    for path in (
+        Path("tal/core/param_engine/numba_backends.py"),
+        Path("tal/core/event_ops/numba_backends.py"),
+        Path("tal/linalg/ops/numba_backends.py"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "require_numba(" in text
+        assert "except ImportError" not in text
+        assert "fallback" not in text.lower()

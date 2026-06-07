@@ -981,6 +981,25 @@ def test_linalg_arch_069_lstsq_backend_selector_remains_owner_routed() -> None:
     assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
 
 
+def test_linalg_arch_070_lstsq_normal_path_status_is_explicit() -> None:
+    """ID: LINALG_ARCH_070_lstsq_normal_path_status_is_explicit."""
+    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
+    contract_114 = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    benchmark = Path("benchmarks/bench_linalg_lstsq_numba_backends.py").read_text(encoding="utf-8")
+    solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
+    lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
+    decision = contract_114.split("### linalg_lstsq", 1)[1].split("\n## ", 1)[0]
+    assert "Status: Draft" in contract_083
+    assert "event/linalg closeout open" in contract_083
+    assert "Decision: promote" in decision
+    assert "Gate result: PASS" in decision
+    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
+    assert "vectorize=True" in lstsq_section
+    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
+    assert "linalg lstsq F2C decision input" in benchmark
+    assert "fewer-large cases numpy_row-selected" in benchmark
+
+
 def test_linalg_arch_067_linalg_classes_do_not_duplicate_lifecycle_methods() -> None:
     """ID: LINALG_ARCH_067_linalg_classes_do_not_duplicate_lifecycle_methods."""
     array_methods = _class_method_names(_module("tal/linalg/array.py"), "Array")

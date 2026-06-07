@@ -475,12 +475,27 @@ def test_arch_spatial_136_temporal_vector_like_stopgaps_are_backend_routed_and_e
     """ID: ARCH_SPATIAL_136_temporal_vector_like_stopgaps_are_backend_routed_and_explicit."""
     map_build = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
     backends = Path("tal/core/param_engine/backends.py").read_text(encoding="utf-8")
-    assert "map_row_backend" in map_build
-    assert "bounds_row_backend" in map_build
-    assert "PARAM_MAP_BACKEND_NUMPY_ROW" in backends
-    assert "PARAM_BOUNDS_BACKEND_NUMPY_ROW" in backends
-    assert "def map_row_backend(" in backends
-    assert "def bounds_row_backend(" in backends
+    map_section = map_build.split("def _apply_param_map_block(", 1)[1].split("def build_param_map(", 1)[0]
+    bounds_section = map_build.split("def _apply_param_bounds_block(", 1)[1].split(
+        "def build_param_bounds_map(",
+        1,
+    )[0]
+    assert "_select_map_normal_backend" in map_build
+    assert "_select_bounds_normal_backend" in map_build
+    assert "PARAM_MAP_BACKEND_NUMPY_BLOCK" in map_build
+    assert "PARAM_BOUNDS_BACKEND_NUMPY_BLOCK" in map_build
+    assert "map_block_backend" in map_section
+    assert "bounds_block_backend" in bounds_section
+    assert "vectorize=False" in map_section
+    assert "vectorize=False" in bounds_section
+    assert "vectorize=True" not in map_section
+    assert "vectorize=True" not in bounds_section
+    assert "PARAM_MAP_BACKEND_NUMPY_BLOCK" in backends
+    assert "PARAM_BOUNDS_BACKEND_NUMPY_BLOCK" in backends
+    assert "PARAM_MAP_BACKEND_NUMPY_ROW" not in backends
+    assert "PARAM_BOUNDS_BACKEND_NUMPY_ROW" not in backends
+    assert "def map_row_backend(" not in backends
+    assert "def bounds_row_backend(" not in backends
 
 
 def test_arch_spatial_151_d3_derivative_integral_paths_do_not_reuse_interpolation_execution_owners() -> None:

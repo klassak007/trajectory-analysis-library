@@ -760,13 +760,14 @@ def test_param_hard_033_param_map_build_stopgap_routes_through_backend_interface
 ) -> None:
     """ID: PARAM_HARD_033_param_map_build_stopgap_routes_through_backend_interface."""
     calls = {"n": 0}
-    original = map_build_mod.map_row_backend
+    original = map_build_mod.map_block_backend
 
     def _count(*args: object, **kwargs: object):
         calls["n"] += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(map_build_mod, "map_row_backend", _count)
+    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: False)
+    monkeypatch.setattr(map_build_mod, "map_block_backend", _count)
     param = xr.DataArray(np.asarray([0.0, 1.0, 2.0], dtype="float64"), dims=("sample",))
     query = xr.DataArray(np.asarray([0.25, 1.25], dtype="float64"), dims=("query",))
     _ = build_param_map(
@@ -783,13 +784,14 @@ def test_param_hard_034_param_bounds_build_stopgap_routes_through_backend_interf
 ) -> None:
     """ID: PARAM_HARD_034_param_bounds_build_stopgap_routes_through_backend_interface."""
     calls = {"n": 0}
-    original = map_build_mod.bounds_row_backend
+    original = map_build_mod.bounds_block_backend
 
     def _count(*args: object, **kwargs: object):
         calls["n"] += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(map_build_mod, "bounds_row_backend", _count)
+    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: False)
+    monkeypatch.setattr(map_build_mod, "bounds_block_backend", _count)
     param = xr.DataArray(np.asarray([0.0, 1.0, 2.0], dtype="float64"), dims=("sample",))
     _ = build_param_bounds_map(
         param=param,
