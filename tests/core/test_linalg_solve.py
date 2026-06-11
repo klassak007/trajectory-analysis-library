@@ -93,6 +93,28 @@ def _expected_lstsq(left: xr.DataArray, rhs: xr.DataArray, *, row: str, col: str
     ).rename("datavar")
 
 
+def _expected_lstsq_matrix(
+    left: xr.DataArray,
+    rhs: xr.DataArray,
+    *,
+    row: str,
+    col: str,
+    rhs_col: str,
+) -> xr.DataArray:
+    def _kernel(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        return np.linalg.lstsq(a, b, rcond=None)[0]
+
+    return xr.apply_ufunc(
+        _kernel,
+        left,
+        rhs,
+        input_core_dims=[[row, col], [row, rhs_col]],
+        output_core_dims=[[col, rhs_col]],
+        vectorize=True,
+        dask="forbidden",
+    ).rename("datavar")
+
+
 def _core_dims(ds: xr.Dataset) -> tuple[str, ...]:
     from tal.core.schema_read import read_roles
 
@@ -145,6 +167,25 @@ def test_linalg_matrix_004_solve_auto_policy_deterministic() -> None:
     auto_tall = solve(tall_left, tall_rhs, opts=SolveOptions(method="auto"))
     explicit_lstsq = solve(tall_left, tall_rhs, opts=SolveOptions(method="lstsq"))
     xr.testing.assert_allclose(auto_tall.unsafe_data["datavar"], explicit_lstsq.unsafe_data["datavar"])
+
+
+def test_linalg_matrix_005_lstsq_matrix_rhs_semantics() -> None:
+    """Matrix RHS least-squares preserves baseline semantics."""
+    left_vals = np.arange(24, dtype=float).reshape(2, 2, 3, 2) + 1.0
+    rhs_vals = (np.arange(24, dtype=float).reshape(2, 2, 3, 2) + 1.0) / 5.0
+    left = Matrix(_matrix_ao(left_vals, row="eq", col="sol"))
+    rhs = Matrix(_matrix_ao(rhs_vals, row="eq", col="rhs"))
+    out = solve(left, rhs, opts=SolveOptions(method="lstsq"))
+    expected = _expected_lstsq_matrix(
+        left.unsafe_data["x"],
+        rhs.unsafe_data["x"],
+        row="eq",
+        col="sol",
+        rhs_col="rhs",
+    )
+    assert isinstance(out, Matrix)
+    assert _core_dims(out.unsafe_data) == ("sol", "rhs")
+    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
 
 
 def test_linalg_hard_022_solve_requires_matrix_left_operand() -> None:
@@ -333,12 +374,13 @@ def test_linalg_hard_093_solve_kernel_vectorize_false_semantics_parity() -> None
     assert "vectorize=False" in text
 
 
-def test_linalg_hard_094_lstsq_kernel_vectorize_true_stopgap_is_explicit() -> None:
-    """ID: LINALG_HARD_094_lstsq_kernel_vectorize_true_stopgap_is_explicit."""
+def test_linalg_hard_094_lstsq_kernel_vectorize_false_block_backend_route() -> None:
+    """ID: LINALG_HARD_094_lstsq_kernel_vectorize_false_block_backend_route."""
     solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
     backend_text = Path("tal/linalg/ops/solve_backends.py").read_text(encoding="utf-8")
-    assert "def compute_lstsq_kernel(" in solve_text
-    assert "vectorize=True" in solve_text
-    assert "lstsq_solution_backend" in solve_text
-    assert "LSTSQ_BACKEND_NUMPY_ROW" in solve_text
-    assert "def lstsq_solution_backend(" in backend_text
+    section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
+    assert "lstsq_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+    assert "LSTSQ_BACKEND_NUMPY_BLOCK" in backend_text
+    assert "def lstsq_block_backend(" in backend_text

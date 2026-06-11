@@ -955,15 +955,16 @@ def test_linalg_arch_064_solve_kernel_contains_no_vectorize_true() -> None:
     assert "vectorize=False" in solve_section
 
 
-def test_linalg_arch_065_lstsq_kernel_stopgap_routes_through_backend_owner() -> None:
-    """ID: LINALG_ARCH_065_lstsq_kernel_stopgap_routes_through_backend_owner."""
+def test_linalg_arch_065_lstsq_kernel_block_backend_route_is_explicit() -> None:
+    """ID: LINALG_ARCH_065_lstsq_kernel_block_backend_route_is_explicit."""
     solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
     backend_text = Path("tal/linalg/ops/solve_backends.py").read_text(encoding="utf-8")
     lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
-    assert "vectorize=True" in lstsq_section
-    assert "lstsq_solution_backend" in lstsq_section
-    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
-    assert "def lstsq_solution_backend(" in backend_text
+    assert "vectorize=False" in lstsq_section
+    assert "vectorize=True" not in lstsq_section
+    assert "lstsq_block_backend" in lstsq_section
+    assert "LSTSQ_BACKEND_NUMPY_BLOCK" in backend_text
+    assert "def lstsq_block_backend(" in backend_text
 
 
 def test_linalg_arch_069_lstsq_backend_selector_remains_owner_routed() -> None:
@@ -974,11 +975,12 @@ def test_linalg_arch_069_lstsq_backend_selector_remains_owner_routed() -> None:
     assert 'LSTSQ_BACKEND_NUMBA = "numba"' in backend_text
     assert "def lstsq_block_backend(" in backend_text
     assert "def _select_lstsq_backend(" in backend_text
+    assert "def _select_lstsq_backend_from_metadata(" in backend_text
     assert "from .numba_backends import lstsq_block_numba" in backend_text
     assert Path("tal/linalg/ops/numba_backends.py").exists()
-    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
-    assert "vectorize=True" in lstsq_section
-    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
+    assert "lstsq_block_backend" in lstsq_section
+    assert "vectorize=False" in lstsq_section
+    assert "vectorize=True" not in lstsq_section
 
 
 def test_linalg_arch_070_lstsq_normal_path_status_is_explicit() -> None:
@@ -989,16 +991,34 @@ def test_linalg_arch_070_lstsq_normal_path_status_is_explicit() -> None:
     solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
     lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
     decision = contract_114.split("### linalg_lstsq", 1)[1].split("\n## ", 1)[0]
-    assert "Status: Draft" in contract_083
-    assert "linalg closeout open" in contract_083
-    assert "param/event targets closed; linalg remains open" in contract_083
-    assert "Decision: promote" in decision
+    assert "Status: Implemented" in contract_083
+    assert "all primary F2 targets closed" in contract_083
+    assert "Decision: migrated" in decision
     assert "Gate result: PASS" in decision
-    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
-    assert "vectorize=True" in lstsq_section
-    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
+    assert "lstsq_block_backend" in lstsq_section
+    assert "vectorize=False" in lstsq_section
+    assert "vectorize=True" not in lstsq_section
     assert "linalg lstsq F2C decision input" in benchmark
-    assert "fewer-large cases numpy_row-selected" in benchmark
+    assert "fewer-large cases numpy_block-selected" in benchmark
+
+
+def test_linalg_arch_071_lstsq_normal_path_vectorize_true_removed() -> None:
+    """ID: LINALG_ARCH_071_lstsq_normal_path_vectorize_true_removed."""
+    text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
+    section = text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
+    assert "lstsq_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+
+
+def test_linalg_arch_072_lstsq_shape_aware_selector_is_owner_owned() -> None:
+    """ID: LINALG_ARCH_072_lstsq_shape_aware_selector_is_owner_owned."""
+    solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
+    backend_text = Path("tal/linalg/ops/solve_backends.py").read_text(encoding="utf-8")
+    assert "def _select_lstsq_backend_from_metadata(" in backend_text
+    assert "_select_lstsq_backend_from_metadata(" in solve_text
+    assert "np.asarray(" not in solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
+    assert "require_numba(" not in solve_text
 
 
 def test_linalg_arch_067_linalg_classes_do_not_duplicate_lifecycle_methods() -> None:

@@ -22,7 +22,8 @@ from .linear_systems import (
     require_square_matrix,
     run_with_linalgerror_normalization,
 )
-from .solve_backends import LSTSQ_BACKEND_NUMPY_ROW, lstsq_solution_backend
+from .solve_backends import _select_lstsq_backend_from_metadata, lstsq_block_backend
+from tal.utils.numba_support import _numba_available
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,47 @@ def _output_core_dims(topology: SolveTopology) -> list[str]:
     return [topology.solution_dim, topology.rhs_extra_dim]
 
 
+def _lstsq_metadata_shapes(
+    left: xr.DataArray,
+    rhs: xr.DataArray,
+    *,
+    left_core_dims: list[str],
+    rhs_core_dims: list[str],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    left_core = set(left_core_dims)
+    rhs_core = set(rhs_core_dims)
+    outer_dims = [dim for dim in left.dims if dim not in left_core]
+    outer_dims.extend(dim for dim in rhs.dims if dim not in rhs_core and dim not in outer_dims)
+    left_outer = tuple(int(left.sizes.get(dim, 1)) for dim in outer_dims)
+    rhs_outer = tuple(int(rhs.sizes.get(dim, 1)) for dim in outer_dims)
+    left_core_shape = tuple(int(left.sizes[dim]) for dim in left_core_dims)
+    rhs_core_shape = tuple(int(rhs.sizes[dim]) for dim in rhs_core_dims)
+    return left_outer + left_core_shape, rhs_outer + rhs_core_shape
+
+
+def _select_lstsq_normal_backend(
+    left: xr.DataArray,
+    rhs: xr.DataArray,
+    *,
+    topology: SolveTopology,
+) -> str:
+    rhs_core_dims = _rhs_input_core_dims(topology)
+    left_shape, rhs_shape = _lstsq_metadata_shapes(
+        left,
+        rhs,
+        left_core_dims=[topology.contract_dim, topology.solution_dim],
+        rhs_core_dims=rhs_core_dims,
+    )
+    return _select_lstsq_backend_from_metadata(
+        left_shape,
+        rhs_shape,
+        left.dtype,
+        rhs.dtype,
+        rhs_is_vector=topology.rhs_extra_dim is None,
+        numba_available=_numba_available(),
+    )
+
+
 def _solve_numpy(
     a: np.ndarray,
     b: np.ndarray,
@@ -204,17 +246,23 @@ def compute_lstsq_kernel(
     output_var_name: str | None,
     owner: str,
 ) -> xr.DataArray:
-    _ = owner
+    rhs_is_vector = topology.rhs_extra_dim is None
+    backend = _select_lstsq_normal_backend(left, rhs, topology=topology)
     # Keep lstsq dtype inferred from NumPy output to avoid integer truncation.
     out = xr.apply_ufunc(
-        lstsq_solution_backend,
+        lstsq_block_backend,
         left,
         rhs,
         input_core_dims=[[topology.contract_dim, topology.solution_dim], _rhs_input_core_dims(topology)],
         output_core_dims=[_output_core_dims(topology)],
-        vectorize=True,
+        vectorize=False,
         dask="forbidden",
-        kwargs={"rcond": rcond, "backend": LSTSQ_BACKEND_NUMPY_ROW},
+        kwargs={
+            "rcond": rcond,
+            "rhs_is_vector": rhs_is_vector,
+            "backend": backend,
+            "owner": owner,
+        },
     )
     if output_var_name:
         out = out.rename(output_var_name)

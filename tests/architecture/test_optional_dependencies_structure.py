@@ -508,9 +508,8 @@ def test_param_arch_044_baseline_param_stopgaps_remain_explicit_until_f2c() -> N
 def test_param_arch_045_param_normal_paths_are_f2_stopgap_free_if_closed() -> None:
     """ID: PARAM_ARCH_045_param_normal_paths_are_f2_stopgap_free_if_closed."""
     contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    assert "Status: Draft" in contract_083
-    assert "linalg closeout open" in contract_083
-    assert "param/event targets closed; linalg remains open" in contract_083
+    assert "Status: Implemented" in contract_083
+    assert "all primary F2 targets closed" in contract_083
     assert "Decision: migrated" in _contract_114_section("param_map")
     assert "Decision: migrated" in _contract_114_section("param_bounds")
     text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
@@ -552,6 +551,7 @@ def test_numba_opt_008_default_migration_preserves_no_numba_install() -> None:
     assert "F2C-A" in contract
     assert "F2C-B1" in contract
     assert "F2C-B2" in contract
+    assert "F2C-B3" in contract
     assert "No-Numba behavior: numpy_block fallback" in contract
     param_text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
     param_backends = Path("tal/core/param_engine/backends.py").read_text(encoding="utf-8")
@@ -560,6 +560,7 @@ def test_numba_opt_008_default_migration_preserves_no_numba_install() -> None:
     intervals_text = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
     event_backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
     solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
+    solve_backends = Path("tal/linalg/ops/solve_backends.py").read_text(encoding="utf-8")
     lstsq_section = _function_section(solve_text, "def compute_lstsq_kernel(", "def compute_solve(")
     assert "def _numba_available(" in helper
     assert "if importlib.util.find_spec(\"numba\") is None:" in helper
@@ -579,10 +580,13 @@ def test_numba_opt_008_default_migration_preserves_no_numba_install() -> None:
     assert "EVENT_INTERVALS_BACKEND_NUMPY_ROW" not in event_backends
     assert "def boundary_bounded_row_backend(" not in event_backends
     assert "def intervals_bounded_row_backend(" not in event_backends
-    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
     assert '"backend": _select_boundary_normal_backend()' in boundary_text
     assert '"backend": _select_intervals_normal_backend()' in intervals_text
-    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
+    assert "lstsq_block_backend" in lstsq_section
+    assert "vectorize=False" in lstsq_section
+    assert "LSTSQ_BACKEND_NUMPY_BLOCK" in solve_backends
+    assert "LSTSQ_BACKEND_NUMPY_ROW" not in solve_backends
+    assert "def lstsq_solution_backend(" not in solve_backends
 
 
 def test_numba_opt_009_explicit_numba_failures_do_not_fallback_silently() -> None:

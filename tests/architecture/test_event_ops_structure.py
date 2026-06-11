@@ -580,8 +580,8 @@ def test_event_arch_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed
     intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
     boundary_section = boundary.split("def _extract_bounded(", 1)[1]
     intervals_section = intervals.split("def _extract_bounded(", 1)[1]
-    assert "Status: Draft" in contract_083
-    assert "param/event targets closed; linalg remains open" in contract_083
+    assert "Status: Implemented" in contract_083
+    assert "all primary F2 targets closed" in contract_083
     assert "### event_boundary" in contract_114
     assert "### event_intervals" in contract_114
     assert "Decision: migrated" in contract_114.split("### event_boundary", 1)[1].split("\n### ", 1)[0]

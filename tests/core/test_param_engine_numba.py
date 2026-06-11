@@ -95,15 +95,15 @@ def _assert_migrated_decision_record(target: str, benchmark: str, cases: tuple[s
         "Public routing status: blockwise vectorize=False",
         "No-Numba behavior: numpy_block fallback",
         "Explicit Numba behavior: ImportError, no silent fallback",
-        "Contract 083 status: param/event targets closed; linalg remains open",
+        "Contract 083 status: all primary F2 targets closed",
     ):
         assert required in section
     assert benchmark in section
     for case in cases:
         assert case in section
     contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    assert "Status: Draft" in contract_083
-    assert "param/event targets closed; linalg remains open" in contract_083
+    assert "Status: Implemented" in contract_083
+    assert "all primary F2 targets closed" in contract_083
 
 
 def test_param_f2c_001_map_default_or_baseline_migration_decision() -> None:

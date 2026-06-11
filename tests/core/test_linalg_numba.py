@@ -1,14 +1,20 @@
 from pathlib import Path
+import importlib
 
 import numpy as np
 import pytest
+import xarray as xr
 
+from tal.core import AnalysisObject
+from tal.linalg import Matrix, SolveOptions, Vector, solve
 from tal.linalg.ops.solve_backends import (
     LSTSQ_BACKEND_NUMBA,
-    LSTSQ_BACKEND_NUMPY_ROW,
+    LSTSQ_BACKEND_NUMPY_BLOCK,
     _select_lstsq_backend,
     lstsq_block_backend,
 )
+
+solve_mod = importlib.import_module("tal.linalg.ops.solve")
 
 
 def _row_count(shape: tuple[int, ...]) -> int:
@@ -16,6 +22,43 @@ def _row_count(shape: tuple[int, ...]) -> int:
     for size in shape:
         rows *= int(size)
     return rows
+
+
+def _matrix(values: np.ndarray, *, row: str = "eq", col: str = "sol") -> Matrix:
+    ds = xr.Dataset(
+        {"x": (("batch", row, col), values)},
+        coords={
+            "batch": np.arange(values.shape[0], dtype=np.int64),
+            row: np.arange(values.shape[1], dtype=np.int64),
+            col: np.arange(values.shape[2], dtype=np.int64),
+        },
+    )
+    return Matrix(
+        AnalysisObject.from_data(
+            ds,
+            batch_dims=("batch",),
+            core_dims=(row, col),
+            validate=True,
+        )
+    )
+
+
+def _vector(values: np.ndarray, *, axis: str = "eq") -> Vector:
+    ds = xr.Dataset(
+        {"x": (("batch", axis), values)},
+        coords={
+            "batch": np.arange(values.shape[0], dtype=np.int64),
+            axis: np.arange(values.shape[1], dtype=np.int64),
+        },
+    )
+    return Vector(
+        AnalysisObject.from_data(
+            ds,
+            batch_dims=("batch",),
+            core_dims=(axis,),
+            validate=True,
+        )
+    )
 
 
 def _baseline_lstsq_block(
@@ -83,13 +126,14 @@ def test_linalg_f2c_001_lstsq_default_or_baseline_migration_decision() -> None:
     """ID: LINALG_F2C_001_lstsq_default_or_baseline_migration_decision."""
     section = _decision_section("linalg_lstsq")
     for required in (
-        "Decision: promote",
+        "Decision: migrated",
         "Gate result: PASS",
         "Benchmark evidence:",
-        "Reason:",
-        "Public routing status:",
-        "No-Numba behavior:",
-        "Next F2C-B action:",
+        "Selected normal path: shape-aware numba if available, numpy_block otherwise",
+        "Public routing status: blockwise vectorize=False",
+        "No-Numba behavior: numpy_block fallback",
+        "Explicit Numba behavior: ImportError, no silent fallback",
+        "Contract 083 status: all primary F2 targets closed",
     ):
         assert required in section
     assert "benchmarks/bench_linalg_lstsq_numba_backends.py" in section
@@ -97,25 +141,119 @@ def test_linalg_f2c_001_lstsq_default_or_baseline_migration_decision() -> None:
     assert "fewer-large" in section
     solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
     lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
-    assert "LSTSQ_BACKEND_NUMPY_ROW" in lstsq_section
-    assert "vectorize=True" in lstsq_section
-    assert "LSTSQ_BACKEND_NUMBA" not in lstsq_section
+    assert "lstsq_block_backend" in lstsq_section
+    assert "vectorize=False" in lstsq_section
+    assert "vectorize=True" not in lstsq_section
     contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    assert "Status: Draft" in contract_083
-    assert "linalg closeout open" in contract_083
-    assert "param/event targets closed; linalg remains open" in contract_083
+    assert "Status: Implemented" in contract_083
+    assert "all primary F2 targets closed" in contract_083
+
+
+def test_linalg_f2c_002_lstsq_normal_path_uses_block_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ID: LINALG_F2C_002_lstsq_normal_path_uses_block_backend."""
+    seen = []
+    original = solve_mod.lstsq_block_backend
+
+    def _capture(*args: object, **kwargs: object):
+        seen.append(kwargs["backend"])
+        kwargs = dict(kwargs)
+        kwargs["backend"] = LSTSQ_BACKEND_NUMPY_BLOCK
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(solve_mod, "_numba_available", lambda: True)
+    monkeypatch.setattr(solve_mod, "lstsq_block_backend", _capture)
+    left = _matrix(np.tile(np.asarray([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]]), (512, 1, 1)))
+    rhs = _vector(np.tile(np.asarray([1.0, 2.0, 3.0, 4.0]), (512, 1)))
+    out = solve(left, rhs, opts=SolveOptions(method="lstsq"))
+    assert seen == [LSTSQ_BACKEND_NUMBA]
+    assert out.unsafe_data["datavar"].sizes["batch"] == 512
+
+
+def test_linalg_f2c_003_lstsq_no_numba_block_fallback_parity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ID: LINALG_F2C_003_lstsq_no_numba_block_fallback_parity."""
+    seen = []
+    original = solve_mod.lstsq_block_backend
+
+    def _capture(*args: object, **kwargs: object):
+        seen.append(kwargs["backend"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(solve_mod, "_numba_available", lambda: False)
+    monkeypatch.setattr(solve_mod, "lstsq_block_backend", _capture)
+    left_values = np.tile(np.asarray([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]]), (512, 1, 1))
+    rhs_values = np.tile(np.asarray([1.0, 2.0, 3.0, 4.0]), (512, 1))
+    out = solve(_matrix(left_values), _vector(rhs_values), opts=SolveOptions(method="lstsq"))
+    expected = _baseline_lstsq_block(left_values, rhs_values, rcond=None, rhs_is_vector=True)
+    assert seen == [LSTSQ_BACKEND_NUMPY_BLOCK]
+    np.testing.assert_allclose(out.unsafe_data["datavar"].values, expected)
+    with pytest.raises(ValueError, match=r"linalg\.solve: block 'a' must include 2 trailing core dimensions"):
+        lstsq_block_backend(
+            np.asarray([1.0]),
+            np.asarray([1.0]),
+            rcond=None,
+            rhs_is_vector=True,
+            backend=LSTSQ_BACKEND_NUMPY_BLOCK,
+        )
+    with pytest.raises(ValueError, match=r"linalg\.solve: block 'b' must include 1 trailing core dimensions"):
+        lstsq_block_backend(
+            np.asarray([[[1.0], [2.0]]]),
+            np.asarray(1.0),
+            rcond=None,
+            rhs_is_vector=True,
+            backend=LSTSQ_BACKEND_NUMPY_BLOCK,
+        )
+    with pytest.raises(ValueError, match=r"linalg\.solve: block 'b' must include 2 trailing core dimensions"):
+        lstsq_block_backend(
+            np.asarray([[[1.0], [2.0]]]),
+            np.asarray([1.0, 2.0]),
+            rcond=None,
+            rhs_is_vector=False,
+            backend=LSTSQ_BACKEND_NUMPY_BLOCK,
+        )
+
+
+def test_numba_opt_014_linalg_lstsq_default_migration_falls_back_without_numba(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: NUMBA_OPT_014_linalg_lstsq_default_migration_falls_back_without_numba."""
+    monkeypatch.setattr(solve_mod, "_numba_available", lambda: False)
+    left = _matrix(np.asarray([[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]]))
+    rhs = _vector(np.asarray([[1.0, 2.0, 4.0]]))
+    out = solve(left, rhs, opts=SolveOptions(method="lstsq"))
+    expected = _baseline_lstsq_block(left.unsafe_data["x"].values, rhs.unsafe_data["x"].values, rcond=None, rhs_is_vector=True)
+    np.testing.assert_allclose(out.unsafe_data["datavar"].values, expected)
+
+
+def test_numba_opt_015_linalg_lstsq_explicit_numba_still_fails_closed_after_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: NUMBA_OPT_015_linalg_lstsq_explicit_numba_still_fails_closed_after_migration."""
+    import tal.utils.numba_support as numba_support
+
+    def _raise_import_error():
+        raise ImportError("missing numba")
+
+    monkeypatch.setattr(numba_support, "_import_numba", _raise_import_error)
+    with pytest.raises(ImportError, match=r"linalg.solve: numba is required for backend='numba'"):
+        lstsq_block_backend(
+            np.asarray([[[1.0], [2.0]]]),
+            np.asarray([[1.0, 2.0]]),
+            rcond=None,
+            rhs_is_vector=True,
+            backend=LSTSQ_BACKEND_NUMBA,
+        )
 
 
 def test_linalg_numba_001_lstsq_backend_decision_is_explicit() -> None:
     """ID: LINALG_NUMBA_001_lstsq_backend_decision_is_explicit."""
-    assert LSTSQ_BACKEND_NUMPY_ROW == "numpy_row"
+    assert LSTSQ_BACKEND_NUMPY_BLOCK == "numpy_block"
     assert LSTSQ_BACKEND_NUMBA == "numba"
     assert _select_lstsq_backend(np.zeros((512, 4, 2)), np.zeros((512, 4)), rhs_is_vector=True) == "numba"
-    assert _select_lstsq_backend(np.zeros((511, 4, 2)), np.zeros((511, 4)), rhs_is_vector=True) == "numpy_row"
-    assert _select_lstsq_backend(np.zeros((512, 17, 2)), np.zeros((512, 17)), rhs_is_vector=True) == "numpy_row"
-    assert _select_lstsq_backend(np.zeros((512, 4, 9)), np.zeros((512, 4)), rhs_is_vector=True) == "numpy_row"
-    assert _select_lstsq_backend(np.zeros((512, 4, 2)), np.zeros((512, 4, 9)), rhs_is_vector=False) == "numpy_row"
-    assert _select_lstsq_backend(np.zeros((512, 4, 2), dtype=object), np.zeros((512, 4)), rhs_is_vector=True) == "numpy_row"
+    assert _select_lstsq_backend(np.zeros((511, 4, 2)), np.zeros((511, 4)), rhs_is_vector=True) == "numpy_block"
+    assert _select_lstsq_backend(np.zeros((512, 17, 2)), np.zeros((512, 17)), rhs_is_vector=True) == "numpy_block"
+    assert _select_lstsq_backend(np.zeros((512, 4, 9)), np.zeros((512, 4)), rhs_is_vector=True) == "numpy_block"
+    assert _select_lstsq_backend(np.zeros((512, 4, 2)), np.zeros((512, 4, 9)), rhs_is_vector=False) == "numpy_block"
+    assert _select_lstsq_backend(np.zeros((512, 4, 2), dtype=object), np.zeros((512, 4)), rhs_is_vector=True) == "numpy_block"
     with pytest.raises(ValueError, match=r"linalg.solve: unsupported lstsq backend 'unknown'"):
         lstsq_block_backend(
             np.asarray([[[1.0], [2.0]]]),

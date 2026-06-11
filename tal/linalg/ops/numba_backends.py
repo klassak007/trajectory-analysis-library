@@ -4,7 +4,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
+from .block_prep import prepare_lstsq_matrix_block_rows, prepare_lstsq_vector_block_rows
 from tal.utils.numba_support import njit_kernel, require_numba
 
 
@@ -20,63 +20,33 @@ def _compiled_lstsq_matrix_block():
     return njit_kernel(numba, _lstsq_matrix_block_impl)
 
 
-def _broadcast_vector_blocks(
-    a_block: np.ndarray,
-    b_block: np.ndarray,
-    *,
-    owner: str,
-) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
-    prepared = prepare_block_rows(
-        (a_block, b_block),
-        (BlockInputSpec("a", 2, None), BlockInputSpec("b", 1, None)),
-        output_core_shape=(),
-        owner=owner,
-    )
-    a_rows, b_rows = prepared.row_arrays
-    equations = int(a_rows.shape[-2])
-    solutions = int(a_rows.shape[-1])
-    if int(b_rows.shape[-1]) != equations:
-        raise ValueError(f"{owner}: vector rhs trailing dimension must match equation dimension.")
-    return a_rows, b_rows, prepared.outer_shape + (solutions,)
-
-
-def _broadcast_matrix_blocks(
-    a_block: np.ndarray,
-    b_block: np.ndarray,
-    *,
-    owner: str,
-) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
-    prepared = prepare_block_rows(
-        (a_block, b_block),
-        (BlockInputSpec("a", 2, None), BlockInputSpec("b", 2, None)),
-        output_core_shape=(),
-        owner=owner,
-    )
-    a_rows, b_rows = prepared.row_arrays
-    equations = int(a_rows.shape[-2])
-    solutions = int(a_rows.shape[-1])
-    rhs_cols = int(b_rows.shape[-1])
-    if int(b_rows.shape[-2]) != equations:
-        raise ValueError(f"{owner}: matrix rhs leading core dimension must match equation dimension.")
-    return a_rows, b_rows, prepared.outer_shape + (solutions, rhs_cols)
-
-
 def lstsq_block_numba(
     a_block: np.ndarray,
     b_block: np.ndarray,
     *,
-    rcond: float,
+    rcond: float | None,
     rhs_is_vector: bool,
     owner: str,
 ) -> np.ndarray:
     require_numba(owner)
     if rhs_is_vector:
-        a_rows, b_rows, output_shape = _broadcast_vector_blocks(a_block, b_block, owner=owner)
-        out = _compiled_lstsq_vector_block()(a_rows, b_rows, float(rcond))
+        a_rows, b_rows, output_shape = prepare_lstsq_vector_block_rows(a_block, b_block, owner=owner)
+        out = _compiled_lstsq_vector_block()(a_rows, b_rows, _effective_rcond_for_rows(a_rows, rcond))
         return out.reshape(output_shape)
-    a_rows, b_rows, output_shape = _broadcast_matrix_blocks(a_block, b_block, owner=owner)
-    out = _compiled_lstsq_matrix_block()(a_rows, b_rows, float(rcond))
+    a_rows, b_rows, output_shape = prepare_lstsq_matrix_block_rows(a_block, b_block, owner=owner)
+    out = _compiled_lstsq_matrix_block()(a_rows, b_rows, _effective_rcond_for_rows(a_rows, rcond))
     return out.reshape(output_shape)
+
+
+def _effective_rcond_for_rows(a_rows: np.ndarray, rcond: float | None) -> float:
+    from .solve_backends import _effective_lstsq_rcond
+
+    return _effective_lstsq_rcond(
+        rcond,
+        rows=int(a_rows.shape[-2]),
+        cols=int(a_rows.shape[-1]),
+        dtype=a_rows.dtype,
+    )
 
 
 def _lstsq_vector_block_impl(a_rows, b_rows, rcond):
