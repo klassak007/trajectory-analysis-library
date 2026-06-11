@@ -68,6 +68,12 @@ def _parameter_count(node: ast.FunctionDef) -> int:
     )
 
 
+def _spatial_decision_section(target: str) -> str:
+    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    section = text.split(f"### {target}", 1)[1]
+    return section.split("\n### ", 1)[0]
+
+
 def _call_token(call: ast.Call) -> str | None:
     if isinstance(call.func, ast.Name) and call.func.id in {"_resolve_compose_output_frames", "resolve_compose_output_frames"}:
         return "resolve_compose_output_frames"
@@ -2361,6 +2367,118 @@ def test_spatial_arch_181_higher_order_interp_numba_decision_is_owner_routed() -
     assert "higher_order_interp_backends" not in pose_ops
     assert "higher-order quaternion retention gate" in bench_text
     assert "higher-order pose retention gate" in bench_text
+
+
+def test_spatial_arch_190_spatial_f2c_decision_records_are_complete() -> None:
+    """ID: SPATIAL_ARCH_190_spatial_f2c_decision_records_are_complete."""
+    targets = {
+        "rotation_slerp": "benchmarks/bench_spatial_slerp_numba_backends.py",
+        "kinematics_trapezoid": "benchmarks/bench_spatial_kinematics_scan_numba_backends.py",
+        "kinematics_simpson": "benchmarks/bench_spatial_kinematics_scan_numba_backends.py",
+        "kinematics_moving_average": "benchmarks/bench_spatial_kinematics_stencil_numba_backends.py",
+        "kinematics_gaussian": "benchmarks/bench_spatial_kinematics_stencil_numba_backends.py",
+        "fixed_size_spatial_math": "benchmarks/bench_spatial_fixed_size_numba_backends.py",
+        "rotation_mean": "benchmarks/bench_spatial_rotation_mean_numba_backends.py",
+        "higher_order_quaternion_squad": "benchmarks/bench_spatial_higher_order_interp_numba_backends.py",
+        "higher_order_pose_cubic_squad": "benchmarks/bench_spatial_higher_order_interp_numba_backends.py",
+        "topology_chain_pose": "benchmarks/bench_spatial_topology_scan_numba_backends.py",
+    }
+    required_fields = (
+        "Decision:",
+        "Gate result:",
+        "Benchmark evidence:",
+        "Reason:",
+        "Public routing status:",
+        "No-Numba behavior:",
+        "Explicit Numba behavior:",
+        "Next Spatial F2C-B action:",
+    )
+    for target, benchmark in targets.items():
+        section = _spatial_decision_section(target)
+        for field in required_fields:
+            assert field in section
+        assert benchmark in section
+        assert f"Spatial F2C decision input: {target}" in section
+    benchmark_labels = {
+        "benchmarks/bench_spatial_slerp_numba_backends.py": ("rotation_slerp",),
+        "benchmarks/bench_spatial_kinematics_scan_numba_backends.py": (
+            "kinematics_trapezoid",
+            "kinematics_simpson",
+        ),
+        "benchmarks/bench_spatial_kinematics_stencil_numba_backends.py": (
+            "kinematics_moving_average",
+            "kinematics_gaussian",
+        ),
+        "benchmarks/bench_spatial_fixed_size_numba_backends.py": ("fixed_size_spatial_math",),
+        "benchmarks/bench_spatial_rotation_mean_numba_backends.py": ("rotation_mean",),
+        "benchmarks/bench_spatial_higher_order_interp_numba_backends.py": (
+            "higher_order_quaternion_squad",
+            "higher_order_pose_cubic_squad",
+        ),
+        "benchmarks/bench_spatial_topology_scan_numba_backends.py": ("topology_chain_pose",),
+    }
+    for path, labels in benchmark_labels.items():
+        text = Path(path).read_text(encoding="utf-8")
+        assert "Spatial F2C decision input:" in text
+        for label in labels:
+            assert label in text
+    fixed = _spatial_decision_section("fixed_size_spatial_math")
+    for subkernel in (
+        "quat compose",
+        "quat inverse",
+        "quat-to-matrix",
+        "matrix-to-quat",
+        "rotate-vec3",
+        "pose component kernels",
+    ):
+        assert subkernel in fixed
+    assert "Decision: no-retention" in _spatial_decision_section("local_poly")
+    for path in (
+        Path("contracts/113-numba-spatial-compiled-backends-slice-f2b.md"),
+        Path("contracts/117-spatial-kinematics-numba-scan-backends-slice-f2e1.md"),
+        Path("contracts/118-spatial-local-stencil-window-numba-backends-slice-f2e2.md"),
+        Path("contracts/119-spatial-ordered-topology-scan-backends-slice-f2e3.md"),
+        Path("contracts/ROADMAP.md"),
+    ):
+        assert "Spatial F2C-A" in path.read_text(encoding="utf-8")
+
+
+def test_spatial_arch_191_spatial_public_paths_remain_baseline_until_migration() -> None:
+    """ID: SPATIAL_ARCH_191_spatial_public_paths_remain_baseline_until_migration."""
+    public_paths = {
+        "tal/spatial/ops/rotation_temporal_ops.py": (
+            "ROTATION_INTERP_BACKEND_NUMBA",
+            "higher_order_interp_backends",
+        ),
+        "tal/spatial/ops/pose_temporal_ops.py": ("higher_order_interp_backends",),
+        "tal/spatial/ops/kinematics_temporal_ops.py": (
+            "KINEMATICS_TEMPORAL_BACKEND_NUMBA",
+            "kinematics_temporal_backends",
+        ),
+        "tal/spatial/ops/kinematics_smoothing_ops.py": (
+            "KINEMATICS_SMOOTHING_BACKEND_NUMBA",
+            "kinematics_smoothing_backends",
+            "KINEMATICS_LOCAL_POLY_BACKEND_NUMBA",
+            "kinematics_local_poly_backends",
+        ),
+        "tal/spatial/ops/rotation_reduce_ops.py": (
+            "ROTATION_MEAN_BACKEND_NUMBA",
+            "rotation_mean_backends",
+            "rotation_mean_numba_backends",
+        ),
+        "tal/spatial/ops/path_solve_ops.py": (
+            "SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA",
+            "topology_scan_backends",
+        ),
+        "tal/spatial/ops/pose_kernel_adapters.py": ("fixed_size_backends", "fixed_size_numba_backends"),
+        "tal/spatial/ops/rotation_apply_ops.py": ("fixed_size_backends", "fixed_size_numba_backends"),
+        "tal/spatial/ops/pose_ops.py": ("fixed_size_backends", "fixed_size_numba_backends"),
+        "tal/spatial/rotation.py": ("fixed_size_backends", "fixed_size_numba_backends"),
+    }
+    for path, banned_tokens in public_paths.items():
+        text = Path(path).read_text(encoding="utf-8")
+        for token in banned_tokens:
+            assert token not in text
 
 
 def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> None:

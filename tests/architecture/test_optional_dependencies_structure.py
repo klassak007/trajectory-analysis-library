@@ -603,3 +603,38 @@ def test_numba_opt_009_explicit_numba_failures_do_not_fallback_silently() -> Non
         assert "require_numba(" in text
         assert "except ImportError" not in text
         assert "fallback" not in text.lower()
+
+
+def test_numba_opt_016_spatial_default_review_preserves_no_numba_install() -> None:
+    """ID: NUMBA_OPT_016_spatial_default_review_preserves_no_numba_install."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert all(not dep.startswith("numba") for dep in pyproject["project"]["dependencies"])
+    contract = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    assert "Spatial F2C-A Decision Records" in contract
+    assert "Spatial F2C-B" in contract
+    for target in (
+        "rotation_slerp",
+        "kinematics_trapezoid",
+        "kinematics_simpson",
+        "kinematics_moving_average",
+        "kinematics_gaussian",
+        "fixed_size_spatial_math",
+        "rotation_mean",
+        "higher_order_quaternion_squad",
+        "higher_order_pose_cubic_squad",
+        "topology_chain_pose",
+    ):
+        section = contract.split(f"### {target}", 1)[1].split("\n### ", 1)[0]
+        assert "No-Numba behavior:" in section
+        assert "Explicit Numba behavior:" in section
+    public_paths = (
+        Path("tal/spatial/ops/rotation_temporal_ops.py"),
+        Path("tal/spatial/ops/kinematics_temporal_ops.py"),
+        Path("tal/spatial/ops/kinematics_smoothing_ops.py"),
+        Path("tal/spatial/ops/rotation_reduce_ops.py"),
+        Path("tal/spatial/ops/path_solve_ops.py"),
+    )
+    for path in public_paths:
+        text = path.read_text(encoding="utf-8")
+        assert "BACKEND_NUMBA" not in text
+        assert "_numba_backends" not in text

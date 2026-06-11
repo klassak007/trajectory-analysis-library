@@ -204,6 +204,151 @@ def _higher_order_windows() -> tuple[QuatInterpWindow, PoseInterpWindow, np.ndar
     return QuatInterpWindow(q_prev, q0, q1, q_next), pose_window, alpha, valid
 
 
+def _spatial_decision_section(target: str) -> str:
+    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
+    section = text.split(f"### {target}", 1)[1]
+    return section.split("\n### ", 1)[0]
+
+
+def _assert_spatial_decision_record(
+    target: str,
+    *,
+    decision: str,
+    benchmark: str,
+    evidence: tuple[str, ...],
+) -> str:
+    section = _spatial_decision_section(target)
+    for required in (
+        f"Decision: {decision}",
+        "Gate result:",
+        "Benchmark evidence:",
+        "Reason:",
+        "Public routing status:",
+        "No-Numba behavior:",
+        "Explicit Numba behavior:",
+        "Next Spatial F2C-B action:",
+    ):
+        assert required in section
+    assert benchmark in section
+    for item in evidence:
+        assert item in section
+    return section
+
+
+def test_spatial_f2c_001_rotation_slerp_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_001_rotation_slerp_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "rotation_slerp",
+        decision="defer",
+        benchmark="benchmarks/bench_spatial_slerp_numba_backends.py",
+        evidence=("many-short", "fewer-long", "Spatial F2C decision input: rotation_slerp"),
+    )
+
+
+def test_spatial_f2c_002_kinematics_trapezoid_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_002_kinematics_trapezoid_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "kinematics_trapezoid",
+        decision="defer",
+        benchmark="benchmarks/bench_spatial_kinematics_scan_numba_backends.py",
+        evidence=("many-short", "fewer-long", "high-core", "Spatial F2C decision input: kinematics_trapezoid"),
+    )
+
+
+def test_spatial_f2c_003_kinematics_simpson_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_003_kinematics_simpson_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "kinematics_simpson",
+        decision="defer",
+        benchmark="benchmarks/bench_spatial_kinematics_scan_numba_backends.py",
+        evidence=(
+            "simpson-many-short",
+            "simpson-fewer-long",
+            "simpson-high-core",
+            "Spatial F2C decision input: kinematics_simpson",
+        ),
+    )
+
+
+def test_spatial_f2c_004_kinematics_moving_average_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_004_kinematics_moving_average_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "kinematics_moving_average",
+        decision="defer",
+        benchmark="benchmarks/bench_spatial_kinematics_stencil_numba_backends.py",
+        evidence=("moving-average", "Spatial F2C decision input: kinematics_moving_average"),
+    )
+
+
+def test_spatial_f2c_005_kinematics_gaussian_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_005_kinematics_gaussian_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "kinematics_gaussian",
+        decision="defer",
+        benchmark="benchmarks/bench_spatial_kinematics_stencil_numba_backends.py",
+        evidence=("Gaussian", "Spatial F2C decision input: kinematics_gaussian"),
+    )
+
+
+def test_spatial_f2c_006_fixed_size_spatial_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_006_fixed_size_spatial_default_migration_decision."""
+    section = _assert_spatial_decision_record(
+        "fixed_size_spatial_math",
+        decision="sidecar-only",
+        benchmark="benchmarks/bench_spatial_fixed_size_numba_backends.py",
+        evidence=("many-row", "fewer-row", "Spatial F2C decision input: fixed_size_spatial_math"),
+    )
+    for subkernel in (
+        "quat compose",
+        "quat inverse",
+        "quat-to-matrix",
+        "matrix-to-quat",
+        "rotate-vec3",
+        "pose component kernels",
+    ):
+        assert subkernel in section
+
+
+def test_spatial_f2c_007_rotation_mean_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_007_rotation_mean_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "rotation_mean",
+        decision="defer",
+        benchmark="benchmarks/bench_spatial_rotation_mean_numba_backends.py",
+        evidence=("many-small", "weighted-many-small", "Spatial F2C decision input: rotation_mean"),
+    )
+
+
+def test_spatial_f2c_008_higher_order_quaternion_squad_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_008_higher_order_quaternion_squad_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "higher_order_quaternion_squad",
+        decision="sidecar-only",
+        benchmark="benchmarks/bench_spatial_higher_order_interp_numba_backends.py",
+        evidence=("quat-many-query", "quat-fewer-long", "Spatial F2C decision input: higher_order_quaternion_squad"),
+    )
+
+
+def test_spatial_f2c_009_higher_order_pose_cubic_squad_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_009_higher_order_pose_cubic_squad_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "higher_order_pose_cubic_squad",
+        decision="sidecar-only",
+        benchmark="benchmarks/bench_spatial_higher_order_interp_numba_backends.py",
+        evidence=("pose-many-query", "pose-fewer-long", "Spatial F2C decision input: higher_order_pose_cubic_squad"),
+    )
+
+
+def test_spatial_f2c_010_topology_scan_default_migration_decision() -> None:
+    """ID: SPATIAL_F2C_010_topology_scan_default_migration_decision."""
+    _assert_spatial_decision_record(
+        "topology_chain_pose",
+        decision="sidecar-only",
+        benchmark="benchmarks/bench_spatial_topology_scan_numba_backends.py",
+        evidence=("many-short", "time-as-outer-by-chain", "Spatial F2C decision input: topology_chain_pose"),
+    )
+
+
 def test_spatial_numba_001_slerp_backend_parity() -> None:
     """ID: SPATIAL_NUMBA_001_slerp_backend_parity."""
     _require_numba()
@@ -666,12 +811,15 @@ def test_spatial_numba_020_local_poly_backend_decision_is_explicit() -> None:
     contract_text = Path("contracts/118-spatial-local-stencil-window-numba-backends-slice-f2e2.md").read_text(
         encoding="utf-8"
     )
+    contract_114_section = _spatial_decision_section("local_poly")
     ops_text = Path("tal/spatial/ops/kinematics_smoothing_ops.py").read_text(encoding="utf-8")
     temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
     assert "numba local-poly backend is not retained" in backend_text
     assert "local-poly retention gate" in bench_text
     assert "retain numba backend:                     False" in bench_text
     assert "Local-polynomial Numba is not retained" in contract_text
+    assert "Decision: no-retention" in contract_114_section
+    assert "Gate result: FAIL" in contract_114_section
     assert "local_poly_smooth_kernel" in ops_text
     assert "local_poly_first_derivative_kernel" in temporal_text
     assert "kinematics_local_poly_backends" not in ops_text
