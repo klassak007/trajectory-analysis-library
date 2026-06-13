@@ -11,7 +11,7 @@ import xarray as xr
 from tal.core import AnalysisObject
 from tal.core.schema import merge_schema
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
-from tal.geo import GeodeticOptions, GeodeticPosition, from_ecef
+from tal.geo import GeodeticOptions, GeodeticPosition, LocalOrigin, from_ecef
 from tal.spatial import Position
 from tal.utils.frame_schema import get_frames, set_frames
 
@@ -60,6 +60,7 @@ def _require_pyproj() -> None:
 
 def _install_geo_backend_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     import tal.geo.conversion as conversion
+    import tal.geo.local as local
     import tal.geo.options as options
 
     monkeypatch.setattr(options, "normalize_supported_crs", lambda value, expected, owner: expected)
@@ -72,6 +73,11 @@ def _install_geo_backend_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         conversion,
         "transform_ecef_to_lla",
         lambda x, y, z, crs, ecef_crs, owner: (x - 1.0, y - 2.0, z - 3.0),
+    )
+    monkeypatch.setattr(
+        local,
+        "transform_lla_to_ecef",
+        lambda lat, lon, alt, crs, ecef_crs, owner: (lat + 1.0, lon + 2.0, alt + 3.0),
     )
 
 
@@ -208,6 +214,61 @@ def test_geo_from_ecef_opts_none_preserves_inferred_custom_frame(monkeypatch: py
     assert get_frames(roundtrip.unsafe_data) == ("custom_ecef", "receiver")
     assert roundtrip.unsafe_data.attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "custom_ecef"
     np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+
+
+def test_geo_from_ecef_rejects_superseded_ecef_position_metadata_with_explicit_opts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G2 rejects G1-only ECEF provenance even when explicit opts are supplied."""
+    _install_geo_backend_stub(monkeypatch)
+    ds = merge_schema(
+        _ecef_dataset(),
+        {
+            "ext": {
+                "geo": {
+                    "kind": "ecef_position",
+                    "crs": "EPSG:4978",
+                    "geodetic_crs": "EPSG:4979",
+                    "datum": "WGS84",
+                    "angular_unit": "degree",
+                    "height_reference": "ellipsoidal",
+                    "longitude_wrap": "[-180, 180)",
+                }
+            }
+        },
+        validate=False,
+    )
+    with pytest.raises(ValueError, match="superseded"):
+        GeodeticPosition.from_ecef(Position(ds), opts=GeodeticOptions(ecef_frame=None))
+
+
+def test_geo_from_ecef_rejects_enu_metadata_with_explicit_opts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct from_ecef must not treat ENU provenance as ECEF."""
+    _install_geo_backend_stub(monkeypatch)
+    enu = GeodeticPosition.from_lla(_lla_dataset()).to_enu(LocalOrigin(0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="cartesian_system='ecef'"):
+        GeodeticPosition.from_ecef(enu, opts=GeodeticOptions(ecef_frame=None))
+
+
+def test_geo_from_ecef_raw_position_allows_explicit_opts_without_geo_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit opts may disambiguate raw ECEF data when no geo block is present."""
+    _install_geo_backend_stub(monkeypatch)
+    lla = GeodeticPosition.from_ecef(
+        Position(_ecef_dataset()),
+        opts=GeodeticOptions(ecef_frame=None),
+    )
+    np.testing.assert_allclose(lla.unsafe_data["position"], [[6378136.0, -2.0, -3.0]])
+
+
+def test_geo_from_ecef_raw_position_default_options_without_geo_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct from_ecef keeps the existing no-provenance default behavior."""
+    _install_geo_backend_stub(monkeypatch)
+    lla = GeodeticPosition.from_ecef(Position(_ecef_dataset()))
+    np.testing.assert_allclose(lla.unsafe_data["position"], [[6378136.0, -2.0, -3.0]])
 
 
 def test_geo_core_g1_011_geo_optional_dependency_group_declared() -> None:

@@ -28,13 +28,30 @@ latitude, longitude, altitude payloads. It keeps LLA separate from
 ```python
 GeodeticPosition.from_lla(value, *, opts=None, validate=True)
 geodetic.to_ecef(*, opts=None, validate=True)
+geodetic.to_enu(origin=None, *, opts=None, validate=True)
+geodetic.distance_to(other, *, opts=None, validate=True)
+geodetic.initial_bearing_to(other, *, opts=None, validate=True)
+geodetic.final_bearing_to(other, *, opts=None, validate=True)
+geodetic.param.at(query, *, on=None, opts=None, validate=True)
+geodetic.param.resample_to(grid, *, on=None, opts=None, validate=True)
+geodetic.param.interp_like(other, *, on=None, opts=None, validate=True)
 GeodeticPosition.from_ecef(value, *, opts=None, validate=True)
 tal.geo.from_ecef(value, *, opts=None, validate=True)
+ecef.geo.to_lla(*, opts=None, validate=True)
+ecef.geo.to_enu(origin=None, *, opts=None, validate=True)
+enu.geo.to_ecef(origin=None, *, opts=None, validate=True)
 ```
 
 `from_lla(...)` stamps and validates metadata on an already-shaped LLA payload.
 `to_ecef(...)` and `from_ecef(...)` require the optional `tal[geo]` dependency
 group and use pyproj-backed WGS84 CRS transforms.
+`to_enu(...)` and `Position.geo.to_enu(...)` require an explicit local origin.
+ENU payloads remain Cartesian `Position` objects with `x`, `y`, `z` labels
+where x=east, y=north, and z=up.
+`distance_to(...)` and bearing methods return scalar-core `tal.linalg.Array`
+objects. Geodetic `param.at(...)`, `param.resample_to(...)`, and
+`param.interp_like(...)` preserve `GeodeticPosition` identity and use geodesic
+interpolation defaults.
 
 ## Autosummary
 
@@ -44,10 +61,24 @@ group and use pyproj-backed WGS84 CRS transforms.
    :nosignatures:
 
    tal.geo.GeodeticOptions
+   tal.geo.LocalOrigin
+   tal.geo.ENUOptions
+   tal.geo.GeodesicOptions
+   tal.geo.GeodeticInterpolationOptions
    tal.geo.GeodeticPosition
    tal.geo.GeodeticPosition.from_lla
    tal.geo.GeodeticPosition.to_ecef
+   tal.geo.GeodeticPosition.to_enu
+   tal.geo.GeodeticPosition.distance_to
+   tal.geo.GeodeticPosition.initial_bearing_to
+   tal.geo.GeodeticPosition.final_bearing_to
+   tal.geo.temporal.GeodeticParamAccessor.at
+   tal.geo.temporal.GeodeticParamAccessor.resample_to
+   tal.geo.temporal.GeodeticParamAccessor.interp_like
    tal.geo.GeodeticPosition.from_ecef
+   tal.geo.accessor.PositionGeoAccessor.to_lla
+   tal.geo.accessor.PositionGeoAccessor.to_enu
+   tal.geo.accessor.PositionGeoAccessor.to_ecef
    tal.geo.from_ecef
 ```
 

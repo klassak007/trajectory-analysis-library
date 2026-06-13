@@ -17,9 +17,11 @@ from tal.core.typed_lifecycle import TypedAnalysisObject, TypedLifecycleContext,
 from .metadata import normalize_geodetic_metadata
 
 if TYPE_CHECKING:
+    from tal.linalg import Array
     from tal.spatial import Position
 
-    from .options import GeodeticOptions
+    from .options import ENUOptions, GeodesicOptions, GeodeticOptions
+    from .temporal import GeodeticParamAccessor
 
 _LLA_LABELS: tuple[str, str, str] = ("lat", "lon", "alt")
 
@@ -184,9 +186,10 @@ class GeodeticPosition(TypedAnalysisObject):
             If ``value`` cannot be coerced to ``Position`` or ``opts`` is not
             ``GeodeticOptions`` or ``None``.
         ValueError
-            If the ECEF payload has malformed TAL roles or core labels, option
-            values or CRS identifiers are unsupported, or ``strict_frame=True``
-            rejects incompatible frame metadata.
+            If the ECEF payload has malformed TAL roles or core labels,
+            present geo provenance is non-ECEF, option values or CRS
+            identifiers are unsupported, or ``strict_frame=True`` rejects
+            incompatible frame metadata.
 
         Notes
         -----
@@ -274,6 +277,267 @@ class GeodeticPosition(TypedAnalysisObject):
         from .conversion import to_ecef
 
         return to_ecef(self, opts=opts, validate=validate)
+
+    def to_enu(
+        self,
+        origin: object | None = None,
+        *,
+        opts: "ENUOptions | None" = None,
+        validate: bool = True,
+    ) -> "Position":
+        """Convert geodetic LLA coordinates to local ENU position.
+
+        Parameters
+        ----------
+        origin : object | None, optional
+            ``LocalOrigin`` or AO-like value coercible to ``GeodeticPosition``.
+            This argument overrides ``opts.origin``.
+        opts : ENUOptions | None, optional
+            ENU conversion options controlling ``origin``, ``ecef_frame``,
+            ``output_frame``, and ``strict_frame``.
+        validate : bool, optional
+            Whether to validate the output before returning.
+
+        Returns
+        -------
+        tal.spatial.Position
+            Cartesian ENU position with ``x``, ``y``, ``z`` labels where
+            x=east, y=north, and z=up.
+
+        Raises
+        ------
+        ImportError
+            If ``pyproj`` from the optional ``tal[geo]`` dependency group is
+            not installed.
+        TypeError
+            If ``opts`` is not ``ENUOptions`` or ``origin`` is not a supported
+            local-origin object.
+        ValueError
+            If the origin is missing, source/origin topology is incompatible,
+            CRS metadata is unsupported, the payload is malformed, or
+            ``strict_frame=True`` rejects source frame metadata.
+
+        Notes
+        -----
+        This is an explicit geodetic-to-ECEF-to-ENU conversion. It does not
+        search a frame graph, and the returned ENU payload remains a Cartesian
+        ``Position`` rather than a geodetic object.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.geo import ENUOptions, GeodeticPosition, LocalOrigin
+        >>> ds = xr.Dataset(
+        ...     {"position": (("sample", "lla"), [[45.0, -75.0, 100.0]])},
+        ...     coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ... )
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+        >>> opts = ENUOptions(output_frame="site_enu")
+        >>> enu = GeodeticPosition.from_lla(ao).to_enu(LocalOrigin(45.0, -75.0, 100.0), opts=opts)
+        >>> list(enu.unsafe_data["axis"].values)
+        ['x', 'y', 'z']
+        """
+        from .local import geodetic_to_enu
+
+        return geodetic_to_enu(self, origin=origin, opts=opts, validate=validate)
+
+    def distance_to(
+        self,
+        other: object,
+        *,
+        opts: "GeodesicOptions | None" = None,
+        validate: bool = True,
+    ) -> "Array":
+        """Compute geodetic distance to another LLA position.
+
+        Parameters
+        ----------
+        other : object
+            ``GeodeticPosition`` or AO-like LLA payload aligned with this
+            object by TAL topology rules.
+        opts : GeodesicOptions | None, optional
+            Distance options including ``method``, ``include_altitude``, and
+            ``local_origin``. ``None`` uses WGS84 geodesic surface distance.
+        validate : bool, optional
+            Whether to validate the scalar output before returning.
+
+        Returns
+        -------
+        tal.linalg.Array
+            Scalar-core distance payload in meters, with data variable
+            ``distance_m``.
+
+        Raises
+        ------
+        ImportError
+            If ``pyproj`` from ``tal[geo]`` is required and unavailable.
+        TypeError
+            If ``other`` or ``opts`` has an unsupported type.
+        ValueError
+            If operands have malformed LLA metadata, incompatible CRS
+            provenance, unsupported option values, or missing local ENU origin.
+
+        Notes
+        -----
+        ``include_altitude=True`` applies endpoint altitude adjustment; it is
+        not 3D path integration. Scalar results strip geo/spatial/frame
+        extension metadata because they are not positions.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.geo import GeodesicOptions, GeodeticPosition
+        >>> ds = xr.Dataset(
+        ...     {"lla": (("sample", "lla_axis"), [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]])},
+        ...     coords={"sample": [0, 1], "lla_axis": ["lat", "lon", "alt"]},
+        ... )
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
+        >>> opts = GeodesicOptions(include_altitude=True)
+        >>> out = GeodeticPosition.from_lla(ao).distance_to(GeodeticPosition.from_lla(ao), opts=opts)
+        >>> tuple(out.unsafe_data.attrs["tal"]["core"]["roles"]["core_dims"])
+        ()
+        """
+        from .distance import distance_to
+
+        return distance_to(self, other, opts=opts, validate=validate)
+
+    def initial_bearing_to(
+        self,
+        other: object,
+        *,
+        opts: "GeodesicOptions | None" = None,
+        validate: bool = True,
+    ) -> "Array":
+        """Compute initial bearing to another LLA position.
+
+        Parameters
+        ----------
+        other : object
+            ``GeodeticPosition`` or AO-like LLA payload.
+        opts : GeodesicOptions | None, optional
+            Bearing method options. ``method='local_enu'`` requires an
+            explicit local origin. ``include_altitude`` does not affect
+            bearings.
+        validate : bool, optional
+            Whether to validate the scalar output before returning.
+
+        Returns
+        -------
+        tal.linalg.Array
+            Scalar-core bearing payload in degrees clockwise from north, with
+            data variable ``initial_bearing_deg``.
+
+        Raises
+        ------
+        ImportError
+            If ``pyproj`` from ``tal[geo]`` is required and unavailable.
+        TypeError
+            If ``other`` or ``opts`` has an unsupported type.
+        ValueError
+            If operands have malformed LLA metadata, incompatible CRS
+            provenance, unsupported option values, missing local ENU origin, or
+            ambiguous pole bearing geometry.
+
+        Notes
+        -----
+        Coincident endpoints produce ``NaN``. Bearings are horizontal even when
+        distance options include altitude.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.geo import GeodesicOptions, GeodeticPosition
+        >>> ds = xr.Dataset(
+        ...     {"lla": (("sample", "lla_axis"), [[0.0, 0.0, 0.0]])},
+        ...     coords={"sample": [0], "lla_axis": ["lat", "lon", "alt"]},
+        ... )
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
+        >>> opts = GeodesicOptions(include_altitude=True)
+        >>> out = GeodeticPosition.from_lla(ao).initial_bearing_to(GeodeticPosition.from_lla(ao), opts=opts)
+        >>> "initial_bearing_deg" in out.unsafe_data
+        True
+        """
+        from .distance import initial_bearing_to
+
+        return initial_bearing_to(self, other, opts=opts, validate=validate)
+
+    def final_bearing_to(
+        self,
+        other: object,
+        *,
+        opts: "GeodesicOptions | None" = None,
+        validate: bool = True,
+    ) -> "Array":
+        """Compute final bearing arriving at another LLA position.
+
+        Parameters
+        ----------
+        other : object
+            ``GeodeticPosition`` or AO-like LLA payload.
+        opts : GeodesicOptions | None, optional
+            Bearing options including ``method``, ``include_altitude``, and
+            ``local_origin``. ``method='local_enu'`` uses the same local
+            straight-line heading approximation as initial bearing.
+        validate : bool, optional
+            Whether to validate the scalar output before returning.
+
+        Returns
+        -------
+        tal.linalg.Array
+            Scalar-core bearing payload in degrees clockwise from north, with
+            data variable ``final_bearing_deg``.
+
+        Raises
+        ------
+        ImportError
+            If ``pyproj`` from ``tal[geo]`` is required and unavailable.
+        TypeError
+            If ``other`` or ``opts`` has an unsupported type.
+        ValueError
+            If operands have malformed LLA metadata, incompatible CRS
+            provenance, unsupported option values, missing local ENU origin, or
+            ambiguous pole bearing geometry.
+
+        Notes
+        -----
+        Final bearing is derived from the geodesic back azimuth for global
+        geodesic mode. Local ENU mode is an explicit tangent-plane
+        approximation.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.geo import GeodesicOptions, GeodeticPosition
+        >>> ds = xr.Dataset(
+        ...     {"lla": (("sample", "lla_axis"), [[0.0, 0.0, 0.0]])},
+        ...     coords={"sample": [0], "lla_axis": ["lat", "lon", "alt"]},
+        ... )
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
+        >>> opts = GeodesicOptions(include_altitude=True)
+        >>> out = GeodeticPosition.from_lla(ao).final_bearing_to(GeodeticPosition.from_lla(ao), opts=opts)
+        >>> "final_bearing_deg" in out.unsafe_data
+        True
+        """
+        from .distance import final_bearing_to
+
+        return final_bearing_to(self, other, opts=opts, validate=validate)
+
+    @property
+    def param(self) -> "GeodeticParamAccessor":
+        """Return the parameter-domain accessor for geodetic interpolation.
+
+        Returns
+        -------
+        GeodeticParamAccessor
+            Typed accessor whose interpolation defaults are geodetic-safe.
+        """
+        from .temporal import GeodeticParamAccessor
+
+        return GeodeticParamAccessor(self)
 
 
 __all__ = [

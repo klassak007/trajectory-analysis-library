@@ -15,7 +15,14 @@ from tal.core.event_ops import Condition, WhenOptions
 from tal.core.schema_read import read_roles
 from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds, snapshot_to_networkx
 from tal.io import CsvIngestOptions, read_csv_logs
-from tal.geo import GeodeticOptions, GeodeticPosition
+from tal.geo import (
+    ENUOptions,
+    GeodeticInterpolationOptions,
+    GeodeticOptions,
+    GeodesicOptions,
+    GeodeticPosition,
+    LocalOrigin,
+)
 from tal.linalg import (
     Array,
     Matrix,
@@ -884,6 +891,25 @@ def example_geo_geodetic_options() -> None:
     assert opts.ecef_crs == "EPSG:4978"
 
 
+def example_geo_enu_options() -> None:
+    origin = LocalOrigin(45.0, -75.0, 100.0)
+    opts = ENUOptions(origin=origin, output_frame="site_enu")
+    assert opts.origin == origin
+    assert opts.output_frame == "site_enu"
+
+
+def example_geo_geodesic_options() -> None:
+    opts = GeodesicOptions(method="local_enu", local_origin=LocalOrigin(45.0, -75.0))
+    assert opts.method == "local_enu"
+    assert opts.local_origin is not None
+
+
+def example_geo_interpolation_options() -> None:
+    opts = GeodeticInterpolationOptions(method="ecef_linear", query_dim="target")
+    assert opts.method == "ecef_linear"
+    assert opts.query_dim == "target"
+
+
 def example_geo_geodetic_from_lla() -> None:
     ds = xr.Dataset(
         {"position": (("sample", "lla"), np.asarray([[45.0, -75.0, 100.0]], dtype=float))},
@@ -928,6 +954,92 @@ def example_geo_geodetic_conversion() -> None:
     assert roundtrip.unsafe_data.attrs["tal"]["ext"]["geo"]["longitude_wrap"] == "[0, 360)"
     np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
     np.testing.assert_allclose(via_module.unsafe_data["position"], lla.unsafe_data["position"])
+
+
+def example_geo_enu_conversion() -> None:
+    ds = xr.Dataset(
+        {"position": (("sample", "lla"), np.asarray([[0.0, 1.0, 0.0]], dtype=float))},
+        coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+    origin = LocalOrigin(0.0, 0.0, 0.0)
+    opts = ENUOptions(origin=origin, output_frame="site_enu")
+    with (
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch(
+            "tal.geo.conversion.transform_lla_to_ecef",
+            lambda lat, lon, alt, crs, ecef_crs, owner: (lat, lon, alt),
+        ),
+        patch(
+            "tal.geo.conversion.transform_ecef_to_lla",
+            lambda x, y, z, crs, ecef_crs, owner: (x, y, z),
+        ),
+        patch(
+            "tal.geo.local.transform_lla_to_ecef",
+            lambda lat, lon, alt, crs, ecef_crs, owner: (lat, lon, alt),
+        ),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        ecef = lla.to_ecef()
+        enu = lla.to_enu(opts=opts)
+        enu_from_ecef = ecef.geo.to_enu(origin=origin)
+        ecef_roundtrip = enu.geo.to_ecef()
+        lla_roundtrip = ecef.geo.to_lla()
+    assert list(enu.unsafe_data["axis"].values) == ["x", "y", "z"]
+    assert enu.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "enu"
+    assert enu.unsafe_data.attrs["tal"]["ext"]["geo"]["origin"]["storage"] == "inline"
+    np.testing.assert_allclose(enu.unsafe_data["position"], enu_from_ecef.unsafe_data["position"])
+    np.testing.assert_allclose(ecef_roundtrip.unsafe_data["position"], ecef.unsafe_data["position"])
+    np.testing.assert_allclose(lla_roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+
+
+def example_geo_distance_bearing() -> None:
+    ds = xr.Dataset(
+        {"position": (("sample", "lla"), np.asarray([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=float))},
+        coords={"sample": [0, 1], "lla": ["lat", "lon", "alt"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+
+    def inverse(lat1, lon1, lat2, lon2, crs, owner):
+        shape = np.broadcast_shapes(np.shape(lat1), np.shape(lon1), np.shape(lat2), np.shape(lon2))
+        return np.full(shape, 90.0), np.full(shape, -90.0), np.abs(lon2 - lon1) * 1000.0
+
+    with (
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch("tal.geo.distance.geod_inverse", inverse),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        distance = lla.distance_to(lla)
+        bearing = lla.initial_bearing_to(lla)
+    assert tuple(distance.unsafe_data.attrs["tal"]["core"]["roles"]["core_dims"]) == ()
+    assert "distance_m" in distance.unsafe_data.data_vars
+    assert "initial_bearing_deg" in bearing.unsafe_data.data_vars
+
+
+def example_geo_interpolation() -> None:
+    ds = xr.Dataset(
+        {
+            "position": (
+                ("sample", "lla"),
+                np.asarray([[0.0, 170.0, 0.0], [0.0, 190.0, 10.0]], dtype=float),
+            )
+        },
+        coords={"sample": [0, 1], "lla": ["lat", "lon", "alt"], "time_s": ("sample", [0.0, 10.0])},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), param_coord="time_s", validate=True)
+
+    def interpolate(lat1, lon1, lat2, lon2, alpha, crs, owner):
+        return lat1 + (lat2 - lat1) * alpha, lon1 + (lon2 - lon1) * alpha
+
+    with patch("tal.geo.interpolation.geod_interpolate", interpolate):
+        lla = GeodeticPosition.from_lla(ao)
+        out = lla.param.at([5.0], on="time_s")
+        nearest = lla.param.resample_to([6.0], on="time_s", opts=GeodeticInterpolationOptions(method="nearest"))
+        like = lla.param.interp_like(nearest, on="time_s", opts=GeodeticInterpolationOptions(method="nearest"))
+    assert isinstance(out, GeodeticPosition)
+    assert isinstance(nearest, GeodeticPosition)
+    assert isinstance(like, GeodeticPosition)
+    assert out.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"] == "geodetic_position"
 
 
 def example_io_read_csv_logs() -> None:
@@ -1380,8 +1492,14 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "SPATIAL-ACCELERATION-COMPONENTS": example_spatial_acceleration_components,
     "SPATIAL-FRAME-MOTION-METADATA": example_spatial_frame_motion_metadata,
     "GEO-GEODETIC-OPTIONS": example_geo_geodetic_options,
+    "GEO-ENU-OPTIONS": example_geo_enu_options,
+    "GEO-GEODESIC-OPTIONS": example_geo_geodesic_options,
+    "GEO-INTERPOLATION-OPTIONS": example_geo_interpolation_options,
     "GEO-GEODETIC-FROM-LLA": example_geo_geodetic_from_lla,
     "GEO-GEODETIC-CONVERSION": example_geo_geodetic_conversion,
+    "GEO-ENU-CONVERSION": example_geo_enu_conversion,
+    "GEO-DISTANCE-BEARING": example_geo_distance_bearing,
+    "GEO-INTERPOLATION": example_geo_interpolation,
     "IO-READ-CSV-LOGS": example_io_read_csv_logs,
     "IO-ROUNDTRIP-SURFACE": example_io_roundtrip_surface,
     "IO-ROS-OPTIONAL-SURFACE": example_io_ros_optional_surface,

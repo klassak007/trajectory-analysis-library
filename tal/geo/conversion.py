@@ -20,7 +20,7 @@ from .backends import transform_ecef_to_lla, transform_lla_to_ecef
 from .metadata import (
     normalize_geodetic_metadata,
     options_from_ecef_provenance,
-    read_geo_block,
+    read_cartesian_geo_block_if_present,
     set_ecef_metadata,
 )
 from .options import GeodeticOptions, coerce_geodetic_options
@@ -222,10 +222,10 @@ def to_ecef(position: "GeodeticPosition", *, opts: GeodeticOptions | None = None
 
 
 def _options_for_ecef_source(position: Position, opts: GeodeticOptions | None, *, owner: str) -> GeodeticOptions:
+    block = read_cartesian_geo_block_if_present(position.unsafe_data, system="ecef", owner=owner)
     if opts is not None:
         return coerce_geodetic_options(opts, owner=owner, validate_crs=True)
-    block = read_geo_block(position.unsafe_data, owner=owner)
-    if block is None or block.get("kind") != "ecef_position":
+    if block is None:
         return coerce_geodetic_options(None, owner=owner, validate_crs=True)
     provenance = options_from_ecef_provenance(block, owner=owner)
     parent, _ = get_frames(position.unsafe_data)
@@ -265,9 +265,10 @@ def from_ecef(value: object, *, opts: GeodeticOptions | None = None, validate: b
         If ``value`` cannot be coerced to ``Position`` or ``opts`` is not
         ``GeodeticOptions`` or ``None``.
     ValueError
-        If the ECEF payload has malformed TAL roles or core labels, option
-        values or CRS identifiers are unsupported, or ``strict_frame=True``
-        rejects incompatible frame metadata.
+        If the ECEF payload has malformed TAL roles or core labels, present
+        geo provenance is non-ECEF, option values or CRS identifiers are
+        unsupported, or ``strict_frame=True`` rejects incompatible frame
+        metadata.
 
     Notes
     -----

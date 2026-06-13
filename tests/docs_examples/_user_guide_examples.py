@@ -19,7 +19,7 @@ from tal.core.event_ops import (
 )
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds
-from tal.geo import GeodeticPosition
+from tal.geo import ENUOptions, GeodeticInterpolationOptions, GeodesicOptions, GeodeticPosition, LocalOrigin
 from tal.linalg import Matrix, Vector, Vector3, add, dot, inv, matmul, norm, pinv, solve, sub
 from tal.spatial import Pose, Position, Rotation
 
@@ -487,6 +487,85 @@ def example_guide_geo_conversion() -> None:
     np.testing.assert_allclose(via_module.unsafe_data["position"], lla.unsafe_data["position"])
 
 
+def example_guide_geo_enu() -> None:
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"position": (("sample", "lla"), np.array([[45.0, -75.0, 100.0]]))},
+            coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla",),
+        validate=True,
+    )
+    with (
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch(
+            "tal.geo.conversion.transform_lla_to_ecef",
+            lambda lat, lon, alt, crs, ecef_crs, owner: (lat, lon, alt),
+        ),
+        patch(
+            "tal.geo.local.transform_lla_to_ecef",
+            lambda lat, lon, alt, crs, ecef_crs, owner: (lat, lon, alt),
+        ),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        origin = LocalOrigin(45.0, -75.0, 100.0)
+        enu = lla.to_enu(opts=ENUOptions(origin=origin, output_frame="site_enu"))
+        ecef_again = enu.geo.to_ecef()
+    assert enu.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "enu"
+    assert ecef_again.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
+
+
+def example_guide_geo_distance() -> None:
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"position": (("sample", "lla"), np.array([[45.0, -75.0, 100.0]]))},
+            coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla",),
+        validate=True,
+    )
+
+    def inverse(lat1, lon1, lat2, lon2, crs, owner):
+        shape = np.broadcast_shapes(np.shape(lat1), np.shape(lon1), np.shape(lat2), np.shape(lon2))
+        return np.full(shape, 90.0), np.full(shape, -90.0), np.zeros(shape)
+
+    with (
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch("tal.geo.distance.geod_inverse", inverse),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        distance = lla.distance_to(lla)
+        bearing = lla.initial_bearing_to(lla, opts=GeodesicOptions())
+    assert "distance_m" in distance.unsafe_data.data_vars
+    assert "initial_bearing_deg" in bearing.unsafe_data.data_vars
+
+
+def example_guide_geo_interpolation() -> None:
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"position": (("sample", "lla"), np.array([[45.0, -75.0, 100.0]]))},
+            coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla",),
+        validate=True,
+    )
+
+    def interpolate(lat1, lon1, lat2, lon2, alpha, crs, owner):
+        return lat1, lon1
+
+    with patch("tal.geo.interpolation.geod_interpolate", interpolate):
+        lla = GeodeticPosition.from_lla(ao)
+        interpolated = lla.param.at([0.0], on="sample", opts=GeodeticInterpolationOptions())
+        nearest = lla.param.resample_to([0.0], on="sample", opts=GeodeticInterpolationOptions(method="nearest"))
+        matched = lla.param.interp_like(nearest, on="sample", opts=GeodeticInterpolationOptions(method="nearest"))
+    assert isinstance(interpolated, GeodeticPosition)
+    assert isinstance(nearest, GeodeticPosition)
+    assert isinstance(matched, GeodeticPosition)
+
+
 def example_guide_frames_basic() -> None:
     with FrameGraph() as graph:
         world = graph.get_or_create_frame("world")
@@ -559,6 +638,9 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-SPATIAL-POSE": example_guide_spatial_pose,
     "UG-GEO-LLA": example_guide_geo_lla,
     "UG-GEO-CONVERSION": example_guide_geo_conversion,
+    "UG-GEO-ENU": example_guide_geo_enu,
+    "UG-GEO-DISTANCE": example_guide_geo_distance,
+    "UG-GEO-INTERPOLATION": example_guide_geo_interpolation,
     "UG-FRAMES-BASIC": example_guide_frames_basic,
     "UG-VIEWING-SCHEMA": example_guide_viewing_schema,
 }

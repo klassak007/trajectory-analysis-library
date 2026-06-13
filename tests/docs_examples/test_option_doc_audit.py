@@ -71,7 +71,7 @@ def _geo_option_items():
 
 
 def test_option_checklist_scope_is_frozen() -> None:
-    assert CURATED_OPTION_AUDIT_COUNT == 108
+    assert CURATED_OPTION_AUDIT_COUNT == 119
     derived = _option_symbol_rows_from_manifest()
     expected = sorted((item.symbol, item.option_param) for item in CURATED_OPTION_AUDIT_CHECKLIST)
     assert derived == expected
@@ -141,9 +141,17 @@ def test_geo_option_checklist_claims_match_actual_docstrings() -> None:
         if item.has_examples and ">>>" not in examples:
             failures.append(f"{item.symbol}: checklist claims runnable Examples but no >>> snippet exists")
         if item.has_nondefault_opts_example:
-            has_nondefault_opts = re.search(r"GeodeticOptions\([^)]*=", examples, flags=re.S) is not None
+            if "GeodeticInterpolationOptions" in item.option_type:
+                option_class = "GeodeticInterpolationOptions"
+            elif "GeodesicOptions" in item.option_type:
+                option_class = "GeodesicOptions"
+            elif "ENUOptions" in item.option_type:
+                option_class = "ENUOptions"
+            else:
+                option_class = "GeodeticOptions"
+            has_nondefault_opts = re.search(rf"{option_class}\([^)]*=", examples, flags=re.S) is not None
             if not has_nondefault_opts or "opts=opts" not in examples:
-                failures.append(f"{item.symbol}: Examples must pass non-default GeodeticOptions via opts=opts")
+                failures.append(f"{item.symbol}: Examples must pass non-default {option_class} via opts=opts")
     assert not failures, "\n".join(failures)
 
 
@@ -166,4 +174,18 @@ def test_geo_conversion_docstrings_document_expected_failure_families() -> None:
         for family, terms in expected_terms.items():
             if not all(term in raises for term in terms):
                 failures.append(f"{symbol}: Raises section does not document {family}")
+    assert not failures, "\n".join(failures)
+
+
+def test_geo_from_ecef_docstrings_document_non_ecef_provenance_rejection() -> None:
+    index = {record.symbol: record for record in iter_curated_public_symbols()}
+    symbols = {
+        "tal.geo.from_ecef",
+        "tal.geo.geodetic.GeodeticPosition.from_ecef",
+    }
+    failures: list[str] = []
+    for symbol in sorted(symbols):
+        raises = _extract_section(_docstring(index[symbol].obj), "Raises").lower().replace("``", "")
+        if "non-ecef" not in raises or "provenance" not in raises:
+            failures.append(f"{symbol}: Raises section must document non-ECEF provenance rejection")
     assert not failures, "\n".join(failures)
