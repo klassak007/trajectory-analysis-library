@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
 import numpy as np
 import xarray as xr
@@ -14,6 +15,7 @@ from tal.core.event_ops import Condition, WhenOptions
 from tal.core.schema_read import read_roles
 from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds, snapshot_to_networkx
 from tal.io import CsvIngestOptions, read_csv_logs
+from tal.geo import GeodeticOptions, GeodeticPosition
 from tal.linalg import (
     Array,
     Matrix,
@@ -875,6 +877,59 @@ def example_spatial_frame_motion_metadata() -> None:
     assert status == "inertial"
 
 
+def example_geo_geodetic_options() -> None:
+    opts = GeodeticOptions()
+    assert opts.datum == "WGS84"
+    assert opts.crs == "EPSG:4979"
+    assert opts.ecef_crs == "EPSG:4978"
+
+
+def example_geo_geodetic_from_lla() -> None:
+    ds = xr.Dataset(
+        {"position": (("sample", "lla"), np.asarray([[45.0, -75.0, 100.0]], dtype=float))},
+        coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+    opts = GeodeticOptions(longitude_wrap="[0, 360)")
+    with patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected):
+        lla = GeodeticPosition.from_lla(ao, opts=opts)
+    geo = lla.unsafe_data.attrs["tal"]["ext"]["geo"]
+    assert geo["kind"] == "geodetic_position"
+    assert geo["longitude_wrap"] == "[0, 360)"
+    assert list(lla.unsafe_data["lla"].values) == ["lat", "lon", "alt"]
+
+
+def example_geo_geodetic_conversion() -> None:
+    from tal.geo import from_ecef as geo_from_ecef
+
+    ds = xr.Dataset(
+        {"position": (("sample", "lla"), np.asarray([[45.0, -75.0, 100.0]], dtype=float))},
+        coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+    opts = GeodeticOptions(longitude_wrap="[0, 360)")
+    with (
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch(
+            "tal.geo.conversion.transform_lla_to_ecef",
+            lambda lat, lon, alt, crs, ecef_crs, owner: (lat + 1.0, lon + 2.0, alt + 3.0),
+        ),
+        patch(
+            "tal.geo.conversion.transform_ecef_to_lla",
+            lambda x, y, z, crs, ecef_crs, owner: (x - 1.0, y - 2.0, z - 3.0),
+        ),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        ecef = lla.to_ecef(opts=opts)
+        roundtrip = GeodeticPosition.from_ecef(ecef, opts=opts)
+        via_module = geo_from_ecef(ecef, opts=opts)
+    assert list(ecef.unsafe_data["axis"].values) == ["x", "y", "z"]
+    assert list(roundtrip.unsafe_data["lla"].values) == ["lat", "lon", "alt"]
+    assert roundtrip.unsafe_data.attrs["tal"]["ext"]["geo"]["longitude_wrap"] == "[0, 360)"
+    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+    np.testing.assert_allclose(via_module.unsafe_data["position"], lla.unsafe_data["position"])
+
+
 def example_io_read_csv_logs() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "run.csv"
@@ -1324,6 +1379,9 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "SPATIAL-VELOCITY-COMPONENTS": example_spatial_velocity_components,
     "SPATIAL-ACCELERATION-COMPONENTS": example_spatial_acceleration_components,
     "SPATIAL-FRAME-MOTION-METADATA": example_spatial_frame_motion_metadata,
+    "GEO-GEODETIC-OPTIONS": example_geo_geodetic_options,
+    "GEO-GEODETIC-FROM-LLA": example_geo_geodetic_from_lla,
+    "GEO-GEODETIC-CONVERSION": example_geo_geodetic_conversion,
     "IO-READ-CSV-LOGS": example_io_read_csv_logs,
     "IO-ROUNDTRIP-SURFACE": example_io_roundtrip_surface,
     "IO-ROS-OPTIONAL-SURFACE": example_io_ros_optional_surface,

@@ -55,6 +55,7 @@ viz = [
 ros = ["rosbags"]
 netcdf = ["netCDF4>=1.7"]
 numba = ["numba>=0.65.1"]
+geo = ["pyproj>=3.7"]
 notebooks = [
     "ipykernel>=6.29",
     "jupyterlab>=4.3",
@@ -72,13 +73,13 @@ docs = [
 ]
 test = [
     "pytest>=8.4",
-    "tal[docs,frames,viz]",
+    "tal[docs,frames,geo,viz]",
 ]
 dev = [
     "build>=1.4",
     "tal[notebooks,test]",
 ]
-full = ["tal[frames,netcdf,notebooks,ros,viz]"]
+full = ["tal[frames,geo,netcdf,notebooks,ros,viz]"]
 
 # Packaging: only ship the `tal` Python package (exclude non-package top-level dirs like `contracts/`).
 [tool.setuptools.packages.find]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from unittest.mock import patch
 
 import numpy as np
 import xarray as xr
@@ -18,6 +19,7 @@ from tal.core.event_ops import (
 )
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds
+from tal.geo import GeodeticPosition
 from tal.linalg import Matrix, Vector, Vector3, add, dot, inv, matmul, norm, pinv, solve, sub
 from tal.spatial import Pose, Position, Rotation
 
@@ -438,6 +440,53 @@ def example_guide_spatial_pose() -> None:
     assert pose_rs.unsafe_data.sizes["sample"] == 5
 
 
+def example_guide_geo_lla() -> None:
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"position": (("sample", "lla"), np.array([[45.0, -75.0, 100.0]]))},
+            coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla",),
+        validate=True,
+    )
+    lla = GeodeticPosition.from_lla(ao)
+    geo_block = lla.unsafe_data.attrs["tal"]["ext"]["geo"]
+    assert geo_block["kind"] == "geodetic_position"
+
+
+def example_guide_geo_conversion() -> None:
+    from tal.geo import from_ecef as geo_from_ecef
+
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"position": (("sample", "lla"), np.array([[45.0, -75.0, 100.0]]))},
+            coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla",),
+        validate=True,
+    )
+    with (
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch(
+            "tal.geo.conversion.transform_lla_to_ecef",
+            lambda lat, lon, alt, crs, ecef_crs, owner: (lat + 1.0, lon + 2.0, alt + 3.0),
+        ),
+        patch(
+            "tal.geo.conversion.transform_ecef_to_lla",
+            lambda x, y, z, crs, ecef_crs, owner: (x - 1.0, y - 2.0, z - 3.0),
+        ),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        ecef = lla.to_ecef()
+        roundtrip = GeodeticPosition.from_ecef(ecef)
+        via_module = geo_from_ecef(ecef)
+    assert list(ecef.unsafe_data["axis"].values) == ["x", "y", "z"]
+    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+    np.testing.assert_allclose(via_module.unsafe_data["position"], lla.unsafe_data["position"])
+
+
 def example_guide_frames_basic() -> None:
     with FrameGraph() as graph:
         world = graph.get_or_create_frame("world")
@@ -508,6 +557,8 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-LINALG-BASIC": example_guide_linalg_basic,
     "UG-NUMPY-UFUNCS": example_guide_numpy_ufuncs,
     "UG-SPATIAL-POSE": example_guide_spatial_pose,
+    "UG-GEO-LLA": example_guide_geo_lla,
+    "UG-GEO-CONVERSION": example_guide_geo_conversion,
     "UG-FRAMES-BASIC": example_guide_frames_basic,
     "UG-VIEWING-SCHEMA": example_guide_viewing_schema,
 }

@@ -23,6 +23,7 @@ events
 linalg
 numpy
 spatial
+geo
 frames
 viewing
 ```

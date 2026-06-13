@@ -15,6 +15,22 @@ def _docstring(obj: object) -> str:
     return doc if isinstance(doc, str) else ""
 
 
+def _extract_section(doc: str, section: str) -> str:
+    match = re.search(
+        rf"(?ms)^\s*{re.escape(section)}\s*\n\s*-{{3,}}\s*\n(?P<body>.*?)(?:\n\s*[A-Z][A-Za-z ]*\s*\n\s*-{{3,}}\s*\n|\Z)",
+        doc,
+    )
+    return "" if match is None else match.group("body")
+
+
+def _has_section(doc: str, section: str) -> bool:
+    return bool(_extract_section(doc, section).strip())
+
+
+def _extract_examples_block(doc: str) -> str:
+    return _extract_section(doc, "Examples")
+
+
 def _extract_param_description(doc: str, param_name: str) -> str:
     lines = doc.splitlines()
     for idx, line in enumerate(lines):
@@ -50,8 +66,12 @@ def _option_symbol_rows_from_manifest() -> list[tuple[str, str]]:
     return sorted(rows)
 
 
+def _geo_option_items():
+    return tuple(item for item in CURATED_OPTION_AUDIT_CHECKLIST if item.symbol.startswith("tal.geo."))
+
+
 def test_option_checklist_scope_is_frozen() -> None:
-    assert CURATED_OPTION_AUDIT_COUNT == 104
+    assert CURATED_OPTION_AUDIT_COUNT == 108
     derived = _option_symbol_rows_from_manifest()
     expected = sorted((item.symbol, item.option_param) for item in CURATED_OPTION_AUDIT_CHECKLIST)
     assert derived == expected
@@ -96,4 +116,54 @@ def test_option_docstrings_have_non_placeholder_inline_option_summaries() -> Non
         field_tokens = re.findall(r"``[^`]+``", description)
         if len(field_tokens) < 2:
             failures.append(f"{item.symbol}: option summary lacks concrete option fields")
+    assert not failures, "\n".join(failures)
+
+
+def test_geo_option_checklist_claims_match_actual_docstrings() -> None:
+    index = {record.symbol: record for record in iter_curated_public_symbols()}
+    failures: list[str] = []
+    section_flags = (
+        ("Parameters", "has_parameters"),
+        ("Returns", "has_returns"),
+        ("Raises", "has_raises"),
+        ("Notes", "has_notes"),
+        ("Examples", "has_examples"),
+    )
+    for item in _geo_option_items():
+        doc = _docstring(index[item.symbol].obj)
+        for section, flag in section_flags:
+            if getattr(item, flag) and not _has_section(doc, section):
+                failures.append(f"{item.symbol}: checklist claims {section} but docstring lacks it")
+        description = _extract_param_description(doc, item.option_param)
+        if item.has_opts_entry and not description:
+            failures.append(f"{item.symbol}: checklist claims `{item.option_param}` entry but docstring lacks it")
+        examples = _extract_examples_block(doc)
+        if item.has_examples and ">>>" not in examples:
+            failures.append(f"{item.symbol}: checklist claims runnable Examples but no >>> snippet exists")
+        if item.has_nondefault_opts_example:
+            has_nondefault_opts = re.search(r"GeodeticOptions\([^)]*=", examples, flags=re.S) is not None
+            if not has_nondefault_opts or "opts=opts" not in examples:
+                failures.append(f"{item.symbol}: Examples must pass non-default GeodeticOptions via opts=opts")
+    assert not failures, "\n".join(failures)
+
+
+def test_geo_conversion_docstrings_document_expected_failure_families() -> None:
+    index = {record.symbol: record for record in iter_curated_public_symbols()}
+    conversion_symbols = {
+        "tal.geo.from_ecef",
+        "tal.geo.geodetic.GeodeticPosition.from_ecef",
+        "tal.geo.geodetic.GeodeticPosition.to_ecef",
+    }
+    expected_terms = {
+        "missing optional dependency": ("pyproj", "tal[geo]"),
+        "unsupported CRS": ("unsupported", "crs"),
+        "malformed input": ("malformed", "roles", "core"),
+        "strict-frame mismatch": ("strict_frame", "frame"),
+    }
+    failures: list[str] = []
+    for symbol in sorted(conversion_symbols):
+        raises = _extract_section(_docstring(index[symbol].obj), "Raises").lower().replace("``", "")
+        for family, terms in expected_terms.items():
+            if not all(term in raises for term in terms):
+                failures.append(f"{symbol}: Raises section does not document {family}")
     assert not failures, "\n".join(failures)

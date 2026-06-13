@@ -1,6 +1,7 @@
 from . import frames
 from . import io
 from . import spatial
+from . import geo
 from . import catalog
 from . import viz
 from . import ufuncs
@@ -30,5 +31,6 @@ __all__ = [
     "merge_schema",
     "validate_schema",
     "spatial",
+    "geo",
     "ufuncs",
 ]

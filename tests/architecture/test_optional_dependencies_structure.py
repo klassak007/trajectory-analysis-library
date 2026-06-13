@@ -104,6 +104,17 @@ def test_numba_opt_001_numba_extra_is_optional_only() -> None:
     assert all("tal[numba]" not in dep for dep in optional["full"])
 
 
+def test_geo_opt_001_geo_extra_is_optional_and_test_enabled() -> None:
+    """ID: GEO_CORE_G1_011_geo_optional_dependency_group_declared."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    deps = pyproject["project"]["dependencies"]
+    optional = pyproject["project"]["optional-dependencies"]
+    assert optional["geo"] == ["pyproj>=3.7"]
+    assert all(not dep.startswith("pyproj") for dep in deps)
+    assert "tal[docs,frames,geo,viz]" in optional["test"]
+    assert "tal[frames,geo,netcdf,notebooks,ros,viz]" in optional["full"]
+
+
 def test_numba_arch_001_no_unguarded_numba_imports_in_core_import_path() -> None:
     """ID: NUMBA_ARCH_001_no_unguarded_numba_imports_in_core_import_path."""
     offenders = []

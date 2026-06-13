@@ -24,6 +24,7 @@ pose
 velocity
 acceleration
 path_solve
+geodetic
 ```
 
 ```{toctree}
