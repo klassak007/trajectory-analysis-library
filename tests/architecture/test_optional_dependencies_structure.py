@@ -111,8 +111,20 @@ def test_geo_opt_001_geo_extra_is_optional_and_test_enabled() -> None:
     optional = pyproject["project"]["optional-dependencies"]
     assert optional["geo"] == ["pyproj>=3.7"]
     assert all(not dep.startswith("pyproj") for dep in deps)
-    assert "tal[docs,frames,geo,viz]" in optional["test"]
-    assert "tal[frames,geo,netcdf,notebooks,ros,viz]" in optional["full"]
+    assert "tal[astro,docs,frames,geo,viz]" in optional["test"]
+    assert "tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]" in optional["full"]
+
+
+def test_astro_opt_001_astro_and_spice_extras_are_optional() -> None:
+    """ID: ASTRO_CORE_A1_008_astro_optional_dependency_groups_declared."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    deps = pyproject["project"]["dependencies"]
+    optional = pyproject["project"]["optional-dependencies"]
+    assert optional["astro"] == ["tal[geo]", "astropy>=7"]
+    assert optional["spice"] == ["tal[astro]", "spiceypy>=8"]
+    assert all(not dep.startswith(("astropy", "spiceypy")) for dep in deps)
+    assert "tal[astro,docs,frames,geo,viz]" in optional["test"]
+    assert "tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]" in optional["full"]
 
 
 def test_numba_arch_001_no_unguarded_numba_imports_in_core_import_path() -> None:

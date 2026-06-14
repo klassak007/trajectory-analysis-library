@@ -28,6 +28,7 @@ USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
         "UG-GEO-INTERPOLATION",
         "UG-GEO-CRS",
     ),
+    "astro": ("UG-ASTRO-OPTIONS", "UG-ASTRO-DIRECTION"),
     "frames": ("UG-FRAMES-BASIC",),
     "viewing": ("UG-VIEWING-SCHEMA",),
 }

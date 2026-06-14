@@ -4,12 +4,14 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+from typing import get_args
 from unittest.mock import patch
 
 import numpy as np
 import xarray as xr
 
 from tal.catalog import Catalog
+from tal.astro import AstroBackend, AstroIERSOptions, AstroOptions, AstroTimeOptions, TopocentricDirection
 from tal.core import AnalysisObject, GroupByOptions, SequenceConcatOptions, concat_sequence
 from tal.core.component_ops import ComponentRegistryOptions, ComponentSpec
 from tal.core.event_ops import Condition, WhenOptions
@@ -1102,6 +1104,34 @@ def example_geo_crs_transform() -> None:
     assert projected.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"] == "projected_position"
 
 
+def example_astro_options() -> None:
+    backend: AstroBackend = "astropy"
+    opts = AstroOptions(
+        backend=backend,
+        time=AstroTimeOptions(scale="tt", source="utc"),
+        iers=AstroIERSOptions(auto_download=False),
+    )
+    assert get_args(AstroBackend) == ("astropy", "spice")
+    assert opts.backend == "astropy"
+    assert opts.time is not None
+    assert opts.time.scale == "tt"
+    assert opts.time.source == "utc"
+    assert opts.iers is not None
+    assert opts.iers.degraded_accuracy == "error"
+
+
+def example_astro_topocentric_direction() -> None:
+    ds = xr.Dataset(
+        {"direction": (("sample", "enu"), np.asarray([[1.0, 0.0, 0.0]], dtype=float))},
+        coords={"sample": [0], "enu": ["east", "north", "up"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
+    direction = TopocentricDirection(ao)
+    astro = direction.unsafe_data.attrs["tal"]["ext"]["astro"]
+    assert astro["kind"] == "topocentric_direction"
+    assert set(direction.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
+
+
 def example_io_read_csv_logs() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "run.csv"
@@ -1561,6 +1591,8 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "GEO-DISTANCE-BEARING": example_geo_distance_bearing,
     "GEO-INTERPOLATION": example_geo_interpolation,
     "GEO-CRS-TRANSFORM": example_geo_crs_transform,
+    "ASTRO-OPTIONS": example_astro_options,
+    "ASTRO-TOPOCENTRIC-DIRECTION": example_astro_topocentric_direction,
     "IO-READ-CSV-LOGS": example_io_read_csv_logs,
     "IO-ROUNDTRIP-SURFACE": example_io_roundtrip_surface,
     "IO-ROS-OPTIONAL-SURFACE": example_io_ros_optional_surface,

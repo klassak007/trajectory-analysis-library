@@ -8,6 +8,7 @@ import numpy as np
 import xarray as xr
 
 from tal import ufuncs
+from tal.astro import AstroOptions, AstroTimeOptions, TopocentricDirection
 from tal.core import AnalysisObject, ParamEvalOptions, ParamSyncOptions, synchronize
 from tal.core.event_ops import (
     AroundOptions,
@@ -621,6 +622,27 @@ def example_guide_geo_crs() -> None:
     assert isinstance(roundtrip, GeodeticPosition)
 
 
+def example_guide_astro_foundation() -> None:
+    opts = AstroOptions(time=AstroTimeOptions(scale="utc", source="utc_time"))
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"direction": (("sample", "enu"), np.array([[1.0, 0.0, 0.0]]))},
+            coords={"sample": [0], "enu": ["east", "north", "up"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("enu",),
+        validate=True,
+    )
+    direction = TopocentricDirection(ao)
+    altitude = direction.unsafe_data["altitude_deg"]
+    azimuth = direction.unsafe_data["azimuth_deg"]
+    assert opts.backend == "astropy"
+    assert opts.time is not None
+    assert opts.time.source == "utc_time"
+    assert altitude.dims == ("sample",)
+    assert azimuth.dims == ("sample",)
+
+
 def example_guide_frames_basic() -> None:
     with FrameGraph() as graph:
         world = graph.get_or_create_frame("world")
@@ -697,6 +719,8 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-GEO-DISTANCE": example_guide_geo_distance,
     "UG-GEO-INTERPOLATION": example_guide_geo_interpolation,
     "UG-GEO-CRS": example_guide_geo_crs,
+    "UG-ASTRO-OPTIONS": example_guide_astro_foundation,
+    "UG-ASTRO-DIRECTION": example_guide_astro_foundation,
     "UG-FRAMES-BASIC": example_guide_frames_basic,
     "UG-VIEWING-SCHEMA": example_guide_viewing_schema,
 }

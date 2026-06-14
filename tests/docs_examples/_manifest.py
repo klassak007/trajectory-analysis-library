@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import importlib
 import inspect
 from types import FunctionType
-from typing import Any
+from typing import Any, Literal, get_origin
 
 
 @dataclass(frozen=True)
@@ -231,6 +231,13 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.geo.from_ecef",
         "tal.geo.transform_crs",
     ),
+    "astro": (
+        "tal.astro.options.AstroBackend",
+        "tal.astro.options.AstroIERSOptions",
+        "tal.astro.options.AstroOptions",
+        "tal.astro.options.AstroTimeOptions",
+        "tal.astro.direction.TopocentricDirection",
+    ),
     "frames": (
         "tal.frames.registry.FrameGraph.freeze",
         "tal.frames.registry.FrameGraph.frozen",
@@ -302,6 +309,7 @@ CURATED_SCOPE_COUNTS: dict[str, int] = {
     "linalg": 30,
     "spatial": 78,
     "geo": 25,
+    "astro": 5,
     "frames": 19,
     "io": 9,
     "catalog": 10,
@@ -492,6 +500,11 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.geo.projected.ProjectedPosition.to_crs": ("GEO-CRS-TRANSFORM",),
     "tal.geo.from_ecef": ("GEO-GEODETIC-CONVERSION",),
     "tal.geo.transform_crs": ("GEO-CRS-TRANSFORM",),
+    "tal.astro.options.AstroBackend": ("ASTRO-OPTIONS",),
+    "tal.astro.options.AstroIERSOptions": ("ASTRO-OPTIONS",),
+    "tal.astro.options.AstroOptions": ("ASTRO-OPTIONS",),
+    "tal.astro.options.AstroTimeOptions": ("ASTRO-OPTIONS",),
+    "tal.astro.direction.TopocentricDirection": ("ASTRO-TOPOCENTRIC-DIRECTION",),
     "tal.io.csv_logs.read_csv_logs": ("IO-READ-CSV-LOGS",),
     "tal.frames.registry.FrameGraph.freeze": ("FRAMES-GRAPH-MUTATION",),
     "tal.frames.registry.FrameGraph.get_frame": ("FRAMES-GRAPH-MUTATION",),
@@ -642,6 +655,10 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.geo.projected.ProjectedPosition.to_crs": ("GEO-CRS-TRANSFORM",),
     "tal.geo.from_ecef": ("GEO-GEODETIC-CONVERSION",),
     "tal.geo.transform_crs": ("GEO-CRS-TRANSFORM",),
+    "tal.astro.options.AstroIERSOptions": ("ASTRO-OPTIONS",),
+    "tal.astro.options.AstroOptions": ("ASTRO-OPTIONS",),
+    "tal.astro.options.AstroTimeOptions": ("ASTRO-OPTIONS",),
+    "tal.astro.direction.TopocentricDirection": ("ASTRO-TOPOCENTRIC-DIRECTION",),
     "tal.catalog.catalog.Catalog": ("CATALOG-EXTRACT",),
     "tal.catalog.catalog.Catalog.query": ("CATALOG-EXTRACT",),
     "tal.catalog.catalog.Catalog.extract": ("CATALOG-EXTRACT",),
@@ -733,6 +750,8 @@ def _owner_class_symbol(symbol: str) -> str | None:
 
 
 def _symbol_kind(obj: object, owner_class: str | None) -> str:
+    if get_origin(obj) is Literal:
+        return "type_alias"
     if inspect.isclass(obj):
         return "class"
     if isinstance(obj, FunctionType):

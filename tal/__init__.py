@@ -2,6 +2,7 @@ from . import frames
 from . import io
 from . import spatial
 from . import geo
+from . import astro
 from . import catalog
 from . import viz
 from . import ufuncs
@@ -32,5 +33,6 @@ __all__ = [
     "validate_schema",
     "spatial",
     "geo",
+    "astro",
     "ufuncs",
 ]

@@ -71,7 +71,7 @@ def _numba_autosummary_symbols() -> tuple[str, ...]:
 
 
 def test_curated_scope_counts_match_plan() -> None:
-    expected_total = 261
+    expected_total = 266
     observed = curated_scope_counts()
     assert observed == CURATED_SCOPE_COUNTS
     assert sum(observed.values()) == expected_total
@@ -80,6 +80,8 @@ def test_curated_scope_counts_match_plan() -> None:
 def test_scoped_public_symbols_have_docstrings() -> None:
     missing: list[str] = []
     for record in iter_scoped_public_symbols():
+        if record.kind == "type_alias":
+            continue
         if not _docstring(record.obj).strip():
             missing.append(record.symbol)
     assert not missing, f"Missing docstrings for public scoped symbols: {missing!r}"
@@ -88,6 +90,8 @@ def test_scoped_public_symbols_have_docstrings() -> None:
 def test_scoped_docstrings_have_informative_summaries() -> None:
     failures: list[str] = []
     for record in iter_scoped_public_symbols():
+        if record.kind == "type_alias":
+            continue
         doc = _docstring(record.obj).strip()
         if not doc:
             continue
@@ -114,6 +118,8 @@ def test_scoped_docstrings_use_numpy_style_sections() -> None:
         r"(?m)^\s*Example:\s*$",
     )
     for record in iter_scoped_public_symbols():
+        if record.kind == "type_alias":
+            continue
         doc = _docstring(record.obj)
         for pattern in forbidden:
             if re.search(pattern, doc):
@@ -128,6 +134,8 @@ def test_required_docstring_sections_present() -> None:
         record = index.get(symbol)
         if record is None:
             failures.append(f"{symbol}: symbol not found in manifest scope")
+            continue
+        if record.kind == "type_alias":
             continue
         doc = _docstring(record.obj)
         for section in sections:
@@ -168,6 +176,8 @@ def test_required_example_symbols_contain_runnable_snippets() -> None:
         if record is None:
             failures.append(f"{symbol}: symbol not found in manifest scope")
             continue
+        if record.kind == "type_alias":
+            continue
         block = _extract_examples_block(_docstring(record.obj))
         if ">>>" not in block:
             failures.append(f"{symbol}: Examples block must include runnable '>>>' snippet(s)")
@@ -177,6 +187,8 @@ def test_required_example_symbols_contain_runnable_snippets() -> None:
 def test_inventory_example_symbols_contain_runnable_snippets() -> None:
     failures: list[str] = []
     for record in iter_inventory_example_symbols():
+        if record.kind == "type_alias":
+            continue
         block = _extract_examples_block(_docstring(record.obj))
         if ">>>" not in block:
             failures.append(f"{record.symbol}: Examples block must include runnable '>>>' snippet(s)")
@@ -186,7 +198,7 @@ def test_inventory_example_symbols_contain_runnable_snippets() -> None:
 def test_curated_public_callables_include_examples() -> None:
     failures: list[str] = []
     for record in iter_curated_public_symbols():
-        if record.kind == "property":
+        if record.kind in {"property", "type_alias"}:
             continue
         block = _extract_examples_block(_docstring(record.obj))
         if ">>>" not in block:

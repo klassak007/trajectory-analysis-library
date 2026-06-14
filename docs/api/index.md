@@ -27,6 +27,7 @@ schema
 ufuncs
 numba
 catalog
+astro
 frames
 io
 viz

@@ -280,7 +280,7 @@ def test_geo_core_g1_011_geo_optional_dependency_group_declared() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     optional = pyproject["project"]["optional-dependencies"]
     assert optional["geo"] == ["pyproj>=3.7"]
-    assert "tal[docs,frames,geo,viz]" in optional["test"]
+    assert "tal[astro,docs,frames,geo,viz]" in optional["test"]
 
 
 def test_geo_hard_g1_001_constructor_rejects_cartesian_position_payload() -> None:
