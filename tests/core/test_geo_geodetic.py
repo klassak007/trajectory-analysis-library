@@ -4,6 +4,7 @@ import importlib
 from importlib.machinery import ModuleSpec
 
 import dask.array as da
+from dask.base import is_dask_collection
 import numpy as np
 import pytest
 import xarray as xr
@@ -22,10 +23,10 @@ def _lla_dataset(values: np.ndarray | None = None, *, labels: tuple[str, str, st
     ds = xr.Dataset(
         {"position": (("sample", "lla_axis"), values)},
         coords={
-            "sample": [0, 1],
+            "sample": np.arange(values.shape[0]),
             "lla_axis": list(labels),
-            "time_s": ("sample", [0.0, 1.0]),
-            "group_size": np.asarray(2, dtype=np.int64),
+            "time_s": ("sample", np.arange(values.shape[0], dtype=float)),
+            "group_size": np.asarray(values.shape[0], dtype=np.int64),
         },
     )
     return AnalysisObject.from_data(
@@ -164,7 +165,7 @@ def test_geo_core_g1_009_conversion_preserves_dask_laziness() -> None:
     ds = _lla_dataset()
     ds["position"] = ds["position"].copy(data=da.from_array(ds["position"].data, chunks=(1, 3)))
     ecef = GeodeticPosition(ds).to_ecef(validate=False)
-    assert da.is_dask_collection(ecef.unsafe_data["position"].data)
+    assert is_dask_collection(ecef.unsafe_data["position"].data)
 
 
 def test_geo_core_g1_010_from_ecef_accepts_cartesian_position() -> None:
