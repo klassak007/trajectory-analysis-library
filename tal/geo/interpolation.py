@@ -197,7 +197,7 @@ def _wrap_and_restamp(source, candidate, *, opts: GeodeticInterpolationOptions, 
         ds,
         opts=replace(geo_opts, longitude_wrap=wrap_mode),
         validate=False,
-        validate_crs=False,
+        validate_crs=geo_opts.crs != "EPSG:4979",
         owner=owner,
     )
     from .geodetic import GeodeticPosition
@@ -233,7 +233,7 @@ def _finalize_geodesic_output(
     )
     from .geodetic import GeodeticPosition
 
-    candidate = GeodeticPosition(evaluated.unsafe_data)
+    candidate = GeodeticPosition._from_unvalidated(evaluated.unsafe_data)
     return _wrap_and_restamp(source, candidate, opts=opts, validate=validate, owner=owner)
 
 
@@ -360,7 +360,7 @@ def _nearest(
     )
     from .geodetic import GeodeticPosition
 
-    candidate = GeodeticPosition(evaluated.unsafe_data)
+    candidate = GeodeticPosition._from_unvalidated(evaluated.unsafe_data)
     return _wrap_and_restamp(source, candidate, opts=opts, validate=validate, owner=owner)
 
 

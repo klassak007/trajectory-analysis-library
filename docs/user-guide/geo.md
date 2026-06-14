@@ -73,6 +73,20 @@ nearest = lla.param.resample_to([0.0], on="sample", opts=GeodeticInterpolationOp
 matched = lla.param.interp_like(nearest, on="sample", opts=GeodeticInterpolationOptions(method="nearest"))
 ```
 
+CRS transforms are explicit and select the output type from the destination
+CRS. Projected destinations use `ProjectedPosition` instead of
+`tal.spatial.Position`:
+
+<!-- example-id: UG-GEO-CRS -->
+```python
+from tal.geo import ProjectedPosition, transform_crs
+
+projected = lla.to_crs("EPSG:32611")
+ecef = transform_crs(lla, dst="EPSG:4978")
+roundtrip = projected.to_crs("EPSG:4979")
+assert isinstance(projected, ProjectedPosition)
+```
+
 ## Metadata
 
 Geo semantics live under `tal.ext.geo`. Units stored on xarray variables or

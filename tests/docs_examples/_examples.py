@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 from unittest.mock import patch
 
@@ -22,6 +23,8 @@ from tal.geo import (
     GeodesicOptions,
     GeodeticPosition,
     LocalOrigin,
+    ProjectedPosition,
+    transform_crs,
 )
 from tal.linalg import (
     Array,
@@ -1042,6 +1045,63 @@ def example_geo_interpolation() -> None:
     assert out.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"] == "geodetic_position"
 
 
+def example_geo_crs_transform() -> None:
+    ds = xr.Dataset(
+        {"position": (("sample", "lla"), np.asarray([[34.0, -118.0, 20.0]], dtype=float))},
+        coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+    projected_ds = xr.Dataset(
+        {"position": (("sample", "projected"), np.asarray([[500000.0, 4100000.0]], dtype=float))},
+        coords={"sample": [0], "projected": ["easting", "northing"]},
+    )
+    projected_ao = AnalysisObject.from_data(
+        projected_ds,
+        sequence_dim="sample",
+        core_dims=("projected",),
+        validate=True,
+    )
+
+    def kind(value, owner, field="crs"):
+        if str(value).endswith("4978"):
+            return "geocentric"
+        if str(value).endswith("32611"):
+            return "projected"
+        return "geographic"
+
+    def xyz(x, y, z, src_crs, dst_crs, owner):
+        if dst_crs == "EPSG:32611":
+            return x + 1000.0, y + 2000.0, z
+        if dst_crs == "EPSG:4979":
+            return x - 1000.0, y - 2000.0, z
+        return x + 1.0, y + 2.0, z + 3.0
+
+    with (
+        patch(
+            "tal.geo.crs_transform.normalize_crs_with_class",
+            lambda value, owner, field="crs": SimpleNamespace(text=str(value), kind=kind(value, owner, field)),
+        ),
+        patch("tal.geo.crs_transform.crs_has_height_axis", lambda value, owner, field="crs": False),
+        patch("tal.geo.crs_transform.base_geodetic_crs", lambda value, owner, field="crs": "EPSG:4326"),
+        patch("tal.geo.crs_transform.transform_crs_xyz", xyz),
+        patch("tal.geo.crs_transform.transform_crs_xy", lambda x, y, src_crs, dst_crs, owner: (x + 10.0, y + 20.0)),
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch("tal.geo.metadata.normalize_crs_for_class", lambda value, expected, owner, field="crs": str(value)),
+        patch("tal.geo.metadata.base_geodetic_crs", lambda value, owner, field="crs": "EPSG:4326"),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        projected = lla.to_crs("EPSG:32611")
+        direct = transform_crs(lla, dst="EPSG:4978")
+        projected_input = ProjectedPosition.from_projected(projected_ao, crs="EPSG:32611")
+        roundtrip = projected.to_crs("EPSG:4979")
+    assert isinstance(projected, ProjectedPosition)
+    assert isinstance(projected_input, ProjectedPosition)
+    assert isinstance(direct, Position)
+    assert isinstance(roundtrip, GeodeticPosition)
+    assert list(projected.unsafe_data["projected"].values) == ["easting", "northing", "height"]
+    assert projected.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"] == "projected_position"
+
+
 def example_io_read_csv_logs() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "run.csv"
@@ -1500,6 +1560,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "GEO-ENU-CONVERSION": example_geo_enu_conversion,
     "GEO-DISTANCE-BEARING": example_geo_distance_bearing,
     "GEO-INTERPOLATION": example_geo_interpolation,
+    "GEO-CRS-TRANSFORM": example_geo_crs_transform,
     "IO-READ-CSV-LOGS": example_io_read_csv_logs,
     "IO-ROUNDTRIP-SURFACE": example_io_roundtrip_surface,
     "IO-ROS-OPTIONAL-SURFACE": example_io_ros_optional_surface,

@@ -14,16 +14,27 @@ from tal.core.orchestration.runtime_checks import (
 from tal.core.schema_read import validate_schema_if_needed
 from tal.core.typed_lifecycle import TypedAnalysisObject, TypedLifecycleContext, TypedLifecycleSpec
 
-from .metadata import normalize_geodetic_metadata
+from .metadata import normalize_geodetic_metadata, read_geo_block
 
 if TYPE_CHECKING:
     from tal.linalg import Array
     from tal.spatial import Position
 
     from .options import ENUOptions, GeodesicOptions, GeodeticOptions
+    from .projected import ProjectedPosition
     from .temporal import GeodeticParamAccessor
 
 _LLA_LABELS: tuple[str, str, str] = ("lat", "lon", "alt")
+_G1_GEODETIC_CRS = "EPSG:4979"
+
+
+def _needs_crs_validation(ds: xr.Dataset, ctx: TypedLifecycleContext) -> bool:
+    if ctx.phase == "init":
+        return False
+    block = read_geo_block(ds, owner=ctx.owner)
+    if block is None or block.get("kind") != "geodetic_position":
+        return False
+    return block.get("crs", _G1_GEODETIC_CRS) != _G1_GEODETIC_CRS
 
 
 def _normalize_metadata(ds: xr.Dataset, ctx: TypedLifecycleContext) -> xr.Dataset:
@@ -31,7 +42,7 @@ def _normalize_metadata(ds: xr.Dataset, ctx: TypedLifecycleContext) -> xr.Datase
         ds,
         opts=None,
         validate=ctx.phase != "from_unvalidated",
-        validate_crs=False,
+        validate_crs=_needs_crs_validation(ds, ctx),
         owner=ctx.owner,
     )
 
@@ -341,6 +352,62 @@ class GeodeticPosition(TypedAnalysisObject):
         from .local import geodetic_to_enu
 
         return geodetic_to_enu(self, origin=origin, opts=opts, validate=validate)
+
+    def to_crs(
+        self,
+        dst: str,
+        *,
+        validate: bool = True,
+    ) -> "GeodeticPosition | Position | ProjectedPosition":
+        """Transform geodetic coordinates to another CRS.
+
+        Parameters
+        ----------
+        dst : str
+            WGS84-compatible geographic, geocentric/ECEF, or projected CRS
+            string.
+        validate : bool, optional
+            Whether to validate the output before returning.
+
+        Returns
+        -------
+        GeodeticPosition, tal.spatial.Position, or ProjectedPosition
+            Output type selected by destination CRS class.
+
+        Raises
+        ------
+        ImportError
+            If ``pyproj`` from the optional ``tal[geo]`` dependency group is
+            not installed.
+        TypeError
+            If ``dst`` is not a string.
+        ValueError
+            If source metadata or the destination CRS is malformed,
+            non-WGS84, or unsupported.
+
+        Notes
+        -----
+        CRS transforms are explicit pyproj-backed conversions. Projected
+        destinations return ``ProjectedPosition``; ECEF destinations return
+        cartesian ``Position``.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.geo import GeodeticPosition
+        >>> ds = xr.Dataset(
+        ...     {"position": (("sample", "lla"), [[34.0, -118.0, 20.0]])},
+        ...     coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ... )
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
+        >>> projected = GeodeticPosition.from_lla(ao).to_crs("EPSG:32611")
+        >>> list(projected.unsafe_data["projected"].values)
+        ['easting', 'northing', 'height']
+        """
+        from .crs_transform import transform_crs
+
+        return transform_crs(self, dst=dst, validate=validate)
 
     def distance_to(
         self,

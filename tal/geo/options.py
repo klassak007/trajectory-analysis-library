@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Literal
 
 from tal.core.param_ops.guards import validate_query_dim_name
 
-from .backends import normalize_supported_crs
+from .backends import normalize_crs_for_class, normalize_supported_crs
 
 if TYPE_CHECKING:
     from .geodetic import GeodeticPosition
@@ -319,8 +319,19 @@ def coerce_geodetic_options(
         if ecef_crs != _ECEF_CRS:
             raise ValueError(f"{owner}: unsupported CRS {ecef_crs!r}; expected {_ECEF_CRS!r}.")
         return replace(opts, crs=crs, ecef_crs=ecef_crs)
-    normalized_crs = normalize_supported_crs(crs, expected=_GEODETIC_CRS, owner=owner)
-    normalized_ecef_crs = normalize_supported_crs(ecef_crs, expected=_ECEF_CRS, owner=owner)
+    if crs == _GEODETIC_CRS:
+        normalized_crs = normalize_supported_crs(crs, expected=_GEODETIC_CRS, owner=owner)
+    else:
+        normalized_crs = normalize_crs_for_class(crs, expected="geographic", owner=owner, field="crs")
+    if ecef_crs == _ECEF_CRS:
+        normalized_ecef_crs = normalize_supported_crs(ecef_crs, expected=_ECEF_CRS, owner=owner)
+    else:
+        normalized_ecef_crs = normalize_crs_for_class(
+            ecef_crs,
+            expected="geocentric",
+            owner=owner,
+            field="ecef_crs",
+        )
     return replace(opts, crs=normalized_crs, ecef_crs=normalized_ecef_crs)
 
 
@@ -333,7 +344,7 @@ def coerce_local_origin(origin: LocalOrigin, *, owner: str) -> LocalOrigin:
     alt = _require_finite_number(origin.alt, field="origin.alt", owner=owner)
     opts = None
     if origin.opts is not None:
-        opts = coerce_geodetic_options(origin.opts, owner=owner, validate_crs=False)
+        opts = coerce_geodetic_options(origin.opts, owner=owner, validate_crs=True)
     return replace(origin, lat=lat, lon=lon, alt=alt, opts=opts)
 
 

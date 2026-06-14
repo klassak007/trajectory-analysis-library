@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 from tal.core.typed_lifecycle import TypedAnalysisObject
-from tal.geo import GeodeticPosition
+from tal.geo import GeodeticPosition, ProjectedPosition
 
 from ._budget import file_loc, function_lengths
 
@@ -175,6 +175,61 @@ def test_arch_geo_g3_004_no_tal_v2_imports() -> None:
 
 def test_arch_geo_g3_005_geo_does_not_import_astropy_or_spiceypy() -> None:
     """ID: ARCH_GEO_G3_005_geo_does_not_import_astropy_or_spiceypy."""
+    for path in sorted(Path("tal/geo").glob("*.py")):
+        imports = _imports(path)
+        assert all(name.split(".")[0] not in {"astropy", "spiceypy"} for name in imports)
+
+
+def test_arch_geo_g4_001_optional_backend_imports_are_local() -> None:
+    """ID: ARCH_GEO_G4_001_optional_backend_imports_are_local."""
+    offenders = []
+    for path in sorted(Path("tal/geo").glob("*.py")):
+        if path.name == "backends.py":
+            continue
+        imports = _imports(path)
+        if any(name.split(".")[0] == "pyproj" for name in imports):
+            offenders.append(path.as_posix())
+    assert offenders == []
+
+
+def test_arch_geo_g4_002_core_frames_spatial_do_not_depend_on_pyproj() -> None:
+    """ID: ARCH_GEO_G4_002_core_frames_spatial_do_not_depend_on_pyproj."""
+    for root in (Path("tal/core"), Path("tal/frames"), Path("tal/spatial")):
+        for path in sorted(root.rglob("*.py")):
+            imports = _imports(path)
+            assert all(name.split(".")[0] != "pyproj" for name in imports)
+
+
+def test_arch_geo_g4_003_crs_backend_isolation() -> None:
+    """ID: ARCH_GEO_G4_003_crs_backend_isolation."""
+    backend_text = Path("tal/geo/backends.py").read_text(encoding="utf-8")
+    transform_path = Path("tal/geo/crs_transform.py")
+    transform_text = transform_path.read_text(encoding="utf-8")
+    assert "normalize_crs_for_class" in backend_text
+    assert "normalize_crs_with_class" in backend_text
+    assert "def normalize_crs(" not in backend_text
+    assert "def crs_class(" not in backend_text
+    assert "transform_crs_xyz" in backend_text
+    assert all(name.split(".")[0] != "pyproj" for name in _imports(transform_path))
+    assert "normalize_crs_with_class" in transform_text
+    assert "crs_class(" not in transform_text
+    assert "normalize_crs(" not in transform_text
+    assert "xr.apply_ufunc" in transform_text
+
+
+def test_arch_geo_g4_004_no_generic_crs_position_class() -> None:
+    """ID: ARCH_GEO_G4_004_no_generic_crs_position_class."""
+    for path in sorted(Path("tal/geo").glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        assert "class CRSPosition" not in text
+        assert "Position(rep=\"projected\")" not in text
+        assert "rep=\"projected\"" not in text
+    assert issubclass(ProjectedPosition, TypedAnalysisObject)
+    assert "TypedLifecycleSpec(" in Path("tal/geo/projected.py").read_text(encoding="utf-8")
+
+
+def test_arch_geo_g4_005_geo_does_not_import_astropy_or_spiceypy() -> None:
+    """ID: ARCH_GEO_G4_005_geo_does_not_import_astropy_or_spiceypy."""
     for path in sorted(Path("tal/geo").glob("*.py")):
         imports = _imports(path)
         assert all(name.split(".")[0] not in {"astropy", "spiceypy"} for name in imports)

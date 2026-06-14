@@ -20,7 +20,14 @@ USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
     "linalg": ("UG-LINALG-BASIC",),
     "numpy": ("UG-NUMPY-UFUNCS",),
     "spatial": ("UG-SPATIAL-POSE",),
-    "geo": ("UG-GEO-LLA", "UG-GEO-CONVERSION", "UG-GEO-ENU", "UG-GEO-DISTANCE", "UG-GEO-INTERPOLATION"),
+    "geo": (
+        "UG-GEO-LLA",
+        "UG-GEO-CONVERSION",
+        "UG-GEO-ENU",
+        "UG-GEO-DISTANCE",
+        "UG-GEO-INTERPOLATION",
+        "UG-GEO-CRS",
+    ),
     "frames": ("UG-FRAMES-BASIC",),
     "viewing": ("UG-VIEWING-SCHEMA",),
 }

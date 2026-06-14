@@ -78,6 +78,21 @@ def _install_pyproj_failure_guard(monkeypatch) -> None:
     monkeypatch.setattr(options, "normalize_supported_crs", fail_if_reached)
 
 
+def _install_g4_crs_option_stub(monkeypatch) -> None:
+    import tal.geo.options as options
+
+    def normalize_for_class(value, expected, owner, field="crs"):
+        text = str(value)
+        actual = "projected" if text.endswith("32611") else "geographic"
+        if field == "ecef_crs":
+            actual = "geocentric"
+        if actual != expected:
+            raise ValueError(f"{owner}: {field} must be {expected}; got {actual}.")
+        return text
+
+    monkeypatch.setattr(options, "normalize_crs_for_class", normalize_for_class)
+
+
 def test_geo_core_g2_002_geodetic_to_enu_known_fixture(monkeypatch) -> None:
     """ID: GEO_CORE_G2_002_geodetic_to_enu_known_fixture."""
     _install_geo_backend_stub(monkeypatch)
@@ -103,6 +118,29 @@ def test_geo_core_g2_003_ecef_to_enu_known_fixture(monkeypatch) -> None:
     enu = position.geo.to_enu(opts=opts)
 
     np.testing.assert_allclose(enu.unsafe_data["position"], [[1.0, 0.0, 0.0]], atol=1e-12)
+
+
+def test_geo_core_g4_local_origin_opts_accepts_geographic_crs(monkeypatch) -> None:
+    """LocalOrigin opts should use G4 CRS-aware geodetic option validation."""
+    _install_geo_backend_stub(monkeypatch)
+    _install_g4_crs_option_stub(monkeypatch)
+    origin = LocalOrigin(0.0, 0.0, 0.0, opts=GeodeticOptions(crs="EPSG:4326"))
+
+    enu = GeodeticPosition.from_lla(_lla_dataset()).to_enu(origin)
+
+    geo = enu.unsafe_data.attrs["tal"]["ext"]["geo"]
+    assert geo["geodetic_crs"] == "EPSG:4326"
+    assert geo["origin"] == {"storage": "inline", "lat": 0.0, "lon": 0.0, "alt": 0.0}
+
+
+def test_geo_hard_g4_local_origin_opts_rejects_projected_crs(monkeypatch) -> None:
+    """LocalOrigin opts must reject projected CRS values for geodetic origins."""
+    _install_geo_backend_stub(monkeypatch)
+    _install_g4_crs_option_stub(monkeypatch)
+    origin = LocalOrigin(0.0, 0.0, 0.0, opts=GeodeticOptions(crs="EPSG:32611"))
+
+    with pytest.raises(ValueError, match="geographic"):
+        GeodeticPosition.from_lla(_lla_dataset()).to_enu(origin)
 
 
 def test_geo_core_g2_004_enu_to_ecef_roundtrip_within_tolerance(monkeypatch) -> None:

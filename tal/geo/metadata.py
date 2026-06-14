@@ -9,10 +9,12 @@ import xarray as xr
 
 from tal.core.schema import merge_schema
 
+from .backends import base_geodetic_crs, normalize_crs_for_class
 from .options import GeodeticOptions, LocalOrigin, coerce_geodetic_options, coerce_local_origin
 
 _GEODETIC_KIND = "geodetic_position"
 _CARTESIAN_KIND = "cartesian_geo_position"
+_PROJECTED_KIND = "projected_position"
 _ECEF_SYSTEM = "ecef"
 _ENU_SYSTEM = "enu"
 
@@ -43,6 +45,13 @@ _ENU_KEYS = {
     "kind",
     "longitude_wrap",
     "origin",
+}
+_PROJECTED_KEYS = {
+    "crs",
+    "datum",
+    "geodetic_crs",
+    "height_reference",
+    "kind",
 }
 _INLINE_ORIGIN_KEYS = {"storage", "lat", "lon", "alt"}
 _COORD_ORIGIN_KEYS = {"storage", "lat_coord", "lon_coord", "alt_coord"}
@@ -75,6 +84,8 @@ def _allowed_keys(block: Mapping[str, Any], *, owner: str) -> set[str]:
     kind = block.get("kind")
     if kind == _GEODETIC_KIND:
         return _GEODETIC_KEYS
+    if kind == _PROJECTED_KIND:
+        return _PROJECTED_KEYS
     if kind != _CARTESIAN_KIND:
         if kind == "ecef_position":
             raise ValueError(
@@ -147,7 +158,12 @@ def _finite_field(block: Mapping[str, Any], name: str, *, owner: str) -> float:
     return numeric
 
 
-def _options_from_geodetic_block(block: Mapping[str, Any], *, owner: str) -> GeodeticOptions:
+def _options_from_geodetic_block(
+    block: Mapping[str, Any],
+    *,
+    owner: str,
+    validate_crs: bool,
+) -> GeodeticOptions:
     return coerce_geodetic_options(
         GeodeticOptions(
             datum=_string_field(block, "datum", "WGS84", owner=owner),  # type: ignore[arg-type]
@@ -157,7 +173,7 @@ def _options_from_geodetic_block(block: Mapping[str, Any], *, owner: str) -> Geo
             longitude_wrap=_string_field(block, "longitude_wrap", "[-180, 180)", owner=owner),  # type: ignore[arg-type]
         ),
         owner=owner,
-        validate_crs=False,
+        validate_crs=validate_crs,
     )
 
 
@@ -168,17 +184,19 @@ def options_from_ecef_provenance(block: Mapping[str, Any], *, owner: str) -> Geo
             f"{owner}: expected tal.ext.geo.kind='cartesian_geo_position' "
             "with cartesian_system='ecef'."
         )
+    crs = _string_field(block, "geodetic_crs", "EPSG:4979", owner=owner)
+    ecef_crs = _string_field(block, "crs", "EPSG:4978", owner=owner)
     return coerce_geodetic_options(
         GeodeticOptions(
             datum=_string_field(block, "datum", "WGS84", owner=owner),  # type: ignore[arg-type]
-            crs=_string_field(block, "geodetic_crs", "EPSG:4979", owner=owner),
-            ecef_crs=_string_field(block, "crs", "EPSG:4978", owner=owner),
+            crs=crs,
+            ecef_crs=ecef_crs,
             angular_unit=_string_field(block, "angular_unit", "degree", owner=owner),  # type: ignore[arg-type]
             height_reference=_string_field(block, "height_reference", "ellipsoidal", owner=owner),  # type: ignore[arg-type]
             longitude_wrap=_string_field(block, "longitude_wrap", "[-180, 180)", owner=owner),  # type: ignore[arg-type]
         ),
         owner=owner,
-        validate_crs=False,
+        validate_crs=crs != "EPSG:4979" or ecef_crs != "EPSG:4978",
     )
 
 
@@ -189,16 +207,17 @@ def options_from_enu_provenance(block: Mapping[str, Any], *, owner: str) -> Geod
             f"{owner}: expected tal.ext.geo.kind='cartesian_geo_position' "
             "with cartesian_system='enu'."
         )
+    crs = _string_field(block, "geodetic_crs", "EPSG:4979", owner=owner)
     return coerce_geodetic_options(
         GeodeticOptions(
             datum=_string_field(block, "datum", "WGS84", owner=owner),  # type: ignore[arg-type]
-            crs=_string_field(block, "geodetic_crs", "EPSG:4979", owner=owner),
+            crs=crs,
             angular_unit=_string_field(block, "angular_unit", "degree", owner=owner),  # type: ignore[arg-type]
             height_reference=_string_field(block, "height_reference", "ellipsoidal", owner=owner),  # type: ignore[arg-type]
             longitude_wrap=_string_field(block, "longitude_wrap", "[-180, 180)", owner=owner),  # type: ignore[arg-type]
         ),
         owner=owner,
-        validate_crs=False,
+        validate_crs=crs != "EPSG:4979",
     )
 
 
@@ -207,7 +226,8 @@ def options_from_geodetic_metadata(ds: xr.Dataset, *, owner: str) -> GeodeticOpt
     block = read_geo_block(ds, owner=owner)
     if block is None or block.get("kind") != _GEODETIC_KIND:
         raise ValueError(f"{owner}: expected tal.ext.geo.kind='geodetic_position'.")
-    return _options_from_geodetic_block(block, owner=owner)
+    crs = _string_field(block, "crs", "EPSG:4979", owner=owner)
+    return _options_from_geodetic_block(block, owner=owner, validate_crs=crs != "EPSG:4979")
 
 
 def _geodetic_payload(opts: GeodeticOptions) -> dict[str, str]:
@@ -247,6 +267,16 @@ def _enu_payload(opts: GeodeticOptions, *, origin: Mapping[str, Any]) -> dict[st
     }
 
 
+def _projected_payload(*, crs: str, geodetic_crs: str) -> dict[str, str]:
+    return {
+        "kind": _PROJECTED_KIND,
+        "crs": crs,
+        "geodetic_crs": geodetic_crs,
+        "datum": "WGS84",
+        "height_reference": "ellipsoidal",
+    }
+
+
 def normalize_geodetic_metadata(
     ds: xr.Dataset,
     *,
@@ -259,10 +289,47 @@ def normalize_geodetic_metadata(
     block = read_geo_block(ds, owner=owner)
     if block is not None and block.get("kind") != _GEODETIC_KIND:
         raise ValueError(f"{owner}: GeodeticPosition requires tal.ext.geo.kind='geodetic_position'.")
-    base = _options_from_geodetic_block(block, owner=owner) if block is not None else GeodeticOptions()
+    base = (
+        _options_from_geodetic_block(block, owner=owner, validate_crs=validate_crs)
+        if block is not None
+        else GeodeticOptions()
+    )
     effective = opts if opts is not None else base
     normalized = coerce_geodetic_options(effective, owner=owner, validate_crs=validate_crs)
     return merge_schema(ds, {"ext": {"geo": _geodetic_payload(normalized)}}, validate=validate)
+
+
+def normalize_existing_projected_metadata(ds: xr.Dataset, *, validate: bool, owner: str) -> xr.Dataset:
+    """Normalize an existing projected metadata block."""
+    block = read_projected_geo_block(ds, owner=owner)
+    return merge_schema(ds, {"ext": {"geo": dict(block)}}, validate=validate)
+
+
+def normalize_projected_metadata(ds: xr.Dataset, *, crs: str, validate: bool, owner: str) -> xr.Dataset:
+    """Stamp canonical projected CRS metadata."""
+    normalized_crs = normalize_crs_for_class(crs, expected="projected", owner=owner, field="crs")
+    geodetic_crs = base_geodetic_crs(normalized_crs, owner=owner, field="crs")
+    payload = _projected_payload(crs=normalized_crs, geodetic_crs=geodetic_crs)
+    return merge_schema(ds, {"ext": {"geo": payload}}, validate=validate)
+
+
+def read_projected_geo_block(ds: xr.Dataset, *, owner: str) -> Mapping[str, Any]:
+    """Read a closed projected geo metadata block."""
+    block = read_geo_block(ds, owner=owner)
+    if block is None or block.get("kind") != _PROJECTED_KIND:
+        raise ValueError(f"{owner}: expected tal.ext.geo.kind='projected_position'.")
+    if _string_field(block, "datum", "", owner=owner) != "WGS84":
+        raise ValueError(f"{owner}: tal.ext.geo.datum must be 'WGS84'.")
+    if _string_field(block, "height_reference", "", owner=owner) != "ellipsoidal":
+        raise ValueError(f"{owner}: tal.ext.geo.height_reference must be 'ellipsoidal'.")
+    crs = _string_field(block, "crs", "", owner=owner)
+    geodetic_crs = _string_field(block, "geodetic_crs", "", owner=owner)
+    canonical_crs = normalize_crs_for_class(crs, expected="projected", owner=owner, field="crs")
+    expected = base_geodetic_crs(canonical_crs, owner=owner, field="crs")
+    actual = normalize_crs_for_class(geodetic_crs, expected="geographic", owner=owner, field="geodetic_crs")
+    if actual != expected:
+        raise ValueError(f"{owner}: tal.ext.geo.geodetic_crs conflicts with projected crs.")
+    return _projected_payload(crs=canonical_crs, geodetic_crs=actual)
 
 
 def read_cartesian_geo_block(ds: xr.Dataset, *, system: str, owner: str) -> Mapping[str, Any]:
@@ -412,6 +479,19 @@ def set_ecef_metadata(
     return merge_schema(cleared, {"ext": {"geo": _ecef_payload(opts)}}, validate=validate)
 
 
+def set_projected_metadata(
+    ds: xr.Dataset,
+    *,
+    crs: str,
+    geodetic_crs: str,
+    validate: bool,
+) -> xr.Dataset:
+    """Stamp canonical projected geo metadata."""
+    cleared = merge_schema(ds, {"ext": {"geo": None}}, validate=False)
+    payload = _projected_payload(crs=crs, geodetic_crs=geodetic_crs)
+    return merge_schema(cleared, {"ext": {"geo": payload}}, validate=validate)
+
+
 def set_enu_metadata(
     ds: xr.Dataset,
     *,
@@ -431,6 +511,8 @@ __all__ = [
     "inline_origin_metadata",
     "is_cartesian_geo_system",
     "normalize_geodetic_metadata",
+    "normalize_existing_projected_metadata",
+    "normalize_projected_metadata",
     "options_from_ecef_provenance",
     "options_from_enu_provenance",
     "options_from_geodetic_metadata",
@@ -438,6 +520,8 @@ __all__ = [
     "read_cartesian_geo_block_if_present",
     "read_enu_origin_metadata",
     "read_geo_block",
+    "read_projected_geo_block",
     "set_ecef_metadata",
     "set_enu_metadata",
+    "set_projected_metadata",
 ]

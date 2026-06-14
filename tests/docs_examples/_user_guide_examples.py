@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -19,7 +20,15 @@ from tal.core.event_ops import (
 )
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds
-from tal.geo import ENUOptions, GeodeticInterpolationOptions, GeodesicOptions, GeodeticPosition, LocalOrigin
+from tal.geo import (
+    ENUOptions,
+    GeodeticInterpolationOptions,
+    GeodesicOptions,
+    GeodeticPosition,
+    LocalOrigin,
+    ProjectedPosition,
+    transform_crs,
+)
 from tal.linalg import Matrix, Vector, Vector3, add, dot, inv, matmul, norm, pinv, solve, sub
 from tal.spatial import Pose, Position, Rotation
 
@@ -566,6 +575,52 @@ def example_guide_geo_interpolation() -> None:
     assert isinstance(matched, GeodeticPosition)
 
 
+def example_guide_geo_crs() -> None:
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"position": (("sample", "lla"), np.array([[34.0, -118.0, 20.0]]))},
+            coords={"sample": [0], "lla": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla",),
+        validate=True,
+    )
+
+    def kind(value, owner, field="crs"):
+        if str(value).endswith("4978"):
+            return "geocentric"
+        if str(value).endswith("32611"):
+            return "projected"
+        return "geographic"
+
+    def xyz(x, y, z, src_crs, dst_crs, owner):
+        if dst_crs == "EPSG:32611":
+            return x + 1000.0, y + 2000.0, z
+        if dst_crs == "EPSG:4979":
+            return x - 1000.0, y - 2000.0, z
+        return x + 1.0, y + 2.0, z + 3.0
+
+    with (
+        patch(
+            "tal.geo.crs_transform.normalize_crs_with_class",
+            lambda value, owner, field="crs": SimpleNamespace(text=str(value), kind=kind(value, owner, field)),
+        ),
+        patch("tal.geo.crs_transform.crs_has_height_axis", lambda value, owner, field="crs": False),
+        patch("tal.geo.crs_transform.base_geodetic_crs", lambda value, owner, field="crs": "EPSG:4326"),
+        patch("tal.geo.crs_transform.transform_crs_xyz", xyz),
+        patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected),
+        patch("tal.geo.metadata.normalize_crs_for_class", lambda value, expected, owner, field="crs": str(value)),
+        patch("tal.geo.metadata.base_geodetic_crs", lambda value, owner, field="crs": "EPSG:4326"),
+    ):
+        lla = GeodeticPosition.from_lla(ao)
+        projected = lla.to_crs("EPSG:32611")
+        ecef = transform_crs(lla, dst="EPSG:4978")
+        roundtrip = projected.to_crs("EPSG:4979")
+    assert isinstance(projected, ProjectedPosition)
+    assert isinstance(ecef, Position)
+    assert isinstance(roundtrip, GeodeticPosition)
+
+
 def example_guide_frames_basic() -> None:
     with FrameGraph() as graph:
         world = graph.get_or_create_frame("world")
@@ -641,6 +696,7 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-GEO-ENU": example_guide_geo_enu,
     "UG-GEO-DISTANCE": example_guide_geo_distance,
     "UG-GEO-INTERPOLATION": example_guide_geo_interpolation,
+    "UG-GEO-CRS": example_guide_geo_crs,
     "UG-FRAMES-BASIC": example_guide_frames_basic,
     "UG-VIEWING-SCHEMA": example_guide_viewing_schema,
 }

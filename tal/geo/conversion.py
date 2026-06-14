@@ -20,6 +20,7 @@ from .backends import transform_ecef_to_lla, transform_lla_to_ecef
 from .metadata import (
     normalize_geodetic_metadata,
     options_from_ecef_provenance,
+    options_from_geodetic_metadata,
     read_cartesian_geo_block_if_present,
     set_ecef_metadata,
 )
@@ -198,7 +199,14 @@ def from_lla(value: object, *, opts: GeodeticOptions | None = None, validate: bo
 def to_ecef(position: "GeodeticPosition", *, opts: GeodeticOptions | None = None, validate: bool = True) -> Position:
     """Convert a GeodeticPosition to Cartesian ECEF Position."""
     owner = "geo.GeodeticPosition.to_ecef"
-    normalized_opts = coerce_geodetic_options(opts, owner=owner, validate_crs=True)
+    if opts is None:
+        normalized_opts = coerce_geodetic_options(
+            options_from_geodetic_metadata(position.unsafe_data, owner=owner),
+            owner=owner,
+            validate_crs=True,
+        )
+    else:
+        normalized_opts = coerce_geodetic_options(opts, owner=owner, validate_crs=True)
     ctx = _context(position, owner=owner)
     assert ctx.data is not None and ctx.var_name is not None
     core_dim = ctx.core_dims[0]
@@ -317,7 +325,7 @@ def from_ecef(value: object, *, opts: GeodeticOptions | None = None, validate: b
         ds,
         opts=normalized_opts,
         validate=False,
-        validate_crs=False,
+        validate_crs=normalized_opts.crs != "EPSG:4979",
         owner=owner,
     )
     ds = _apply_frame_policy(ds, source_ds=ctx.ds, opts=normalized_opts, owner=owner)

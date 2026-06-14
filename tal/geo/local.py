@@ -61,9 +61,10 @@ class _OriginComponents:
     metadata: dict[str, Any] | None
 
 
-def _geo_opts_from_enu(opts: ENUOptions, *, owner: str) -> GeodeticOptions:
+def _geo_opts_from_enu(opts: ENUOptions, *, owner: str, source_opts: GeodeticOptions | None = None) -> GeodeticOptions:
+    base = source_opts or GeodeticOptions()
     return coerce_geodetic_options(
-        GeodeticOptions(ecef_frame=opts.ecef_frame, strict_frame=opts.strict_frame),
+        replace(base, ecef_frame=opts.ecef_frame, strict_frame=opts.strict_frame),
         owner=owner,
         validate_crs=True,
     )
@@ -351,7 +352,8 @@ def geodetic_to_enu(
     if effective_origin is None:
         raise ValueError(f"{owner}: origin is required for ENU conversion.")
     preflight_origin = _preflight_geodetic_origin(position, effective_origin, owner=owner)
-    ecef_opts = _geo_opts_from_enu(enu_opts, owner=owner)
+    source_opts = options_from_geodetic_metadata(position.unsafe_data, owner=owner)
+    ecef_opts = _geo_opts_from_enu(enu_opts, owner=owner, source_opts=source_opts)
     ecef = to_ecef(position, opts=ecef_opts, validate=validate)
     return ecef_to_enu(ecef, origin=preflight_origin, opts=enu_opts, validate=validate)
 
