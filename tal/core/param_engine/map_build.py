@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from .backends import (
@@ -13,6 +14,7 @@ from .backends import (
     bounds_block_backend,
     map_block_backend,
 )
+from .datetime_rows import DATETIME_OPEN_START, DATETIME_OPEN_STOP
 from .types import ParamBoundsMap, ParamMap, ParamMapOptions
 from tal.utils.numba_support import _numba_available
 
@@ -199,7 +201,6 @@ def _map_row(
         return _nearest_row(src_idx, src_vals, query)
     return _linear_row(src_idx, src_vals, query, dup_code=dup_code)
 
-
 def _validate_numeric_param_dtype(*, param: xr.DataArray, owner: str) -> None:
     if np.issubdtype(np.dtype(param.dtype), np.number):
         return
@@ -207,6 +208,21 @@ def _validate_numeric_param_dtype(*, param: xr.DataArray, owner: str) -> None:
         f"{owner}: param coordinate must have numeric dtype, got {param.dtype!r}. "
         "Use a numeric param_coord before interpolation."
     )
+
+
+def _validate_datetime_param_dtype(*, param: xr.DataArray, owner: str) -> None:
+    if np.issubdtype(np.dtype(param.dtype), np.datetime64):
+        return
+    raise ValueError(
+        f"{owner}: param coordinate must have datetime64 dtype, got {param.dtype!r}. "
+        "Use a datetime64 param_coord before datetime64 interpolation."
+    )
+
+
+def _validate_param_kind(param_kind: str, *, owner: str) -> None:
+    if param_kind in {"numeric", "datetime64"}:
+        return
+    raise ValueError(f"{owner}: param_kind must be 'numeric' or 'datetime64', got {param_kind!r}.")
 
 
 def _validate_map_dims(
@@ -301,7 +317,6 @@ def _bounds_row(
     i1 = int(src_idx[min(hi - 1, src_idx.size - 1)] + 1)
     return np.asarray(min(i0, row_len), dtype="int64"), np.asarray(min(i1, row_len), dtype="int64")
 
-
 def _prepare_map_inputs(
     *,
     param: xr.DataArray,
@@ -310,16 +325,23 @@ def _prepare_map_inputs(
     query_dim: str,
     valid_mask: xr.DataArray | None,
     options: ParamMapOptions | None,
+    param_kind: str,
 ) -> tuple[ParamMapOptions, xr.DataArray, xr.DataArray, xr.DataArray]:
+    _validate_param_kind(param_kind, owner="build_param_map")
     _validate_map_dims(param=param, query=query, sequence_dim=sequence_dim, query_dim=query_dim)
-    _validate_numeric_param_dtype(param=param, owner="build_param_map")
     opts = options or ParamMapOptions()
     if opts.method not in ("nearest", "linear"):
         raise ValueError(f"build_param_map: method must be 'nearest' or 'linear', got {opts.method!r}.")
     if opts.duplicate_policy not in _DUPLICATE_CODES:
         raise ValueError(f"build_param_map: invalid duplicate policy {opts.duplicate_policy!r}.")
-    mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
-    aligned = xr.align(param.astype("float64"), mask.astype(bool), query.astype("float64"), join="exact")
+    if param_kind == "numeric":
+        _validate_numeric_param_dtype(param=param, owner="build_param_map")
+        mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
+        aligned = xr.align(param.astype("float64"), mask.astype(bool), query.astype("float64"), join="exact")
+        return opts, aligned[0], aligned[1], aligned[2]
+    _validate_datetime_param_dtype(param=param, owner="build_param_map")
+    mask = valid_mask if valid_mask is not None else param.notnull()
+    aligned = xr.align(param.astype("datetime64[ns]"), mask.astype(bool), query.astype("datetime64[ns]"), join="exact")
     return opts, aligned[0], aligned[1], aligned[2]
 
 
@@ -343,7 +365,27 @@ def _apply_param_map_block(
     sequence_dim: str,
     query_dim: str,
     opts: ParamMapOptions,
+    param_kind: str,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    if param_kind == "datetime64":
+        from .numpy_backends import datetime_map_block_numpy
+
+        return xr.apply_ufunc(
+            datetime_map_block_numpy,
+            param_da,
+            mask_da,
+            query_da,
+            kwargs={
+                "method": opts.method,
+                "dup_code": _DUPLICATE_CODES[opts.duplicate_policy],
+            },
+            input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
+            output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim]],
+            vectorize=False,
+            dask="parallelized",
+            dask_gufunc_kwargs={"allow_rechunk": True},
+            output_dtypes=[np.int64, np.int64, np.float64, bool],
+        )
     backend = _select_map_normal_backend()
     return xr.apply_ufunc(
         map_block_backend,
@@ -372,6 +414,7 @@ def build_param_map(
     query_dim: str,
     valid_mask: xr.DataArray | None = None,
     options: ParamMapOptions | None = None,
+    param_kind: str = "numeric",
 ) -> ParamMap:
     """Build mapping from parameter values to sample indices.
 
@@ -389,6 +432,8 @@ def build_param_map(
         Validity/mask payload used by this operation.
     options : ParamMapOptions | None, optional
         Options controlling policy and execution behavior.
+    param_kind : {'numeric', 'datetime64'}, optional
+        Parameter coordinate kind used for query and map coercion.
 
     Returns
     -------
@@ -406,6 +451,7 @@ def build_param_map(
         query_dim=query_dim,
         valid_mask=valid_mask,
         options=options,
+        param_kind=param_kind,
     )
     i0, i1, alpha, valid = _apply_param_map_block(
         param_da=param_da,
@@ -414,6 +460,7 @@ def build_param_map(
         sequence_dim=sequence_dim,
         query_dim=query_dim,
         opts=opts,
+        param_kind=param_kind,
     )
     return ParamMap(i0=i0, i1=i1, alpha=alpha, valid=valid, query_dim=query_dim)
 
@@ -421,24 +468,69 @@ def build_param_map(
 def _prepare_bounds_inputs(
     *,
     param: xr.DataArray,
-    start: xr.DataArray | float,
-    stop: xr.DataArray | float,
+    start: xr.DataArray | float | object,
+    stop: xr.DataArray | float | object,
     sequence_dim: str,
     valid_mask: xr.DataArray | None,
+    param_kind: str,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
-    start_da = start if isinstance(start, xr.DataArray) else xr.DataArray(np.asarray(start, dtype="float64"))
-    stop_da = stop if isinstance(stop, xr.DataArray) else xr.DataArray(np.asarray(stop, dtype="float64"))
+    _validate_param_kind(param_kind, owner="build_param_bounds_map")
+    start_da = _coerce_bound_value(start, bound="start", param_kind=param_kind)
+    stop_da = _coerce_bound_value(stop, bound="stop", param_kind=param_kind)
     _validate_bounds_dims(param=param, start=start_da, stop=stop_da, sequence_dim=sequence_dim)
-    _validate_numeric_param_dtype(param=param, owner="build_param_bounds_map")
-    mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
+    if param_kind == "numeric":
+        _validate_numeric_param_dtype(param=param, owner="build_param_bounds_map")
+        mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
+        aligned = xr.align(
+            param.astype("float64"),
+            mask.astype(bool),
+            start_da.astype("float64"),
+            stop_da.astype("float64"),
+            join="exact",
+        )
+        return aligned[0], aligned[1], aligned[2], aligned[3]
+    _validate_datetime_param_dtype(param=param, owner="build_param_bounds_map")
+    mask = valid_mask if valid_mask is not None else param.notnull()
     aligned = xr.align(
-        param.astype("float64"),
+        param.astype("datetime64[ns]"),
         mask.astype(bool),
-        start_da.astype("float64"),
-        stop_da.astype("float64"),
+        start_da.astype("datetime64[ns]"),
+        stop_da.astype("datetime64[ns]"),
         join="exact",
     )
     return aligned[0], aligned[1], aligned[2], aligned[3]
+
+
+def _coerce_bound_value(value: object, *, bound: str, param_kind: str) -> xr.DataArray:
+    if isinstance(value, xr.DataArray):
+        return _coerce_bound_dataarray(value, bound=bound, param_kind=param_kind)
+    if param_kind == "numeric":
+        fill = -np.inf if bound == "start" and value is None else np.inf if value is None else value
+        try:
+            return xr.DataArray(np.asarray(fill, dtype="float64"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"build_param_bounds_map: slice.{bound} must be numeric.") from exc
+    fill = DATETIME_OPEN_START if bound == "start" and value is None else DATETIME_OPEN_STOP if value is None else value
+    if np.issubdtype(np.asarray(fill).dtype, np.number):
+        raise ValueError(f"build_param_bounds_map: {bound} must be datetime-like, got numeric dtype.")
+    try:
+        if isinstance(fill, np.datetime64):
+            arr = np.asarray(fill, dtype="datetime64[ns]")
+        else:
+            arr = np.asarray(pd.to_datetime(fill), dtype="datetime64[ns]")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"build_param_bounds_map: {bound} must be datetime-like for datetime64 param coordinates."
+        ) from exc
+    return xr.DataArray(arr)
+
+
+def _coerce_bound_dataarray(value: xr.DataArray, *, bound: str, param_kind: str) -> xr.DataArray:
+    if param_kind == "numeric":
+        return value.astype("float64")
+    if np.issubdtype(np.dtype(value.dtype), np.number):
+        raise ValueError(f"build_param_bounds_map: {bound} must be datetime-like, got numeric dtype.")
+    return value.astype("datetime64[ns]")
 
 
 def _apply_param_bounds_block(
@@ -448,7 +540,24 @@ def _apply_param_bounds_block(
     start_da: xr.DataArray,
     stop_da: xr.DataArray,
     sequence_dim: str,
+    param_kind: str,
 ) -> tuple[xr.DataArray, xr.DataArray]:
+    if param_kind == "datetime64":
+        from .numpy_backends import datetime_bounds_block_numpy
+
+        return xr.apply_ufunc(
+            datetime_bounds_block_numpy,
+            param_da,
+            mask_da,
+            start_da,
+            stop_da,
+            input_core_dims=[[sequence_dim], [sequence_dim], [], []],
+            output_core_dims=[[], []],
+            vectorize=False,
+            dask="parallelized",
+            dask_gufunc_kwargs={"allow_rechunk": True},
+            output_dtypes=[np.int64, np.int64],
+        )
     backend = _select_bounds_normal_backend()
     return xr.apply_ufunc(
         bounds_block_backend,
@@ -469,10 +578,11 @@ def _apply_param_bounds_block(
 def build_param_bounds_map(
     *,
     param: xr.DataArray,
-    start: xr.DataArray | float,
-    stop: xr.DataArray | float,
+    start: xr.DataArray | float | object,
+    stop: xr.DataArray | float | object,
     sequence_dim: str,
     valid_mask: xr.DataArray | None = None,
+    param_kind: str = "numeric",
 ) -> ParamBoundsMap:
     """Build searchsorted bounds for per-row param slice selection.
 
@@ -488,6 +598,8 @@ def build_param_bounds_map(
         Optional override for the sequence dimension used by temporal semantics.
     valid_mask : xr.DataArray | None, optional
         Validity/mask payload used by this operation.
+    param_kind : {'numeric', 'datetime64'}, optional
+        Parameter coordinate kind used for bound coercion.
 
     Returns
     -------
@@ -504,6 +616,7 @@ def build_param_bounds_map(
         stop=stop,
         sequence_dim=sequence_dim,
         valid_mask=valid_mask,
+        param_kind=param_kind,
     )
     i0, i1 = _apply_param_bounds_block(
         param_da=param_da,
@@ -511,6 +624,7 @@ def build_param_bounds_map(
         start_da=start_da,
         stop_da=stop_da,
         sequence_dim=sequence_dim,
+        param_kind=param_kind,
     )
     return ParamBoundsMap(i0=i0, i1=i1)
 

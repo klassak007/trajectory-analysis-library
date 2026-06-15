@@ -19,6 +19,7 @@ from .resample import resample_param
 from .sync_runtime import (
     align_contexts_batch,
     apply_fill,
+    ensure_shared_param_kind,
     ensure_shared_topology,
     eval_options_from_sync,
     grid_from_join,
@@ -82,7 +83,7 @@ def _resolve_target_grid(
     *,
     grid: xr.DataArray | np.ndarray | Sequence[float] | float | None,
     join: str,
-    tol: float,
+    tol: float | int,
 ) -> xr.DataArray:
     target = _single_input_target(aligned, grid=grid)
     if target is not None:
@@ -103,7 +104,7 @@ def _sync_one(
     target: xr.DataArray,
     eval_opts,
     how: Literal["interp", "nearest", "fill"],
-    tol: float,
+    tol: float | int,
     fill_value: float | int,
     batch_plan,
     validate: bool,
@@ -189,7 +190,11 @@ def synchronize_param(
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Raises deterministic fail-closed errors when semantic/layout assumptions are
+    not met. Numeric and datetime64 param coordinates cannot be mixed in one
+    synchronization call. Datetime64 synchronization accepts timedelta-like
+    ``ParamSyncOptions.tol`` values; selection/index tolerances are not part of
+    T1.
 
     Examples
     --------
@@ -210,7 +215,6 @@ def synchronize_param(
         raise ValueError("synchronize_param: expected at least one AnalysisObject.")
     ao_inputs = normalize_analysis_object_inputs(aos, owner="synchronize_param", require_nonempty=True)
     options = coerce_sync_options(opts, owner="synchronize_param")
-    tol, fill_value = resolve_sync_runtime(options, owner="synchronize_param")
     eval_opts = eval_options_from_sync(query_dim=options.query_dim, how=options.how)
     base_contexts, contexts, batch_plan = _resolve_sync_contexts(
         ao_inputs,
@@ -220,6 +224,8 @@ def synchronize_param(
         sequence_size_coord=sequence_size_coord,
     )
     aligned = align_contexts_batch(contexts, mode=options.batch_join)
+    ensure_shared_param_kind(aligned)
+    tol, fill_value = resolve_sync_runtime(options, owner="synchronize_param", param_kind=aligned[0].param_kind)
     if len(aligned) == 1 and _is_identity_sync_case(grid=grid, options=options):
         return [_sync_identity_one(base_contexts[0], aligned[0], batch_plan=batch_plan, validate=validate)]
     target = _resolve_target_grid(aligned, grid=grid, join=options.join, tol=tol)
@@ -282,7 +288,11 @@ def synchronize(
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Raises deterministic fail-closed errors when semantic/layout assumptions are
+    not met. Numeric and datetime64 param coordinates cannot be mixed in one
+    synchronization call. Datetime64 synchronization accepts timedelta-like
+    ``ParamSyncOptions.tol`` values; selection/index tolerances are not part of
+    T1.
 
     Examples
     --------

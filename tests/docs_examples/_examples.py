@@ -370,7 +370,14 @@ def example_core_component_registry() -> None:
 
 
 def example_core_param_surface() -> None:
-    from tal.core import ParamEvalOptions, ParamSelectOptions, ParamSyncOptions, synchronize, synchronize_param
+    from tal.core import (
+        ParamEvalOptions,
+        ParamSelectOptions,
+        ParamSyncOptions,
+        ParamSyncTolerance,
+        synchronize,
+        synchronize_param,
+    )
 
     ao = AnalysisObject.from_data(
         xr.Dataset(
@@ -419,6 +426,27 @@ def example_core_param_surface() -> None:
     np.testing.assert_allclose(
         synchronize([ao], on="time", grid=[0.0, 2.0], opts=ParamSyncOptions(join="override"))[0].unsafe_data["value"],
         np.asarray([0.0, 4.0]),
+    )
+    dt_grid = np.asarray(["2026-01-01T00:00:00", "2026-01-01T00:00:10", "2026-01-01T00:00:20"], dtype="datetime64[ns]")
+    dt_ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"value": ("sample", np.asarray([0.0, 10.0, 40.0], dtype=float))},
+            coords={"sample": [0, 1, 2], "time": ("sample", dt_grid)},
+        ),
+        sequence_dim="sample",
+        core_dims=(),
+        param_coord="time",
+        validate=True,
+    )
+    tol: ParamSyncTolerance = np.timedelta64(0, "s")
+    np.testing.assert_array_equal(dt_ao.param.index([dt_grid[0], dt_grid[2]], on="time").values, [0, 2])
+    np.testing.assert_allclose(
+        dt_ao.param.at([dt_grid[0] + np.timedelta64(5, "s")], on="time").unsafe_data["value"],
+        np.asarray([5.0]),
+    )
+    np.testing.assert_allclose(
+        synchronize_param([dt_ao], on="time", grid=[dt_grid[0], dt_grid[2]], opts=ParamSyncOptions(join="override", tol=tol))[0].unsafe_data["value"],
+        np.asarray([0.0, 40.0]),
     )
 
 

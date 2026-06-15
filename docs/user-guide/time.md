@@ -78,7 +78,10 @@ sample layouts until a query asks for a common parameter grid.
 
 Parameter semantics are explicit rather than guessed. The same public surface
 works for clocks, distances, phases, or experiment indices as long as the
-chosen domain is ordered and declared.
+chosen domain is ordered and declared. Numeric and `datetime64` parameter
+coordinates are supported. Datetime64 queries can use NumPy datetime64 values,
+pandas timestamps, Python datetimes, or labeled xarray arrays; synchronization
+tolerance for datetime64 params must be timedelta-like.
 
 ## What Usually Goes Wrong
 

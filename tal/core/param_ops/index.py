@@ -49,6 +49,7 @@ def build_index_result(
         query_dim=opts.query_dim,
         batch_dims=context.batch_dims,
         batch_coords=context.batch_coords,
+        param_kind=context.param_kind,
     )
     pmap = build_param_map(
         param=context.spec.coord,
@@ -57,6 +58,7 @@ def build_index_result(
         query_dim=grid.query_dim,
         valid_mask=context.valid_mask,
         options=ParamMapOptions(method="nearest"),
+        param_kind=context.param_kind,
     )
     idx = pmap.i0.where(pmap.valid, other=np.int64(-1)).astype("int64")
     return ParamIndexResult(

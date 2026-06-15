@@ -81,6 +81,8 @@ class ParamAccessor:
         Notes
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Datetime64 param coordinates accept datetime-like queries. Indexing is
+        tolerance-free in T1.
 
         Examples
         --------
@@ -153,6 +155,8 @@ class ParamAccessor:
         Notes
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Datetime64 param coordinates accept datetime-like point and slice
+        queries. Selection is tolerance-free in T1.
 
         Examples
         --------
@@ -226,6 +230,8 @@ class ParamAccessor:
         Notes
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Datetime64 param coordinates accept datetime-like queries and compute
+        interpolation weights from row-local nanosecond deltas.
 
         Examples
         --------
@@ -299,6 +305,8 @@ class ParamAccessor:
         Notes
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Datetime64 param coordinates accept datetime-like target grids and
+        compute interpolation weights from row-local nanosecond deltas.
 
         Examples
         --------
@@ -375,6 +383,8 @@ class ParamAccessor:
         Notes
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Datetime64 source and target param coordinates remain datetime64
+        throughout query normalization and interpolation.
 
         Examples
         --------

@@ -215,20 +215,13 @@ def dataset_from_other_input(
     )
 
 
-def _coerce_query_numeric(query: xr.DataArray, *, owner: str) -> xr.DataArray:
-    try:
-        return query.astype("float64")
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{owner}: query values must be numeric (coercible to float64).") from exc
-
-
 def query_coord_from_other_input(
     other: "AnalysisObject | xr.Dataset | xr.DataArray",
     *,
     coord_name: str,
     owner: str,
 ) -> xr.DataArray:
-    """Extract and numeric-normalize a query coordinate from `other`.
+    """Extract a query coordinate from `other`.
 
     Parameters
     ----------
@@ -250,14 +243,14 @@ def query_coord_from_other_input(
     """
     if isinstance(other, xr.DataArray):
         if other.name == coord_name:
-            return _coerce_query_numeric(other, owner=owner)
+            return other
         if coord_name in other.coords:
-            return _coerce_query_numeric(other.coords[coord_name], owner=owner)
+            return other.coords[coord_name]
         raise ValueError(f"{owner}: could not find coord {coord_name!r} on DataArray input.")
     ds = dataset_from_other_input(other, owner=owner)
     if coord_name not in ds.coords:
         raise ValueError(f"{owner}: coord {coord_name!r} not found on other object.")
-    return _coerce_query_numeric(ds.coords[coord_name], owner=owner)
+    return ds.coords[coord_name]
 
 
 __all__ = [

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import datetime as _datetime
 from collections.abc import Mapping
 
 import numpy as np
+import pandas as pd
 
 from .guards import coerce_float_scalar, validate_query_dim_name
-from .types import ParamEvalOptions, ParamSelectOptions, ParamSyncOptions
+from .types import ParamKind, ParamEvalOptions, ParamSelectOptions, ParamSyncOptions
 
 _SYNC_JOINS = {"left", "right", "outer", "inner", "domain", "exact", "override"}
 _SYNC_HOW = {"interp", "nearest", "fill"}
@@ -84,7 +86,36 @@ def validate_sync_options(opts: ParamSyncOptions, *, owner: str) -> None:
         )
 
 
-def normalize_sync_tol(opts: ParamSyncOptions, *, owner: str) -> float:
+def _is_timedelta_like(value: object) -> bool:
+    return isinstance(value, (np.timedelta64, _datetime.timedelta, pd.Timedelta))
+
+
+def _timedelta_ns(value: object, *, owner: str) -> int:
+    try:
+        delta = pd.Timedelta(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{owner}: opts.tol must be a nonnegative timedelta for datetime64 params.") from exc
+    if pd.isna(delta) or delta < pd.Timedelta(0):
+        raise ValueError(f"{owner}: opts.tol must be a nonnegative timedelta for datetime64 params.")
+    return int(np.asarray(delta.to_timedelta64()).astype("timedelta64[ns]").astype("int64"))
+
+
+def _normalize_datetime_tol(value: object, *, owner: str) -> int:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{owner}: opts.tol must be a timedelta for datetime64 params; numeric bool is invalid.")
+    if _is_timedelta_like(value):
+        return _timedelta_ns(value, owner=owner)
+    numeric = coerce_float_scalar(value, owner=owner, field="opts.tol")
+    if numeric == 0.0:
+        return 0
+    raise ValueError(f"{owner}: nonzero numeric opts.tol is not valid for datetime64 params; use a timedelta.")
+
+
+def normalize_sync_tol(opts: ParamSyncOptions, *, owner: str, param_kind: ParamKind) -> float | int:
+    if param_kind == "datetime64":
+        return _normalize_datetime_tol(opts.tol, owner=owner)
+    if _is_timedelta_like(opts.tol):
+        raise ValueError(f"{owner}: timedelta opts.tol is only valid for datetime64 params.")
     tol = coerce_float_scalar(opts.tol, owner=owner, field="opts.tol")
     if not np.isfinite(tol) or tol < 0.0:
         raise ValueError(f"{owner}: opts.tol must be finite and >= 0.0, got {opts.tol!r}.")
@@ -106,8 +137,8 @@ def normalize_sync_fill_value(value: object, *, owner: str) -> float | int:
     return arr.item()
 
 
-def resolve_sync_runtime(opts: ParamSyncOptions, *, owner: str) -> tuple[float, float | int]:
-    tol = normalize_sync_tol(opts, owner=owner)
+def resolve_sync_runtime(opts: ParamSyncOptions, *, owner: str, param_kind: ParamKind) -> tuple[float | int, float | int]:
+    tol = normalize_sync_tol(opts, owner=owner, param_kind=param_kind)
     fill = normalize_sync_fill_value(opts.fill_value, owner=owner) if opts.how == "fill" else float("nan")
     return tol, fill
 

@@ -81,7 +81,8 @@ def _reindex_left_batch(context: ParamRuntimeContext, *, query: xr.DataArray) ->
     if dim not in query.dims:
         return query
     _assert_unique_batch_labels(context, query=query, dim=dim)
-    return query.reindex({dim: context.batch_coords[dim]}, fill_value=np.nan)
+    fill = np.datetime64("NaT", "ns") if context.param_kind == "datetime64" else np.nan
+    return query.reindex({dim: context.batch_coords[dim]}, fill_value=fill)
 
 
 def interp_like_param(

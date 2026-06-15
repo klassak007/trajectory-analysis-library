@@ -190,8 +190,8 @@ def test_numba_arch_004_numba_backend_dispatch_keeps_public_signatures_stable() 
     """ID: NUMBA_ARCH_004_numba_backend_dispatch_keeps_public_signatures_stable."""
     map_params = inspect.signature(build_param_map).parameters
     bounds_params = inspect.signature(build_param_bounds_map).parameters
-    assert tuple(map_params) == ("param", "query", "sequence_dim", "query_dim", "valid_mask", "options")
-    assert tuple(bounds_params) == ("param", "start", "stop", "sequence_dim", "valid_mask")
+    assert tuple(map_params) == ("param", "query", "sequence_dim", "query_dim", "valid_mask", "options", "param_kind")
+    assert tuple(bounds_params) == ("param", "start", "stop", "sequence_dim", "valid_mask", "param_kind")
     assert all(param.kind is inspect.Parameter.KEYWORD_ONLY for param in map_params.values())
     assert all(param.kind is inspect.Parameter.KEYWORD_ONLY for param in bounds_params.values())
 

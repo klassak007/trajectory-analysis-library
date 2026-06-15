@@ -394,6 +394,36 @@ def test_param_engine_021_normalize_query_grid_non_numeric_query_rejected() -> N
     assert "query values must be numeric" in str(err.value)
 
 
+def test_param_engine_021b_datetime64_query_grid_rejects_numeric_queries() -> None:
+    """ID: PARAM_ENGINE_021b_datetime64_query_grid_rejects_numeric_queries."""
+    with pytest.raises(ValueError) as err:
+        normalize_query_grid([1.0], query_dim="query", param_kind="datetime64")
+    assert "datetime64 param queries must be datetime-like" in str(err.value)
+
+
+def test_param_engine_021c_datetime64_map_uses_param_kind_owner() -> None:
+    """ID: PARAM_ENGINE_021c_datetime64_map_uses_param_kind_owner."""
+    param = xr.DataArray(
+        np.asarray(["2026-01-01T00:00:00", "2026-01-01T00:00:10"], dtype="datetime64[ns]"),
+        dims=("sample",),
+    )
+    query = xr.DataArray(
+        np.asarray(["2026-01-01T00:00:05"], dtype="datetime64[ns]"),
+        dims=("query",),
+    )
+    pmap = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+        options=ParamMapOptions(method="linear"),
+        param_kind="datetime64",
+    )
+    np.testing.assert_array_equal(pmap.i0.values, [0])
+    np.testing.assert_array_equal(pmap.i1.values, [1])
+    np.testing.assert_allclose(pmap.alpha.values, [0.5])
+
+
 def test_param_engine_022_query_input_scalar_query_dim_collision_fails_fast() -> None:
     """ID: PARAM_ENGINE_022_query_input_scalar_query_dim_collision_fails_fast."""
     query = xr.DataArray(

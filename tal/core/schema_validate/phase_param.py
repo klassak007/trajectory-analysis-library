@@ -113,11 +113,12 @@ def phase_param_coord(
             actual={"coord": name, "dims": list(dims)},
             hint="use dims (sequence_dim,) or (*batch_dims, sequence_dim)",
         )
-    if not np.issubdtype(np.dtype(ds.coords[name].dtype), np.number):
+    dtype = np.dtype(ds.coords[name].dtype)
+    if not (np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.datetime64)):
         fail(
             code="schema.param_coord.dtype.invalid",
             path="tal.core.param_coord.name",
-            expected="numeric coordinate dtype",
+            expected="numeric or datetime64 coordinate dtype",
             actual={"coord": name, "dtype": str(ds.coords[name].dtype)},
-            hint="set param_coord to a numeric coordinate",
+            hint="set param_coord to a numeric or datetime64 coordinate",
         )

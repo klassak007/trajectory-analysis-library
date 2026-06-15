@@ -33,7 +33,14 @@ from .component_ops import (
     read_components,
 )
 from .group_ops import GroupByOptions, GroupMaterializeOptions, GroupingBinSpec
-from .param_ops import ParamEvalOptions, ParamSelectOptions, ParamSyncOptions, synchronize, synchronize_param
+from .param_ops import (
+    ParamEvalOptions,
+    ParamSelectOptions,
+    ParamSyncOptions,
+    ParamSyncTolerance,
+    synchronize,
+    synchronize_param,
+)
 from .schema import merge_schema, set_param_coord, set_roles, set_validity, validate_schema
 from .schema_errors import SchemaError
 
@@ -58,6 +65,7 @@ __all__ = [
     "ParamSelectOptions",
     "ParamEvalOptions",
     "ParamSyncOptions",
+    "ParamSyncTolerance",
     "SchemaError",
     "align_many",
     "align_pair",

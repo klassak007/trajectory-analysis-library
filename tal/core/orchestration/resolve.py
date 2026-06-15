@@ -13,16 +13,19 @@ from ..param_engine.schema_resolve import _resolve_schema_context_validated
 from ..param_engine.types import ParamCoordSpec
 from ..param_engine.validity_mask import _resolve_param_valid_mask_validated
 from ..param_ops.axis_coords import batch_coord
-from ..param_ops.types import ParamRuntimeContext
+from ..param_ops.types import ParamKind, ParamRuntimeContext
 
 
-def _validate_param_coord_numeric(coord: xr.DataArray, *, name: str) -> None:
-    if np.issubdtype(np.dtype(coord.dtype), np.number):
-        return
+def _resolve_param_kind(coord: xr.DataArray, *, name: str) -> ParamKind:
+    dtype = np.dtype(coord.dtype)
+    if np.issubdtype(dtype, np.number):
+        return "numeric"
+    if np.issubdtype(dtype, np.datetime64):
+        return "datetime64"
     raise ValueError(
-        "param operations require numeric param_coord values; "
+        "param operations require numeric or datetime64 param_coord values; "
         f"coord {name!r} has dtype {coord.dtype!r}. "
-        "Use a numeric coordinate before calling ao.param.*."
+        "Object datetime coordinates must be converted to xarray-visible datetime64 before calling ao.param.*."
     )
 
 
@@ -73,7 +76,7 @@ def resolve_param_runtime_context(
         sequence_dim=schema_ctx.sequence_dim,
         batch_dims=schema_ctx.batch_dims,
     )
-    _validate_param_coord_numeric(spec.coord, name=spec.name)
+    param_kind = _resolve_param_kind(spec.coord, name=spec.name)
     valid = _resolve_param_valid_mask_validated(
         schema_ctx.ds,
         spec=spec,
@@ -90,6 +93,7 @@ def resolve_param_runtime_context(
         valid_mask=valid,
         sequence_size_coord=schema_ctx.sequence_size_coord,
         batch_coords=coords,
+        param_kind=param_kind,
     )
 
 

@@ -1,10 +1,11 @@
-from .types import ParamEvalOptions, ParamSelectOptions, ParamSyncOptions
+from .types import ParamEvalOptions, ParamSelectOptions, ParamSyncOptions, ParamSyncTolerance
 
 __all__ = [
     "ParamAccessor",
     "ParamEvalOptions",
     "ParamSelectOptions",
     "ParamSyncOptions",
+    "ParamSyncTolerance",
     "synchronize",
     "synchronize_param",
 ]

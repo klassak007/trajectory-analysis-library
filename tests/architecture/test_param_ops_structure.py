@@ -250,7 +250,7 @@ def test_arch_paramops_006_sync_autogrid_owner_split_runtime_vs_backend_is_enfor
     orchestrator_text = Path("tal/core/param_ops/sync_autogrid.py").read_text(encoding="utf-8")
     backend_text = Path("tal/core/param_ops/sync_autogrid_backend.py").read_text(encoding="utf-8")
     assert "from .sync_autogrid import build_auto_grid_from_join" in runtime_text
-    assert "build_auto_grid_from_join(contexts, join=join, tol=tol, owner=\"synchronize_param\")" in runtime_text
+    assert "param_kind=contexts[0].param_kind" in runtime_text
     for needle in [
         "def _row_data(",
         "def _join_grid_unbatched(",

@@ -75,6 +75,7 @@ def evaluate_param(
         query_dim=opts.query_dim,
         batch_dims=context.batch_dims,
         batch_coords=context.batch_coords,
+        param_kind=context.param_kind,
     )
     pmap = build_param_map(
         param=context.spec.coord,
@@ -83,6 +84,7 @@ def evaluate_param(
         query_dim=grid.query_dim,
         valid_mask=context.valid_mask,
         options=ParamMapOptions(method=opts.method, duplicate_policy=opts.duplicate_policy),
+        param_kind=context.param_kind,
     )
     ds_out = _apply_map_dataset(context.ds, sequence_dim=context.sequence_dim, param_map=pmap)
     ds_out = ds_out.assign_coords({"valid": mark_reserved_coord(pmap.valid, name="valid")})

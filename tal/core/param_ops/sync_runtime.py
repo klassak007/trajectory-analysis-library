@@ -38,7 +38,7 @@ def eval_options_from_sync(*, query_dim: str, how: Literal["interp", "nearest", 
     return ParamEvalOptions(method="nearest", query_dim=query_dim)
 
 
-def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: float) -> xr.DataArray:
+def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: float | int) -> xr.DataArray:
     """Build a shared synchronization target grid from join policy.
 
     Parameters
@@ -47,7 +47,7 @@ def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: f
         Resolved runtime context/payload used by this orchestration boundary.
     join : str, optional
         Policy selector controlling alignment/join behavior.
-    tol : float, optional
+    tol : float | int, optional
         Numeric tolerance used for matching/alignment logic.
 
     Returns
@@ -63,7 +63,13 @@ def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: f
         return contexts[0].spec.coord
     if join == "right":
         return contexts[-1].spec.coord
-    return build_auto_grid_from_join(contexts, join=join, tol=tol, owner="synchronize_param")
+    return build_auto_grid_from_join(
+        contexts,
+        join=join,
+        tol=tol,
+        owner="synchronize_param",
+        param_kind=contexts[0].param_kind,
+    )
 
 
 def _join_batch_labels(
@@ -133,7 +139,7 @@ def _align_valid_mask_for_batch(
     labels: pd.Index,
     mode: Literal["inner", "outer", "exact"],
 ) -> xr.DataArray:
-    valid = context.valid_mask
+    valid = context.valid_mask.reset_coords(drop=True)
     if dim in valid.dims:
         if mode == "outer":
             return valid.reindex({dim: labels}, fill_value=False)
@@ -152,6 +158,17 @@ def _align_valid_mask_for_batch(
     return out.where(~missing, other=False)
 
 
+def _outer_batch_reindex_fill_values(context: ParamRuntimeContext) -> dict[str, object]:
+    fills: dict[str, object] = {}
+    for name, variable in context.ds.variables.items():
+        dtype = np.dtype(variable.dtype)
+        if np.issubdtype(dtype, np.datetime64):
+            fills[str(name)] = np.datetime64("NaT", "ns")
+        elif np.issubdtype(dtype, np.timedelta64):
+            fills[str(name)] = np.timedelta64("NaT", "ns")
+    return fills
+
+
 def _align_batch_context(
     context: ParamRuntimeContext,
     *,
@@ -160,7 +177,7 @@ def _align_batch_context(
     mode: Literal["inner", "outer", "exact"],
 ) -> ParamRuntimeContext:
     if mode == "outer":
-        ds = context.ds.reindex({dim: labels}, fill_value=np.nan)
+        ds = context.ds.reindex({dim: labels}, fill_value=_outer_batch_reindex_fill_values(context))
     else:
         source = batch_index(context.ds, dim=dim)
         if not labels_selectable_from(source, labels=labels):
@@ -219,15 +236,28 @@ def ensure_shared_topology(contexts: Sequence[ParamRuntimeContext]) -> None:
             raise ValueError("synchronize_param: all inputs must share the same batch_dims.")
 
 
+def ensure_shared_param_kind(contexts: Sequence[ParamRuntimeContext]) -> None:
+    first = contexts[0].param_kind
+    for ctx in contexts[1:]:
+        if ctx.param_kind != first:
+            raise ValueError("synchronize_param: all inputs must share the same param coordinate kind.")
+
+
 def _nearest_tolerance_mask(
     context: ParamRuntimeContext,
     *,
     grid: xr.DataArray,
     query_dim: str,
-    tol: float,
+    tol: float | int,
 ) -> xr.DataArray:
     assert_query_dim_safe(context.ds, sequence_dim=context.sequence_dim, query_dim=query_dim, owner="synchronize_param")
-    q = normalize_query_grid(grid, query_dim=query_dim, batch_dims=context.batch_dims, batch_coords=context.batch_coords)
+    q = normalize_query_grid(
+        grid,
+        query_dim=query_dim,
+        batch_dims=context.batch_dims,
+        batch_coords=context.batch_coords,
+        param_kind=context.param_kind,
+    )
     pmap = build_param_map(
         param=context.spec.coord,
         query=q.values,
@@ -235,6 +265,7 @@ def _nearest_tolerance_mask(
         query_dim=q.query_dim,
         valid_mask=context.valid_mask,
         options=ParamMapOptions(method="nearest"),
+        param_kind=context.param_kind,
     )
     nearest = gather_along_sequence(
         context.spec.coord,
@@ -243,13 +274,28 @@ def _nearest_tolerance_mask(
         query_dim=q.query_dim,
         owner="synchronize_param",
     )
-    mask = pmap.valid & (xr.apply_ufunc(np.abs, nearest - q.values, dask="allowed") <= tol)
+    mask = _within_tolerance(nearest=nearest, query=q.values, valid=pmap.valid, tol=tol, param_kind=context.param_kind)
     if q.query_dim != context.sequence_dim and q.query_dim in mask.dims:
         out = mask
         if context.sequence_dim in out.coords and context.sequence_dim not in out.dims:
             out = out.reset_coords(names=context.sequence_dim, drop=True)
         return out.rename({q.query_dim: context.sequence_dim})
     return mask
+
+
+def _within_tolerance(
+    *,
+    nearest: xr.DataArray,
+    query: xr.DataArray,
+    valid: xr.DataArray,
+    tol: float | int,
+    param_kind: str,
+) -> xr.DataArray:
+    if param_kind == "datetime64":
+        delta = (nearest - query).astype("timedelta64[ns]").astype("int64")
+        safe_delta = delta.where(valid, other=0)
+        return valid & (xr.apply_ufunc(np.abs, safe_delta, dask="allowed") <= int(tol))
+    return valid & (xr.apply_ufunc(np.abs, nearest - query, dask="allowed") <= float(tol))
 
 
 def _mask_numeric_sequence(
@@ -289,7 +335,7 @@ def apply_fill(
     *,
     context: ParamRuntimeContext,
     grid: xr.DataArray,
-    tol: float,
+    tol: float | int,
     fill_value: float | int,
     eval_opts: ParamEvalOptions,
     validate: bool,
@@ -332,6 +378,7 @@ __all__ = [
     "align_contexts_batch",
     "apply_fill",
     "ensure_shared_topology",
+    "ensure_shared_param_kind",
     "eval_options_from_sync",
     "grid_from_join",
 ]

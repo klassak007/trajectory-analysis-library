@@ -15,7 +15,6 @@ from .finalize import finalize_param_output
 from .guards import (
     assert_query_dim_safe,
     assert_reserved_metadata_safe,
-    coerce_float_scalar,
     dataset_namespace_names,
     mark_reserved_coord,
     unique_temp_dim,
@@ -295,14 +294,13 @@ def _slice_select(
         op="param selection",
     )
     seq_coords = _sequence_coord_names(context.ds, sequence_dim=context.sequence_dim)
-    start = -np.inf if query.start is None else coerce_float_scalar(query.start, owner="param sel", field="slice.start")
-    stop = np.inf if query.stop is None else coerce_float_scalar(query.stop, owner="param sel", field="slice.stop")
     bounds = build_param_bounds_map(
         param=context.spec.coord,
-        start=xr.DataArray(np.asarray(start, dtype="float64")),
-        stop=xr.DataArray(np.asarray(stop, dtype="float64")),
+        start=query.start,
+        stop=query.stop,
         sequence_dim=context.sequence_dim,
         valid_mask=context.valid_mask,
+        param_kind=context.param_kind,
     )
     bounds_i0 = bounds.i0
     bounds_i1 = bounds.i1

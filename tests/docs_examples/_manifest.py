@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib
 import inspect
-from types import FunctionType
-from typing import Any, Literal, get_origin
+from types import FunctionType, UnionType
+from typing import Any, Literal, Union, get_origin
 
 
 @dataclass(frozen=True)
@@ -558,6 +558,7 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.core.param_ops.types.ParamSelectOptions": ("CORE-PARAM-SURFACE",),
     "tal.core.param_ops.types.ParamEvalOptions": ("CORE-PARAM-SURFACE",),
     "tal.core.param_ops.types.ParamSyncOptions": ("CORE-PARAM-SURFACE",),
+    "tal.core.param_ops.types.ParamSyncTolerance": ("CORE-PARAM-SURFACE",),
     "tal.core.event_ops.types.Condition": ("CORE-EVENT-SURFACE",),
     "tal.core.event_ops.accessor.EventsAccessor.mask": ("CORE-EVENT-SURFACE",),
     "tal.core.event_ops.accessor.EventsAccessor.events": ("CORE-EVENT-SURFACE",),
@@ -751,6 +752,8 @@ def _owner_class_symbol(symbol: str) -> str | None:
 
 def _symbol_kind(obj: object, owner_class: str | None) -> str:
     if get_origin(obj) is Literal:
+        return "type_alias"
+    if get_origin(obj) in {Union, UnionType} or isinstance(obj, UnionType):
         return "type_alias"
     if inspect.isclass(obj):
         return "class"
