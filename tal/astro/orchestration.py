@@ -132,7 +132,8 @@ def _require_time_array(coord: xr.DataArray, *, owner: str, allow_numeric: bool 
     return xr.DataArray(converted, dims=coord.dims, coords=coord.coords, name=coord.name)
 
 
-def _source_time_coord(observer: AstroObserverContext, source: str, *, owner: str) -> xr.DataArray:
+def source_time_coord(observer: AstroObserverContext, source: str, *, owner: str) -> xr.DataArray:
+    """Resolve a named time coordinate or data variable from an observer dataset."""
     if source in observer.ds.coords:
         return observer.ds.coords[source]
     if source in observer.ds.data_vars:
@@ -172,7 +173,7 @@ def resolve_time_context(
     if time is not None and time_opts.source is not None:
         raise ValueError(f"{owner}: pass either explicit time or time.source, not both.")
     if time_opts.source is not None:
-        raw = _source_time_coord(observer, time_opts.source, owner=owner)
+        raw = source_time_coord(observer, time_opts.source, owner=owner)
         allow_numeric = time_opts.source == observer.param_coord
     elif time is not None:
         raw = _time_from_array(time, owner=owner)
@@ -210,4 +211,5 @@ __all__ = [
     "resolve_direction_runtime_context",
     "resolve_observer_context",
     "resolve_time_context",
+    "source_time_coord",
 ]

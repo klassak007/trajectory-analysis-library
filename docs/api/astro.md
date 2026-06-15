@@ -4,9 +4,9 @@
 > **Audience:** User API. This page is for application code and normal
 > analysis workflows.
 
-`tal.astro` provides the foundation types for topocentric astronomy
-calculations. Astro A1 does not compute Sun direction yet; it defines the
-options, metadata, and output type that later backend slices use.
+`tal.astro` provides foundation types for topocentric astronomy calculations.
+`tal.astro.sun` adds the Astropy-backed Sun direction operation without making
+the base `tal.astro` import heavy.
 
 ```{contents}
 :local:
@@ -31,6 +31,21 @@ SPICE behavior is contracted in a later slice.
 `east`, `north`, and `up`. It also stores `altitude_deg` and `azimuth_deg`
 payload variables derived from the ENU vector when they are not supplied.
 
+## Sun Direction
+
+```python
+from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
+```
+
+`direction_to_sun(...)` computes a topocentric ENU direction to the Sun from a
+geodetic observer and absolute datetime-like observation time. A2 executes only
+the Astropy backend. `SpiceSunOptions` is a public reserved options stub so the
+final option shape is stable, but passing SPICE options or selecting
+`backend="spice"` fails closed until a later backend phase.
+
+No top-level `tal.astro.direction_to_sun` alias is added in A2; import the
+operation from `tal.astro.sun`.
+
 ## Autosummary
 
 ```{eval-rst}
@@ -43,6 +58,9 @@ payload variables derived from the ENU vector when they are not supplied.
    tal.astro.AstroTimeOptions
    tal.astro.AstroIERSOptions
    tal.astro.TopocentricDirection
+   tal.astro.sun.SpiceSunOptions
+   tal.astro.sun.SunDirectionOptions
+   tal.astro.sun.direction_to_sun
 ```
 
 ## See Also

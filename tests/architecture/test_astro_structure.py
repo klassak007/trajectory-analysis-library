@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
+from typing import get_type_hints
 
 from tal.astro import TopocentricDirection
 from tal.core.typed_lifecycle import TypedAnalysisObject
@@ -115,3 +118,76 @@ def test_arch_astro_direction_uses_typed_lifecycle_and_budget() -> None:
     assert "TypedLifecycleSpec(" in Path("tal/astro/direction.py").read_text(encoding="utf-8")
     for path in sorted(Path("tal/astro").rglob("*.py")):
         _assert_agents_budget(path)
+
+
+def test_arch_astro_a2_001_sun_operation_uses_a1_runtime_context() -> None:
+    """ID: ARCH_ASTRO_A2_001_sun_operation_uses_a1_runtime_context."""
+    text = Path("tal/astro/sun.py").read_text(encoding="utf-8")
+    assert "resolve_observer_context" in text
+    assert "resolve_time_context" in text
+    assert "AstroDirectionRuntimeContext" in text
+    assert "resolve_direction_runtime_context(" not in text
+
+
+def test_arch_astro_a2_002_sun_operation_uses_a1_finalize_owner() -> None:
+    """ID: ARCH_ASTRO_A2_002_sun_operation_uses_a1_finalize_owner."""
+    text = Path("tal/astro/sun.py").read_text(encoding="utf-8")
+    assert "finalize_topocentric_direction" in text
+    assert "_from_validated" not in text
+    assert "_from_unvalidated" not in text
+
+
+def test_arch_astro_a2_003_astropy_backend_is_schema_free() -> None:
+    """ID: ARCH_ASTRO_A2_003_astropy_backend_is_schema_free."""
+    text = Path("tal/astro/backends/astropy.py").read_text(encoding="utf-8")
+    assert "xarray" not in text
+    assert "attrs" not in text
+    assert "tal.ext.astro" not in text
+
+
+def test_arch_astro_a2_004_no_local_topology_planner_clones() -> None:
+    """ID: ARCH_ASTRO_A2_004_no_local_topology_planner_clones."""
+    text = Path("tal/astro/sun.py").read_text(encoding="utf-8")
+    banned = ["flatten_param_contexts", "restore_dataset_batch_topology", "BatchFlattenPlan"]
+    assert [token for token in banned if token in text] == []
+
+
+def test_arch_astro_a2_005_no_tal_v2_imports() -> None:
+    """ID: ARCH_ASTRO_A2_005_no_tal_v2_imports."""
+    for path in sorted(Path("tal/astro").rglob("*.py")):
+        assert "tal_v2" not in path.read_text(encoding="utf-8")
+
+
+def test_arch_astro_a2_006_no_top_level_sun_alias_in_a2() -> None:
+    """ID: ARCH_ASTRO_A2_006_no_top_level_sun_alias_in_a2."""
+    text = Path("tal/astro/__init__.py").read_text(encoding="utf-8")
+    assert "direction_to_sun" not in text
+    assert ".sun" not in text
+
+
+def test_arch_astro_a2_007_no_astropy_imports_outside_backend() -> None:
+    """ID: ARCH_ASTRO_A2_007_no_astropy_imports_outside_backend."""
+    offenders: list[str] = []
+    for path in sorted(Path("tal/astro").rglob("*.py")):
+        if path.as_posix() == "tal/astro/backends/astropy.py":
+            continue
+        imports = _imports(path)
+        if any(name.split(".")[0] == "astropy" for name in imports):
+            offenders.append(path.as_posix())
+    assert offenders == []
+
+
+def test_arch_astro_a2_sun_options_type_hints_are_evaluable() -> None:
+    from tal.astro.sun import SpiceSunOptions, SunDirectionOptions
+
+    assert get_type_hints(SunDirectionOptions)["spice"] == SpiceSunOptions | None
+
+
+def test_arch_astro_a2_lightweight_import_boundary() -> None:
+    code = (
+        "import sys; import tal, tal.astro; "
+        "assert 'tal.astro.sun' not in sys.modules; "
+        "assert 'astropy' not in sys.modules; "
+        "assert 'spiceypy' not in sys.modules"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

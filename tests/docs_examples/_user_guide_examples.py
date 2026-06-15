@@ -8,7 +8,8 @@ import numpy as np
 import xarray as xr
 
 from tal import ufuncs
-from tal.astro import AstroOptions, AstroTimeOptions, TopocentricDirection
+from tal.astro import AstroIERSOptions, AstroOptions, AstroTimeOptions, TopocentricDirection
+from tal.astro.sun import SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject, ParamEvalOptions, ParamSyncOptions, synchronize
 from tal.core.event_ops import (
     AroundOptions,
@@ -643,6 +644,22 @@ def example_guide_astro_foundation() -> None:
     assert azimuth.dims == ("sample",)
 
 
+def example_guide_astro_sun_direction() -> None:
+    ao = AnalysisObject.from_data(
+        xr.Dataset(
+            {"lla": (("sample", "lla_axis"), np.array([[35.0, -106.0, 1600.0]], dtype=float))},
+            coords={"sample": [0], "lla_axis": ["lat", "lon", "alt"]},
+        ),
+        sequence_dim="sample",
+        core_dims=("lla_axis",),
+        validate=True,
+    )
+    opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
+    sun = direction_to_sun(GeodeticPosition.from_lla(ao), time="2024-06-01T12:00:00", opts=opts)
+    assert sun.unsafe_data["direction"].dims == ("sample", "enu")
+    assert sun.unsafe_data.attrs["tal"]["ext"]["astro"]["backend"] == "astropy"
+
+
 def example_guide_frames_basic() -> None:
     with FrameGraph() as graph:
         world = graph.get_or_create_frame("world")
@@ -720,7 +737,7 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-GEO-INTERPOLATION": example_guide_geo_interpolation,
     "UG-GEO-CRS": example_guide_geo_crs,
     "UG-ASTRO-OPTIONS": example_guide_astro_foundation,
-    "UG-ASTRO-DIRECTION": example_guide_astro_foundation,
+    "UG-ASTRO-DIRECTION": example_guide_astro_sun_direction,
     "UG-FRAMES-BASIC": example_guide_frames_basic,
     "UG-VIEWING-SCHEMA": example_guide_viewing_schema,
 }

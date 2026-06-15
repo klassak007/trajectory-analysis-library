@@ -12,6 +12,7 @@ import xarray as xr
 
 from tal.catalog import Catalog
 from tal.astro import AstroBackend, AstroIERSOptions, AstroOptions, AstroTimeOptions, TopocentricDirection
+from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject, GroupByOptions, SequenceConcatOptions, concat_sequence
 from tal.core.component_ops import ComponentRegistryOptions, ComponentSpec
 from tal.core.event_ops import Condition, WhenOptions
@@ -1160,6 +1161,26 @@ def example_astro_topocentric_direction() -> None:
     assert set(direction.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
 
 
+def example_astro_sun_options() -> None:
+    opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
+    assert opts.backend == "astropy"
+    assert opts.iers is not None
+    assert opts.iers.auto_download is False
+    assert SpiceSunOptions() == SpiceSunOptions()
+
+
+def example_astro_sun_direction() -> None:
+    ds = xr.Dataset(
+        {"lla": (("sample", "lla_axis"), np.array([[35.0, -106.0, 1600.0]], dtype=float))},
+        coords={"sample": [0], "lla_axis": ["lat", "lon", "alt"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
+    opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
+    sun = direction_to_sun(GeodeticPosition.from_lla(ao), time="2024-06-01T12:00:00", opts=opts)
+    assert set(sun.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
+    np.testing.assert_allclose(np.linalg.norm(sun.unsafe_data["direction"].values, axis=-1), 1.0, atol=1e-12)
+
+
 def example_io_read_csv_logs() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "run.csv"
@@ -1621,6 +1642,8 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "GEO-CRS-TRANSFORM": example_geo_crs_transform,
     "ASTRO-OPTIONS": example_astro_options,
     "ASTRO-TOPOCENTRIC-DIRECTION": example_astro_topocentric_direction,
+    "ASTRO-SUN-OPTIONS": example_astro_sun_options,
+    "ASTRO-SUN-DIRECTION": example_astro_sun_direction,
     "IO-READ-CSV-LOGS": example_io_read_csv_logs,
     "IO-ROUNDTRIP-SURFACE": example_io_roundtrip_surface,
     "IO-ROS-OPTIONAL-SURFACE": example_io_ros_optional_surface,
