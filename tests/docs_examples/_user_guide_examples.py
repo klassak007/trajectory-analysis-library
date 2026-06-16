@@ -656,7 +656,9 @@ def example_guide_astro_sun_direction() -> None:
     )
     opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
     sun = direction_to_sun(GeodeticPosition.from_lla(ao), time="2024-06-01T12:00:00", opts=opts)
+    sun_xyz = sun.to_vector3()
     assert sun.unsafe_data["direction"].dims == ("sample", "enu")
+    assert sun_xyz.unsafe_data["direction"].dims == ("sample", "axis")
     assert sun.unsafe_data.attrs["tal"]["ext"]["astro"]["backend"] == "astropy"
 
 

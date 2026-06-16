@@ -16,7 +16,8 @@ from tal.astro.metadata import normalize_topocentric_metadata, read_astro_block
 from tal.astro.options import coerce_astro_options
 from tal.astro.orchestration import resolve_direction_runtime_context
 from tal.core import AnalysisObject
-from tal.core.schema_read import read_sequence_size_coord_name
+from tal.core.schema import merge_schema
+from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.geo import GeodeticPosition
 
 
@@ -26,6 +27,36 @@ def _direction_ao(labels: tuple[str, str, str] = ("east", "north", "up")) -> Ana
         coords={"sample": [0], "enu": list(labels)},
     )
     return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
+
+
+def _direction_ao_with_validity() -> AnalysisObject:
+    values = np.array(
+        [
+            [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            [[0.0, 0.0, 3.0], [4.0, 0.0, 0.0]],
+            [[0.0, 5.0, 0.0], [0.0, 0.0, 6.0]],
+        ],
+        dtype=float,
+    )
+    ds = xr.Dataset(
+        {"direction": (("sample", "trial", "enu"), values)},
+        coords={
+            "sample": [0, 1, 2],
+            "trial": ["a", "b"],
+            "enu": ["east", "north", "up"],
+            "time_s": ("sample", np.array([0.0, 1.0, 2.0], dtype=float)),
+            "group_size": ("trial", np.array([2, 3], dtype=np.int64)),
+        },
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("enu",),
+        param_coord="time_s",
+        sequence_size_coord="group_size",
+        validate=True,
+    )
 
 
 def _lla_ao() -> AnalysisObject:
@@ -103,6 +134,53 @@ def test_astro_core_a1_001_topocentric_direction_constructor_accepts_ao_dataset_
     assert isinstance(from_ao, TopocentricDirection)
     assert isinstance(from_ds, TopocentricDirection)
     assert isinstance(from_da, TopocentricDirection)
+
+
+def test_astro_core_a1_011_topocentric_direction_to_vector3_maps_enu_to_xyz() -> None:
+    """ID: ASTRO_CORE_A1_011_topocentric_direction_to_vector3_maps_enu_to_xyz."""
+    direction = TopocentricDirection(_direction_ao())
+    vector = direction.to_vector3(axis="axis", output_var="sun")
+    assert tuple(vector.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(vector.unsafe_data["sun"].to_numpy(), direction.unsafe_data["direction"].to_numpy())
+
+
+def test_astro_core_a1_012_to_vector3_preserves_topology_param_and_validity() -> None:
+    """ID: ASTRO_CORE_A1_012_to_vector3_preserves_topology_param_and_validity."""
+    direction = TopocentricDirection(_direction_ao_with_validity())
+    vector = direction.to_vector3()
+    declared, sequence_dim, batch_dims, core_dims = read_roles(vector.unsafe_data)
+    assert declared is True
+    assert sequence_dim == "sample"
+    assert batch_dims == ("trial",)
+    assert core_dims == ("axis",)
+    assert vector.unsafe_data["direction"].dims == ("sample", "trial", "axis")
+    assert read_param_coord_name(vector.unsafe_data) == "time_s"
+    assert read_sequence_size_coord_name(vector.unsafe_data) == "group_size"
+    np.testing.assert_array_equal(vector.unsafe_data.coords["group_size"].to_numpy(), np.array([2, 3]))
+
+
+def test_astro_core_a1_013_topocentric_direction_preserves_non_unit_magnitude() -> None:
+    """ID: ASTRO_CORE_A1_013_topocentric_direction_preserves_non_unit_magnitude."""
+    values = np.array([[2.0, 0.0, 0.0]], dtype=float)
+    direction = TopocentricDirection(_direction_ao())
+    replaced = direction.unsafe_data.copy()
+    replaced["direction"] = replaced["direction"].copy(data=values)
+    out = TopocentricDirection(replaced)
+    np.testing.assert_allclose(out.unsafe_data["direction"].to_numpy(), values)
+
+
+def test_astro_core_a1_014_to_vector3_clears_astro_metadata_preserves_siblings() -> None:
+    """ID: ASTRO_CORE_A1_014_to_vector3_clears_astro_metadata_preserves_siblings."""
+    direction = TopocentricDirection(_direction_ao())
+    with_custom = merge_schema(
+        direction.unsafe_data,
+        {"ext": {"custom": {"owner": "test", "version": 1}}},
+        validate=True,
+    )
+    vector = TopocentricDirection(with_custom).to_vector3()
+    ext = vector.unsafe_data.attrs["tal"]["ext"]
+    assert ext["custom"] == {"owner": "test", "version": 1}
+    assert "astro" not in ext
 
 
 def test_astro_core_a1_002_topocentric_direction_requires_enu_core_labels() -> None:

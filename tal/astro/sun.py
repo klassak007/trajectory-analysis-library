@@ -192,9 +192,10 @@ def _observer_components(context: AstroDirectionRuntimeContext, *, owner: str) -
 
 
 def _semantic_dims(context: AstroDirectionRuntimeContext) -> tuple[str, ...]:
-    dims = list(context.output_batch_dims)
+    dims = []
     if context.output_sequence_dim is not None:
         dims.append(context.output_sequence_dim)
+    dims.extend(context.output_batch_dims)
     return tuple(dims)
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import xarray as xr
 
@@ -11,15 +13,25 @@ from tal.core.orchestration.runtime_checks import (
     require_single_core_dim_with_length,
     require_var_contains_dims,
 )
-from tal.core.schema_read import read_roles, validate_schema_if_needed
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+    validate_schema_if_needed,
+)
+from tal.core.schema import merge_schema
 from tal.core.typed_lifecycle import TypedAnalysisObject, TypedLifecycleContext, TypedLifecycleSpec
 
 from .metadata import normalize_topocentric_metadata
+
+if TYPE_CHECKING:
+    from tal.linalg import Vector3
 
 _DIRECTION_VAR = "direction"
 _ALTITUDE_VAR = "altitude_deg"
 _AZIMUTH_VAR = "azimuth_deg"
 _ENU_LABELS: tuple[str, str, str] = ("east", "north", "up")
+_XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 _DATA_VARS = frozenset({_DIRECTION_VAR, _ALTITUDE_VAR, _AZIMUTH_VAR})
 
 
@@ -34,6 +46,12 @@ def _semantic_dims(sequence_dim: str | None, batch_dims: tuple[str, ...]) -> tup
     if sequence_dim is None:
         return batch_dims
     return (sequence_dim, *batch_dims)
+
+
+def _require_non_empty_string(value: object, *, field: str, owner: str) -> str:
+    if isinstance(value, str) and value:
+        return value
+    raise ValueError(f"{owner}: {field} must be a non-empty string.")
 
 
 def _component(data: xr.DataArray, *, dim: str, label: str) -> xr.DataArray:
@@ -130,8 +148,31 @@ def _enforce_direction_invariants(ds: xr.Dataset, ctx: TypedLifecycleContext) ->
     _require_payload_var(candidate, name=_AZIMUTH_VAR, semantic_dims=semantic_dims, owner=ctx.owner)
 
 
+def _vector3_dataset(
+    ds: xr.Dataset,
+    *,
+    axis: str,
+    output_var: str,
+    owner: str,
+) -> tuple[xr.Dataset, str | None, tuple[str, ...]]:
+    candidate = validate_schema_if_needed(ds)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(candidate)
+    if not declared or len(core_dims) != 1:
+        raise ValueError(f"{owner}: TopocentricDirection requires declared roles and one ENU core dim.")
+    core_dim = core_dims[0]
+    semantic_dims = _semantic_dims(sequence_dim, batch_dims)
+    if axis in semantic_dims and axis != core_dim:
+        raise ValueError(f"{owner}: axis {axis!r} conflicts with semantic dims {semantic_dims!r}.")
+    out = candidate[[_DIRECTION_VAR]]
+    if core_dim != axis:
+        out = out.rename({core_dim: axis})
+    out = out.rename({_DIRECTION_VAR: output_var})
+    out = out.assign_coords({axis: list(_XYZ_LABELS)})
+    return merge_schema(out, {"ext": {"astro": None}}, validate=False), sequence_dim, batch_dims
+
+
 class TopocentricDirection(TypedAnalysisObject):
-    """Backend-neutral topocentric ENU unit direction payload.
+    """Backend-neutral topocentric ENU direction payload.
 
     Parameters
     ----------
@@ -146,6 +187,13 @@ class TopocentricDirection(TypedAnalysisObject):
     ValueError
         If roles, core labels, astro metadata, or payload variables are
         malformed.
+
+    Notes
+    -----
+    Public construction preserves the supplied direction magnitude. It does not
+    normalize vectors or validate unit norm so Dask-backed payloads remain lazy.
+    Backend operations such as ``tal.astro.sun.direction_to_sun`` produce unit
+    vectors and test that invariant at the operation boundary.
 
     Examples
     --------
@@ -170,6 +218,78 @@ class TopocentricDirection(TypedAnalysisObject):
         normalize=_normalize_direction_metadata,
         enforce=_enforce_direction_invariants,
     )
+
+    def to_vector3(
+        self,
+        *,
+        axis: str = "axis",
+        output_var: str = "direction",
+        validate: bool = True,
+    ) -> "Vector3":
+        """Convert ENU direction labels to a ``Vector3`` xyz payload.
+
+        Parameters
+        ----------
+        axis : str, optional
+            Output core dimension name for ``x``, ``y``, ``z`` labels.
+        output_var : str, optional
+            Output vector variable name.
+        validate : bool, optional
+            Whether to validate the output core schema before returning.
+
+        Returns
+        -------
+        tal.linalg.Vector3
+            Vector3 with ``x=east``, ``y=north``, and ``z=up``.
+
+        Raises
+        ------
+        ValueError
+            If ``axis`` or ``output_var`` is empty, or if ``axis`` conflicts
+            with an existing semantic dimension.
+
+        Notes
+        -----
+        This is a label adapter for ENU sightline math. It preserves direction
+        magnitude and metadata topology; it does not normalize the vector.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.astro import TopocentricDirection
+        >>> from tal.core import AnalysisObject
+        >>> ds = xr.Dataset(
+        ...     {"direction": (("sample", "enu"), [[2.0, 3.0, 4.0]])},
+        ...     coords={"sample": [0], "enu": ["east", "north", "up"]},
+        ... )
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
+        >>> vector = TopocentricDirection(ao).to_vector3()
+        >>> tuple(vector.unsafe_data.coords["axis"].to_numpy().tolist())
+        ('x', 'y', 'z')
+        """
+        owner = "astro.TopocentricDirection.to_vector3"
+        resolved_axis = _require_non_empty_string(axis, field="axis", owner=owner)
+        resolved_var = _require_non_empty_string(output_var, field="output_var", owner=owner)
+        ds, sequence_dim, batch_dims = _vector3_dataset(
+            self.unsafe_data,
+            axis=resolved_axis,
+            output_var=resolved_var,
+            owner=owner,
+        )
+        ao = AnalysisObject.from_data(
+            ds,
+            sequence_dim=sequence_dim,
+            batch_dims=batch_dims,
+            core_dims=(resolved_axis,),
+            param_coord=read_param_coord_name(self.unsafe_data),
+            sequence_size_coord=read_sequence_size_coord_name(self.unsafe_data),
+            validate=validate,
+        )
+        from tal.linalg import Vector3
+
+        if validate:
+            return Vector3._from_validated(ao.unsafe_data)
+        return Vector3._from_unvalidated(ao.unsafe_data)
 
 
 __all__ = ["TopocentricDirection"]

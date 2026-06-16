@@ -45,12 +45,20 @@ sun = direction_to_sun(
 direction = sun.unsafe_data["direction"]
 altitude = sun.unsafe_data["altitude_deg"]
 azimuth = sun.unsafe_data["azimuth_deg"]
+sun_xyz = sun.to_vector3()
 ```
 
-The payload is a unit direction, not a `tal.spatial.Position`. Astro metadata
-lives under `tal.ext.astro`; geo observer metadata remains under `tal.ext.geo`.
-SPICE options are present as a reserved public shape, but SPICE execution is a
-later backend phase.
+The payload is a direction, not a `tal.spatial.Position`. Public
+`TopocentricDirection` construction preserves magnitude; `direction_to_sun`
+produces a unit vector.
+
+Geo local ENU positions use cartesian `x`, `y`, `z` labels for east, north, and
+up. Use `TopocentricDirection.to_vector3()` as the label-safe bridge before
+dot products with ENU positions or sightline vectors.
+
+Astro metadata lives under `tal.ext.astro`; geo observer metadata remains under
+`tal.ext.geo`. SPICE options are present as a reserved public shape, but SPICE
+execution is a later backend phase.
 
 ## See Also
 

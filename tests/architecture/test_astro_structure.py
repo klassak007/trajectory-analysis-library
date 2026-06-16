@@ -120,6 +120,46 @@ def test_arch_astro_direction_uses_typed_lifecycle_and_budget() -> None:
         _assert_agents_budget(path)
 
 
+def test_arch_astro_direction_to_vector3_keeps_linalg_import_local() -> None:
+    module = ast.parse(Path("tal/astro/direction.py").read_text(encoding="utf-8"))
+    top_level_imports: list[str] = []
+    for node in module.body:
+        if isinstance(node, ast.Import):
+            top_level_imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            top_level_imports.append(node.module)
+    assert "tal.linalg" not in top_level_imports
+    assert "from tal.linalg import Vector3" in Path("tal/astro/direction.py").read_text(encoding="utf-8")
+
+
+def test_arch_astro_direction_to_vector3_has_vector3_return_annotation() -> None:
+    module = ast.parse(Path("tal/astro/direction.py").read_text(encoding="utf-8"))
+    method = next(
+        item
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "TopocentricDirection"
+        for item in node.body
+        if isinstance(item, ast.FunctionDef) and item.name == "to_vector3"
+    )
+    assert method.returns is not None
+    annotation = method.returns.value if isinstance(method.returns, ast.Constant) else ast.unparse(method.returns)
+    assert "Vector3" in str(annotation)
+
+
+def test_arch_astro_direction_to_vector3_has_no_finalize_owner_clone() -> None:
+    text = Path("tal/astro/direction.py").read_text(encoding="utf-8")
+    assert "CoreSchemaFinalizeSpec" not in text
+    assert "finalize_with_schema" not in text
+
+
+def test_arch_astro_direction_to_vector3_preserves_extension_metadata_deliberately() -> None:
+    text = Path("tal/astro/direction.py").read_text(encoding="utf-8")
+    section = text.split("def _vector3_dataset", 1)[1].split("class TopocentricDirection", 1)[0]
+    assert "merge_schema(" in section
+    assert '{"ext": {"astro": None}}' in section
+    assert ".to_dataset(" not in section
+
+
 def test_arch_astro_a2_001_sun_operation_uses_a1_runtime_context() -> None:
     """ID: ARCH_ASTRO_A2_001_sun_operation_uses_a1_runtime_context."""
     text = Path("tal/astro/sun.py").read_text(encoding="utf-8")

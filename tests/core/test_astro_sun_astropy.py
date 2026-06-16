@@ -93,7 +93,7 @@ def test_astro_core_a2_003_direction_to_sun_preserves_batch_topology() -> None:
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("enu",)
-    assert out.unsafe_data["direction"].dims == ("trial", "sample", "enu")
+    assert out.unsafe_data["direction"].dims == ("sample", "trial", "enu")
 
 
 def test_astro_core_a2_004_direction_to_sun_outputs_unit_enu_vector() -> None:

@@ -21,6 +21,7 @@ AstroOptions(backend="astropy", time=None, iers=None)
 AstroTimeOptions(scale="utc", source=None)
 AstroIERSOptions(auto_download=False, degraded_accuracy="error")
 TopocentricDirection(data)
+TopocentricDirection.to_vector3(axis="axis", output_var="direction")
 ```
 
 `AstroBackend` is the public backend literal accepted by
@@ -30,6 +31,9 @@ SPICE behavior is contracted in a later slice.
 `TopocentricDirection` stores a `direction` variable with ENU labels
 `east`, `north`, and `up`. It also stores `altitude_deg` and `azimuth_deg`
 payload variables derived from the ENU vector when they are not supplied.
+Public construction preserves vector magnitude. Use
+`TopocentricDirection.to_vector3()` when a label-safe xyz bridge is needed for
+ENU vector math.
 
 ## Sun Direction
 
@@ -58,6 +62,7 @@ operation from `tal.astro.sun`.
    tal.astro.AstroTimeOptions
    tal.astro.AstroIERSOptions
    tal.astro.TopocentricDirection
+   tal.astro.TopocentricDirection.to_vector3
    tal.astro.sun.SpiceSunOptions
    tal.astro.sun.SunDirectionOptions
    tal.astro.sun.direction_to_sun

@@ -1161,6 +1161,18 @@ def example_astro_topocentric_direction() -> None:
     assert set(direction.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
 
 
+def example_astro_direction_to_vector3() -> None:
+    ds = xr.Dataset(
+        {"direction": (("sample", "enu"), np.asarray([[2.0, 3.0, 4.0]], dtype=float))},
+        coords={"sample": [0], "enu": ["east", "north", "up"]},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
+    vector = TopocentricDirection(ao).to_vector3(axis="axis", output_var="sun")
+    assert isinstance(vector, Vector3)
+    assert tuple(vector.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(vector.unsafe_data["sun"].to_numpy(), np.asarray([[2.0, 3.0, 4.0]]))
+
+
 def example_astro_sun_options() -> None:
     opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
     assert opts.backend == "astropy"
@@ -1642,6 +1654,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "GEO-CRS-TRANSFORM": example_geo_crs_transform,
     "ASTRO-OPTIONS": example_astro_options,
     "ASTRO-TOPOCENTRIC-DIRECTION": example_astro_topocentric_direction,
+    "ASTRO-DIRECTION-TO-VECTOR3": example_astro_direction_to_vector3,
     "ASTRO-SUN-OPTIONS": example_astro_sun_options,
     "ASTRO-SUN-DIRECTION": example_astro_sun_direction,
     "IO-READ-CSV-LOGS": example_io_read_csv_logs,
