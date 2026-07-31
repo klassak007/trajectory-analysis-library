@@ -323,6 +323,41 @@ def test_schema_write_validity_008_chunked_values_rejected() -> None:
     assert err.value.actual["reason"] == "chunked coordinate not schema-value-validatable"
 
 
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(np.asarray([3 + 0j, 2 + 1j], dtype=np.complex128), id="complex"),
+        pytest.param(np.asarray([True, False], dtype=bool), id="bool"),
+        pytest.param(np.asarray([3, 2], dtype="timedelta64[s]"), id="timedelta"),
+        pytest.param(
+            np.asarray(["2026-01-01", "2026-01-02"], dtype="datetime64[D]"),
+            id="datetime",
+        ),
+    ],
+)
+def test_schema_write_validity_009_non_count_dtypes_rejected(values: np.ndarray) -> None:
+    """ID: SCHEMA_WRITE_VALIDITY_009_non_count_dtypes_rejected."""
+    ds = _ds_trial_sample_axis().assign_coords(group_size=("trial", values))
+    ds = set_roles(ds, sequence_dim="sample", batch_dims=("trial",), core_dims=("axis",))
+    with pytest.raises(SchemaError) as err:
+        set_validity(ds, sequence_size_coord="group_size")
+    _assert_schema_error(
+        err,
+        code="schema.validity.sequence_size_coord.values.invalid",
+        path="tal.core.validity.sequence_size_coord",
+    )
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.int64, np.uint16, np.float32, np.float64])
+def test_schema_write_validity_010_real_integer_valued_dtypes_accepted(dtype: type[np.generic]) -> None:
+    """ID: SCHEMA_WRITE_VALIDITY_010_real_integer_valued_dtypes_accepted."""
+    values = np.asarray([4, 3], dtype=dtype)
+    ds = _ds_trial_sample_axis().assign_coords(group_size=("trial", values))
+    ds = set_roles(ds, sequence_dim="sample", batch_dims=("trial",), core_dims=("axis",))
+    out = set_validity(ds, sequence_size_coord="group_size")
+    np.testing.assert_array_equal(out.coords["group_size"].to_numpy(), values)
+
+
 def test_schema_write_merge_001_patch_root_valid() -> None:
     """ID: SCHEMA_WRITE_MERGE_001_patch_root_valid."""
     ds = set_roles(_ds_sample_axis(), sequence_dim="sample", batch_dims=(), core_dims=("axis",))

@@ -285,6 +285,25 @@ def test_param_hard_016_sequence_size_out_of_range_rejected() -> None:
     assert err.value.path == "tal.core.validity.sequence_size_coord"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(np.asarray(1 + 2j, dtype=np.complex128), id="complex"),
+        pytest.param(np.asarray(True, dtype=bool), id="bool"),
+        pytest.param(np.asarray(1, dtype="timedelta64[s]"), id="timedelta"),
+    ],
+)
+def test_param_hard_035_explicit_sequence_size_non_count_dtype_rejected(value: np.ndarray) -> None:
+    """ID: PARAM_HARD_035_explicit_sequence_size_non_count_dtype_rejected."""
+    ds = _ds_sample().assign_coords(group_size=xr.DataArray(value))
+    ds = set_roles(ds, sequence_dim="sample", batch_dims=(), core_dims=())
+    ds = set_param_coord(ds, name="tau")
+    spec = resolve_param_coord(ds)
+    assert spec is not None
+    with pytest.raises(ValueError, match="real numeric count dtype"):
+        resolve_param_valid_mask(ds, spec=spec, sequence_size_coord="group_size")
+
+
 def test_param_hard_017_resolve_param_coord_name_explicit_dims_enforced_with_roles() -> None:
     """ID: PARAM_HARD_017_resolve_param_coord_name_explicit_dims_enforced_with_roles."""
     ds = xr.Dataset(

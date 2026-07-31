@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..param_engine.validity_mask import validate_sequence_size_values
+from .. import validity_values
 from ..param_ops.batch_labels import join_batch_index, labels_selectable_from
 from ..param_ops.guards import assert_unique_dim_labels, dataset_namespace_names
 from .align import _repair_outer_sequence_validity
@@ -106,19 +106,19 @@ def _declared_lengths(ctx: CombineContext, *, sequence_dim: str) -> xr.DataArray
     if name and name in ctx.ds.coords:
         coord = ctx.ds.coords[name]
         if ctx.batch_dims and tuple(coord.dims) == ctx.batch_dims:
-            return validate_sequence_size_values(
+            return validity_values.require_valid_sequence_size_values(
                 coord,
                 sequence_size_coord=name,
                 sequence_len=n,
                 owner="concat_batch",
-            ).astype("int64")
+            )
         if not ctx.batch_dims and tuple(coord.dims) == ():
-            return validate_sequence_size_values(
+            return validity_values.require_valid_sequence_size_values(
                 coord,
                 sequence_size_coord=name,
                 sequence_len=n,
                 owner="concat_batch",
-            ).astype("int64")
+            )
     if not ctx.batch_dims:
         return xr.DataArray(np.asarray(n, dtype="int64"), dims=())
     shape = tuple(int(ctx.ds.sizes[dim]) for dim in ctx.batch_dims)

@@ -1,8 +1,125 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from ._budget import file_loc, function_lengths
+
+
+def _module_tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _top_level_function_names(tree: ast.Module) -> set[str]:
+    return {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if not isinstance(node, ast.Attribute):
+        return None
+    prefix = _dotted_name(node.value)
+    return f"{prefix}.{node.attr}" if prefix is not None else None
+
+
+def _validity_owner_imports(tree: ast.Module) -> tuple[dict[str, str], set[str]]:
+    bindings: dict[str, str] = {}
+    absolute_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name != "tal.core.validity_values":
+                    continue
+                if alias.asname:
+                    bindings[alias.asname] = "validity_values"
+                else:
+                    absolute_modules.add(alias.name)
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        direct_owner = (
+            node.level == 2 and node.module == "validity_values"
+        ) or (
+            node.level == 0 and node.module == "tal.core.validity_values"
+        )
+        if direct_owner:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = f"validity_values.{alias.name}"
+            continue
+        module_owner = (
+            node.level == 2 and node.module is None
+        ) or (
+            node.level == 0 and node.module == "tal.core"
+        )
+        if not module_owner:
+            continue
+        for alias in node.names:
+            if alias.name == "validity_values":
+                bindings[alias.asname or alias.name] = "validity_values"
+    return bindings, absolute_modules
+
+
+def _resolve_validity_call(
+    dotted: str,
+    *,
+    bindings: dict[str, str],
+    absolute_modules: set[str],
+) -> str | None:
+    first, _, remainder = dotted.partition(".")
+    if first in bindings:
+        resolved = f"{bindings[first]}.{remainder}" if remainder else bindings[first]
+    else:
+        imported = next((name for name in absolute_modules if dotted.startswith(f"{name}.")), None)
+        if imported is None:
+            return None
+        resolved = f"validity_values{dotted.removeprefix(imported)}"
+    if not resolved.startswith("validity_values."):
+        return None
+    return resolved.rsplit(".", maxsplit=1)[-1]
+
+
+def _validity_owner_calls(tree: ast.Module) -> set[str]:
+    bindings, absolute_modules = _validity_owner_imports(tree)
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        dotted = _dotted_name(node.func)
+        if dotted is None:
+            continue
+        resolved = _resolve_validity_call(
+            dotted,
+            bindings=bindings,
+            absolute_modules=absolute_modules,
+        )
+        if resolved is not None:
+            calls.add(resolved)
+    return calls
+
+
+def _imports_param_engine_validity_mask(tree: ast.Module) -> bool:
+    absolute = "tal.core.param_engine.validity_mask"
+    relative = "param_engine.validity_mask"
+    absolute_parent = "tal.core.param_engine"
+    relative_parent = "param_engine"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == absolute for alias in node.names):
+                return True
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0 and node.module == absolute:
+            return True
+        if node.level == 2 and node.module == relative:
+            return True
+        parent_import = (
+            node.level == 0 and node.module == absolute_parent
+        ) or (
+            node.level == 2 and node.module == relative_parent
+        )
+        if parent_import and any(alias.name == "validity_mask" for alias in node.names):
+            return True
+    return False
 
 
 def test_orch_arch_001_single_owner_input_coercion() -> None:
@@ -92,6 +209,78 @@ def test_orch_arch_008_validity_finalize_owner_single_source() -> None:
     assert "def assign_sequence_size_from_valid_mask(" in validity_text
     assert "def assign_validity_from_mask(" not in combine_finalize
     assert "def assign_sequence_size_if_left_packed(" not in param_finalize
+
+
+def test_orch_arch_013_sequence_size_value_contract_has_shared_core_owner() -> None:
+    """ID: ORCH_ARCH_013_sequence_size_value_contract_has_shared_core_owner."""
+    owner_path = Path("tal/core/validity_values.py")
+    owner_tree = _module_tree(owner_path)
+    consumer_calls = {
+        Path("tal/core/schema_validate/phase_validity.py"): "normalize_sequence_size_values",
+        Path("tal/core/param_engine/validity_mask.py"): "require_valid_sequence_size_values",
+        Path("tal/core/reducer_ops/validity.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/align.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/concat_batch.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/concat_topology.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/finalize.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/merge.py"): "require_valid_sequence_size_values",
+    }
+    owner_defs = _top_level_function_names(owner_tree)
+    assert {"normalize_sequence_size_values", "require_valid_sequence_size_values"} <= owner_defs
+    assert file_loc(path=owner_path) <= 600
+    for name, length in function_lengths(owner_path).items():
+        assert length <= 50, f"{owner_path}:{name} exceeds function budget ({length} > 50)."
+    for path, call_name in consumer_calls.items():
+        tree = _module_tree(path)
+        calls = _validity_owner_calls(tree)
+        assert call_name in calls, f"shared validity owner call is missing from {path}"
+        local_defs = _top_level_function_names(tree)
+        assert not owner_defs.intersection(local_defs)
+
+    for path in (item for item in consumer_calls if "combine_ops" in item.parts):
+        assert not _imports_param_engine_validity_mask(_module_tree(path))
+
+
+def test_orch_arch_014_validity_owner_guard_resolves_import_forms() -> None:
+    """ID: ORCH_ARCH_014_validity_owner_guard_resolves_import_forms."""
+    sources = (
+        (
+            "from .. import validity_values as vv\n"
+            "vv.normalize_sequence_size_values(value, sequence_len=1)"
+        ),
+        (
+            "from ..validity_values import normalize_sequence_size_values as normalize\n"
+            "normalize(value, sequence_len=1)"
+        ),
+        (
+            "import tal.core.validity_values\n"
+            "tal.core.validity_values.normalize_sequence_size_values(value, sequence_len=1)"
+        ),
+        (
+            "import tal.core.validity_values as vv\n"
+            "vv.normalize_sequence_size_values(value, sequence_len=1)"
+        ),
+    )
+    for source in sources:
+        assert "normalize_sequence_size_values" in _validity_owner_calls(ast.parse(source))
+    wrong_owner = ast.parse(
+        "import other.validity_values as vv\n"
+        "vv.normalize_sequence_size_values(value, sequence_len=1)"
+    )
+    assert "normalize_sequence_size_values" not in _validity_owner_calls(wrong_owner)
+    forbidden_sources = (
+        "from ..param_engine.validity_mask import validate as check",
+        "from tal.core.param_engine.validity_mask import validate as check",
+        "from ..param_engine import validity_mask as old_validity",
+        "from tal.core.param_engine import validity_mask as old_validity",
+        "import tal.core.param_engine.validity_mask as old_validity",
+        "import tal.core.param_engine.validity_mask",
+    )
+    for source in forbidden_sources:
+        assert _imports_param_engine_validity_mask(ast.parse(source))
+    assert not _imports_param_engine_validity_mask(
+        ast.parse("import other.param_engine.validity_mask")
+    )
 
 
 def test_orch_arch_010_typed_lifecycle_core_owner_exists() -> None:

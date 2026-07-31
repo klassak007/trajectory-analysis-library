@@ -62,7 +62,13 @@ def _prepare_reduce_payload(
     ds, var_name, quat_dim, data = _resolve_quat_payload(rotation, owner=owner)
     _, sequence_dim, _, _ = read_roles(ds)
     sequence_size_coord = _resolve_sequence_size_coord(ds)
-    mask = resolve_structural_valid_mask(ds, sequence_dim=sequence_dim, sequence_size_coord=sequence_size_coord, var=data)
+    mask = resolve_structural_valid_mask(
+        ds,
+        sequence_dim=sequence_dim,
+        sequence_size_coord=sequence_size_coord,
+        var=data,
+        owner=owner,
+    )
     masked = apply_structural_mask(data, mask=mask)
     return ds, var_name, quat_dim, data, mask, masked
 

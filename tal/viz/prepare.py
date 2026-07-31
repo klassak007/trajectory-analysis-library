@@ -140,7 +140,12 @@ def _mask_source_var_for_dataset(ds: xr.Dataset, *, runtime: VizRuntimeContext) 
     return None
 
 
-def _apply_validity(data: xr.DataArray | xr.Dataset, *, runtime: VizRuntimeContext) -> xr.DataArray | xr.Dataset:
+def _apply_validity(
+    data: xr.DataArray | xr.Dataset,
+    *,
+    runtime: VizRuntimeContext,
+    owner: str,
+) -> xr.DataArray | xr.Dataset:
     if runtime.opts.validity == "ignore":
         return data
     if isinstance(data, xr.Dataset):
@@ -152,6 +157,7 @@ def _apply_validity(data: xr.DataArray | xr.Dataset, *, runtime: VizRuntimeConte
             sequence_dim=runtime.context.sequence_dim,
             sequence_size_coord=runtime.context.sequence_size_coord,
             var=source_var,
+            owner=owner,
         )
         if mask is None:
             return data
@@ -161,6 +167,7 @@ def _apply_validity(data: xr.DataArray | xr.Dataset, *, runtime: VizRuntimeConte
         sequence_dim=runtime.context.sequence_dim,
         sequence_size_coord=runtime.context.sequence_size_coord,
         var=data,
+        owner=owner,
     )
     return apply_structural_mask(data, mask=mask)
 
@@ -298,7 +305,7 @@ def prepare_viz_payload(runtime: VizRuntimeContext, *, owner: str) -> VizPrepare
     else:
         data = _resolve_plot_dataarray(runtime, owner=owner)
         data, x_name = _resolve_x(data, runtime=runtime, owner=owner)
-    data = _apply_validity(data, runtime=runtime)
+    data = _apply_validity(data, runtime=runtime, owner=owner)
     data, by, groupby = _prepare_channels_and_group_key(
         data,
         runtime=runtime,

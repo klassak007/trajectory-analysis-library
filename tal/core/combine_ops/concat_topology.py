@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from .. import validity_values
 from ..orchestration.topology import (
     align_combine_batch_axis,
     allocate_flat_batch_dim_name,
@@ -12,7 +13,6 @@ from ..orchestration.topology import (
     restore_combine_batch_axis,
     stack_combine_batch_axis,
 )
-from ..param_engine.validity_mask import validate_sequence_size_values
 from ..param_ops.guards import assert_unique_dim_labels
 from .types import CombineContext, SequenceConcatOptions
 
@@ -91,7 +91,7 @@ def _source_lengths(
     if sequence_size_coord and sequence_size_coord in ds.coords:
         coord = ds.coords[sequence_size_coord]
         if coord.dims == (flat_dim,):
-            validated = validate_sequence_size_values(
+            validated = validity_values.require_valid_sequence_size_values(
                 coord,
                 sequence_size_coord=sequence_size_coord,
                 sequence_len=n,
@@ -99,7 +99,7 @@ def _source_lengths(
             )
             return np.asarray(validated.data, dtype="int64")
         if coord.dims == ():
-            validated = validate_sequence_size_values(
+            validated = validity_values.require_valid_sequence_size_values(
                 coord,
                 sequence_size_coord=sequence_size_coord,
                 sequence_len=n,

@@ -5,8 +5,8 @@ from collections.abc import Mapping
 import numpy as np
 import xarray as xr
 
+from .. import validity_values
 from ..param_ops import synchronize_param
-from ..param_engine.validity_mask import validate_sequence_size_values
 from .align import align_contexts
 from .finalize import finalize_combine_output
 from .metadata import (
@@ -169,7 +169,7 @@ def _validate_sequence_size_coord_if_present(
     if size_name is None or sequence_dim is None or size_name not in ds.coords:
         return ds, size_name
     try:
-        validated = validate_sequence_size_values(
+        validated = validity_values.require_valid_sequence_size_values(
             ds.coords[size_name],
             sequence_size_coord=size_name,
             sequence_len=int(ds.sizes.get(sequence_dim, 0)),

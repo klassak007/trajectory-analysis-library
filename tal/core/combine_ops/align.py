@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..orchestration.lazy import require_unchunked_dataarray
+from .. import validity_values
 from ..orchestration.topology import (
     align_combine_batch_axis,
     allocate_flat_batch_dim_name,
@@ -15,7 +15,6 @@ from ..orchestration.topology import (
     restore_combine_batch_axis,
     stack_combine_batch_axis,
 )
-from ..param_engine.validity_mask import validate_sequence_size_values
 from ..param_ops.batch_labels import labels_selectable_from
 from ..param_ops.guards import assert_unique_dim_labels
 from ..validity_layout import is_left_packed_mask
@@ -141,26 +140,17 @@ def _source_size_values(
     if not name or name not in context.ds.coords:
         return None
     coord = context.ds.coords[name]
-    require_unchunked_dataarray(
-        coord,
-        owner="align",
-        field=(
-            f"invalid sequence_size_coord {name!r}: chunked sequence_size_coord uses an "
-            "explicit lazy-safe fail-fast boundary"
-        ),
-        guidance="compute or rechunk that coordinate explicitly before this operation",
-    )
     expected = context.batch_dims if context.batch_dims else ()
     if tuple(coord.dims) != expected:
         return None
     seq_len = int(context.ds.sizes.get(sequence_dim, 0))
-    validated = validate_sequence_size_values(
+    validated = validity_values.require_valid_sequence_size_values(
         coord,
         sequence_size_coord=name,
         sequence_len=seq_len,
         owner="align",
     )
-    return validated.astype("int64"), expected
+    return validated, expected
 
 
 def _rebuild_outer_size_coord(

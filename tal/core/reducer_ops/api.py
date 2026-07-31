@@ -11,7 +11,7 @@ from .dims import resolve_reduce_dims
 from .finalize_policy import resolve_reducer_finalize_source
 from .kernel import reduce_dataarray
 from .types import DimLike, WeightInput, require_supported_op
-from .validity import resolve_structural_valid_mask
+from .validity import _resolve_structural_valid_mask_base_validated
 from .vars import select_eligible_var_names
 from .weights import require_no_unsupported_weights
 
@@ -95,15 +95,19 @@ def _reduce_named_data_vars(
     owner: str,
 ) -> dict[str, xr.DataArray]:
     reduced: dict[str, xr.DataArray] = {}
-    for name in names:
-        data = ds[name]
-        var_dims = tuple(dim_name for dim_name in reduce_dims if dim_name in data.dims)
-        mask = resolve_structural_valid_mask(
+    base_mask = None
+    if sequence_dim is not None and any(sequence_dim in ds[name].dims for name in names):
+        base_mask = _resolve_structural_valid_mask_base_validated(
             ds,
             sequence_dim=sequence_dim,
             sequence_size_coord=sequence_size_coord,
-            var=data,
         )
+    for name in names:
+        data = ds[name]
+        var_dims = tuple(dim_name for dim_name in reduce_dims if dim_name in data.dims)
+        mask = None
+        if base_mask is not None and sequence_dim is not None and sequence_dim in data.dims:
+            mask = base_mask.broadcast_like(data)
         reduced[name] = reduce_dataarray(
             data,
             op=reducer,

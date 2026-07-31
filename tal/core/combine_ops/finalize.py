@@ -5,8 +5,8 @@ from collections.abc import Mapping
 import numpy as np
 import xarray as xr
 
+from .. import validity_values
 from ..orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
-from ..param_engine.validity_mask import validate_sequence_size_values
 from .types import CombineContext
 
 
@@ -78,7 +78,7 @@ def _normalize_sequence_size_coord(
     if sequence_dim is None or sequence_size_coord is None or sequence_size_coord not in ds.coords:
         return ds, sequence_size_coord
     try:
-        validated = validate_sequence_size_values(
+        validated = validity_values.require_valid_sequence_size_values(
             ds.coords[sequence_size_coord],
             sequence_size_coord=sequence_size_coord,
             sequence_len=int(ds.sizes.get(sequence_dim, 0)),

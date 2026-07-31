@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
+from .. import validity_values
 from .schema_resolve import _resolve_schema_context, _resolve_schema_context_validated
 from .types import ParamCoordSpec
 
@@ -15,69 +16,6 @@ def _sequence_index(ds: xr.Dataset, sequence_dim: str) -> xr.DataArray:
         coord = xr.DataArray(np.arange(n, dtype="int64"), dims=[sequence_dim], name=sequence_dim)
     values = np.arange(n, dtype="int64")
     return xr.DataArray(values, dims=[sequence_dim], coords={sequence_dim: coord})
-
-
-def _size_error(
-    sequence_size_coord: str,
-    reason: str,
-    *,
-    owner: str,
-) -> ValueError:
-    return ValueError(
-        f"{owner}: invalid sequence_size_coord "
-        f"{sequence_size_coord!r}: {reason}."
-    )
-
-
-def validate_sequence_size_values(
-    size: xr.DataArray,
-    *,
-    sequence_size_coord: str,
-    sequence_len: int,
-    owner: str = "resolve_param_valid_mask",
-) -> xr.DataArray:
-    """Validate sequence-size coordinates with explicit chunked boundary policy.
-
-    Parameters
-    ----------
-    size : xr.DataArray
-        Numeric boundary/range parameter for this operation.
-    sequence_size_coord : str, optional
-        Optional sequence-size coordinate used for ragged validity handling.
-    sequence_len : int, optional
-        Numeric boundary/range parameter for this operation.
-    owner : str, optional
-        Owner prefix used to build deterministic fail-closed error messages.
-
-    Returns
-    -------
-    xr.DataArray
-        Result of applying this operation with TAL semantic constraints preserved.
-
-    Notes
-    -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
-    """
-    if getattr(size.data, "chunks", None) is not None:
-        raise _size_error(
-            sequence_size_coord,
-            "chunked sequence_size_coord uses an explicit lazy-safe fail-fast boundary; "
-            "compute or rechunk that coordinate explicitly before this operation",
-            owner=owner,
-        )
-    vals = np.asarray(size.data, dtype="float64")
-    if np.any(~np.isfinite(vals)):
-        raise _size_error(sequence_size_coord, "values must be finite", owner=owner)
-    ints = np.rint(vals)
-    if np.any(ints != vals):
-        raise _size_error(sequence_size_coord, "values must be integers", owner=owner)
-    if np.any((ints < 0) | (ints > sequence_len)):
-        raise _size_error(
-            sequence_size_coord,
-            f"values must be within [0, {sequence_len}]",
-            owner=owner,
-        )
-    return xr.DataArray(ints.astype("int64"), dims=size.dims, coords=size.coords, name=size.name)
 
 
 def _resolved_param_coord(context, spec: ParamCoordSpec) -> xr.DataArray:
@@ -98,10 +36,11 @@ def _mask_from_sequence_size(
     sequence_size_coord: str,
 ) -> xr.DataArray:
     size = ds.coords[sequence_size_coord]
-    size = validate_sequence_size_values(
+    size = validity_values.require_valid_sequence_size_values(
         size,
         sequence_size_coord=sequence_size_coord,
         sequence_len=int(ds.sizes.get(sequence_dim, 0)),
+        owner="resolve_param_valid_mask",
     )
     idx = _sequence_index(ds, sequence_dim)
     if not batch_dims:
@@ -177,4 +116,4 @@ def _resolve_param_valid_mask_validated(
     return _mask_from_context(context, spec)
 
 
-__all__ = ["finite_param_mask", "resolve_param_valid_mask", "validate_sequence_size_values"]
+__all__ = ["finite_param_mask", "resolve_param_valid_mask"]
