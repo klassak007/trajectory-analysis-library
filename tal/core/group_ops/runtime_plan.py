@@ -15,6 +15,7 @@ from ..orchestration.topology import (
     TopologyOperand,
     resolve_unary_topology,
 )
+from ..validity_mask import resolve_validated_structural_mask_base
 from .grouped_types import GroupByOptions, GroupedRuntimePlan
 from .label_keys import canonical_group_label_key
 from .row_dim_compat import require_row_dim_compatibility
@@ -70,10 +71,47 @@ def _realize_row_values(data: xr.DataArray, *, row_dims: tuple[str, ...], owner:
     return np.asarray(data.transpose(*row_dims).data)
 
 
-def _enforce_na_error_policy(key_values: tuple[np.ndarray, ...], *, owner: str) -> None:
+def _enforce_na_error_policy(
+    key_values: tuple[np.ndarray, ...],
+    *,
+    keep_mask: np.ndarray,
+    owner: str,
+) -> None:
     for values in key_values:
-        if bool(np.asarray(pd.isna(values)).any()):
+        if bool((np.asarray(pd.isna(values)) & keep_mask).any()):
             raise ValueError(f"{owner}: grouping key domain contains NA values under na_key_policy='error'.")
+
+
+def _combined_row_keep_mask(context: GroupingFoundationContext) -> xr.DataArray | None:
+    structural = resolve_validated_structural_mask_base(
+        context.ds,
+        sequence_dim=context.sequence_dim,
+        sequence_size_coord=context.sequence_size_coord,
+    )
+    na_exclusion = context.na_exclusion_mask
+    if structural is None:
+        return na_exclusion
+    if na_exclusion is None:
+        return structural
+    return structural & na_exclusion
+
+
+def _realize_row_keep_mask(
+    context: GroupingFoundationContext,
+    *,
+    row_dims: tuple[str, ...],
+    shape: tuple[int, ...],
+    owner: str,
+) -> np.ndarray:
+    mask = _combined_row_keep_mask(context)
+    if mask is None:
+        return np.ones(shape, dtype=bool)
+    return _realize_row_values(
+        mask,
+        row_dims=row_dims,
+        owner=owner,
+        what="grouping row keep mask",
+    )
 
 
 def _row_label_1d(values: tuple[np.ndarray, ...], row: int) -> object:
@@ -334,19 +372,14 @@ def resolve_grouped_runtime_plan(
         _realize_row_values(key.data, row_dims=row_dims, owner=owner, what=f"grouping key[{key.index}]")
         for key in context.keys
     )
-    if context.na_key_policy == "error":
-        _enforce_na_error_policy(key_values, owner=owner)
-    keep_base = np.ones(key_values[0].shape, dtype=bool)
-    keep_mask = (
-        keep_base
-        if context.na_exclusion_mask is None
-        else _realize_row_values(
-            context.na_exclusion_mask,
-            row_dims=row_dims,
-            owner=owner,
-            what="NA exclusion mask",
-        )
+    keep_mask = _realize_row_keep_mask(
+        context,
+        row_dims=row_dims,
+        shape=key_values[0].shape,
+        owner=owner,
     )
+    if context.na_key_policy == "error":
+        _enforce_na_error_policy(key_values, keep_mask=keep_mask, owner=owner)
     stacked_dim = unique_temp_dim("__tal_group_row__", taken_dims=dataset_namespace_names(context.ds))
     if not opts.preserve_batch:
         return _resolve_global_plan(

@@ -10,6 +10,7 @@ import xarray as xr
 from ..orchestration.context import DatasetContext, DatasetContextOptions, resolve_dataset_contexts
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..orchestration.lazy import is_chunked_dataarray, require_unchunked_dataarray
+from ..validity_mask import resolve_validated_structural_mask_base
 from .key_resolve import normalize_grouping_key_input, resolve_grouping_key
 from .options import coerce_grouping_foundation_options
 from .types import GroupingFoundationContext, GroupingFoundationOptions, GroupingKeyInput, ResolvedGroupingKey
@@ -40,8 +41,32 @@ def _combined_na_mask(keys: tuple[ResolvedGroupingKey, ...]) -> xr.DataArray:
     return reduce(lambda left, right: left | right, (_na_mask(key.data) for key in keys))
 
 
-def _fill_na_group_label(data: xr.DataArray, *, label: object) -> xr.DataArray:
-    mask = _na_mask(data)
+def _scope_to_structural_validity(
+    mask: xr.DataArray,
+    *,
+    structural_valid_mask: xr.DataArray | None,
+) -> xr.DataArray:
+    return mask if structural_valid_mask is None else mask & structural_valid_mask
+
+
+def _structural_valid_mask(context: DatasetContext) -> xr.DataArray | None:
+    return resolve_validated_structural_mask_base(
+        context.ds,
+        sequence_dim=context.sequence_dim,
+        sequence_size_coord=context.sequence_size_coord,
+    )
+
+
+def _fill_na_group_label(
+    data: xr.DataArray,
+    *,
+    label: object,
+    structural_valid_mask: xr.DataArray | None,
+) -> xr.DataArray:
+    mask = _scope_to_structural_validity(
+        _na_mask(data),
+        structural_valid_mask=structural_valid_mask,
+    )
     return xr.where(mask, label, data.astype(object))
 
 
@@ -56,15 +81,41 @@ def _mask_has_true(mask: xr.DataArray, *, owner: str, field: str) -> bool:
     return bool(np.asarray(reduced.data).item())
 
 
+def _active_na_policy_masks(
+    combined_mask: xr.DataArray,
+    *,
+    context: DatasetContext,
+    owner: str,
+) -> tuple[xr.DataArray, xr.DataArray | None] | None:
+    if not _mask_has_true(combined_mask, owner=owner, field="grouping key NA check"):
+        return None
+    structural = _structural_valid_mask(context)
+    active = _scope_to_structural_validity(
+        combined_mask,
+        structural_valid_mask=structural,
+    )
+    if structural is not None and not _mask_has_true(
+        active,
+        owner=owner,
+        field="active grouping key NA check",
+    ):
+        return None
+    return active, structural
+
+
 def _group_label_collision(
     key: ResolvedGroupingKey,
     *,
     label: object,
+    structural_valid_mask: xr.DataArray | None,
     owner: str,
 ) -> None:
     mask = _na_mask(key.data)
     equal = xr.apply_ufunc(np.equal, key.data.astype(object), label, dask="parallelized", output_dtypes=[bool])
-    collision = equal & (~mask)
+    collision = _scope_to_structural_validity(
+        equal & (~mask),
+        structural_valid_mask=structural_valid_mask,
+    )
     if _mask_has_true(collision, owner=owner, field=f"grouping key[{key.index}] collision check"):
         raise ValueError(f"{owner}: na_group_label={label!r} collides with non-NA values in key {key.name!r}.")
 
@@ -72,6 +123,7 @@ def _group_label_collision(
 def _apply_na_policy(
     keys: tuple[ResolvedGroupingKey, ...],
     *,
+    context: DatasetContext,
     opts: GroupingFoundationOptions,
     owner: str,
 ) -> tuple[tuple[ResolvedGroupingKey, ...], xr.DataArray | None, object | None]:
@@ -79,22 +131,33 @@ def _apply_na_policy(
     if opts.na_key_policy == "error":
         if is_chunked_dataarray(combined_mask):
             return keys, None, None
-        if _mask_has_true(combined_mask, owner=owner, field="grouping key NA check"):
+        if _active_na_policy_masks(combined_mask, context=context, owner=owner) is not None:
             raise ValueError(f"{owner}: grouping key domain contains NA values under na_key_policy='error'.")
         return keys, None, None
     if opts.na_key_policy == "drop":
         return keys, ~combined_mask, None
     label = opts.na_group_label if opts.na_group_label is not None else _DEFAULT_NA_GROUP_LABEL
-    if not _mask_has_true(combined_mask, owner=owner, field="grouping key NA check"):
+    active_masks = _active_na_policy_masks(combined_mask, context=context, owner=owner)
+    if active_masks is None:
         return keys, None, label
+    _, structural_valid_mask = active_masks
     for key in keys:
-        _group_label_collision(key, label=label, owner=owner)
+        _group_label_collision(
+            key,
+            label=label,
+            structural_valid_mask=structural_valid_mask,
+            owner=owner,
+        )
     grouped = tuple(
         ResolvedGroupingKey(
             index=key.index,
             kind=key.kind,
             name=key.name,
-            data=_fill_na_group_label(key.data, label=label),
+            data=_fill_na_group_label(
+                key.data,
+                label=label,
+                structural_valid_mask=structural_valid_mask,
+            ),
             domain_order=key.domain_order,
         )
         for key in keys
@@ -120,6 +183,7 @@ def resolve_grouping_foundation_context(
     )
     keys, na_exclusion_mask, na_group_label = _apply_na_policy(
         resolved,
+        context=context,
         opts=options,
         owner=owner,
     )

@@ -7,11 +7,11 @@ import xarray as xr
 from ..orchestration.context import DatasetContextOptions, resolve_dataset_context
 from ..orchestration.finalize import finalize_like
 from ..orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
+from ..validity_mask import resolve_validated_structural_mask_base
 from .dims import resolve_reduce_dims
 from .finalize_policy import resolve_reducer_finalize_source
 from .kernel import reduce_dataarray
 from .types import DimLike, WeightInput, require_supported_op
-from .validity import _resolve_structural_valid_mask_base_validated
 from .vars import select_eligible_var_names
 from .weights import require_no_unsupported_weights
 
@@ -97,7 +97,7 @@ def _reduce_named_data_vars(
     reduced: dict[str, xr.DataArray] = {}
     base_mask = None
     if sequence_dim is not None and any(sequence_dim in ds[name].dims for name in names):
-        base_mask = _resolve_structural_valid_mask_base_validated(
+        base_mask = resolve_validated_structural_mask_base(
             ds,
             sequence_dim=sequence_dim,
             sequence_size_coord=sequence_size_coord,

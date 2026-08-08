@@ -14,6 +14,22 @@ def _top_level_function_names(tree: ast.Module) -> set[str]:
     return {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
 
 
+def _module_exports(tree: ast.Module) -> set[str]:
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+            continue
+        if not isinstance(node.value, (ast.List, ast.Tuple)):
+            return set()
+        return {
+            item.value
+            for item in node.value.elts
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        }
+    return set()
+
+
 def _dotted_name(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         return node.id
@@ -23,45 +39,51 @@ def _dotted_name(node: ast.expr) -> str | None:
     return f"{prefix}.{node.attr}" if prefix is not None else None
 
 
-def _validity_owner_imports(tree: ast.Module) -> tuple[dict[str, str], set[str]]:
+def _core_owner_imports(
+    tree: ast.Module,
+    *,
+    module_name: str,
+) -> tuple[dict[str, str], set[str]]:
     bindings: dict[str, str] = {}
     absolute_modules: set[str] = set()
+    absolute_owner = f"tal.core.{module_name}"
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name != "tal.core.validity_values":
+                if alias.name != absolute_owner:
                     continue
                 if alias.asname:
-                    bindings[alias.asname] = "validity_values"
+                    bindings[alias.asname] = module_name
                 else:
                     absolute_modules.add(alias.name)
         if not isinstance(node, ast.ImportFrom):
             continue
         direct_owner = (
-            node.level == 2 and node.module == "validity_values"
+            node.level in {1, 2} and node.module == module_name
         ) or (
-            node.level == 0 and node.module == "tal.core.validity_values"
+            node.level == 0 and node.module == absolute_owner
         )
         if direct_owner:
             for alias in node.names:
-                bindings[alias.asname or alias.name] = f"validity_values.{alias.name}"
+                bindings[alias.asname or alias.name] = f"{module_name}.{alias.name}"
             continue
         module_owner = (
-            node.level == 2 and node.module is None
+            node.level in {1, 2} and node.module is None
         ) or (
             node.level == 0 and node.module == "tal.core"
         )
         if not module_owner:
             continue
         for alias in node.names:
-            if alias.name == "validity_values":
-                bindings[alias.asname or alias.name] = "validity_values"
+            if alias.name == module_name:
+                bindings[alias.asname or alias.name] = module_name
     return bindings, absolute_modules
 
 
-def _resolve_validity_call(
+def _resolve_core_owner_call(
     dotted: str,
     *,
+    module_name: str,
     bindings: dict[str, str],
     absolute_modules: set[str],
 ) -> str | None:
@@ -72,14 +94,14 @@ def _resolve_validity_call(
         imported = next((name for name in absolute_modules if dotted.startswith(f"{name}.")), None)
         if imported is None:
             return None
-        resolved = f"validity_values{dotted.removeprefix(imported)}"
-    if not resolved.startswith("validity_values."):
+        resolved = f"{module_name}{dotted.removeprefix(imported)}"
+    if not resolved.startswith(f"{module_name}."):
         return None
     return resolved.rsplit(".", maxsplit=1)[-1]
 
 
-def _validity_owner_calls(tree: ast.Module) -> set[str]:
-    bindings, absolute_modules = _validity_owner_imports(tree)
+def _core_owner_calls(tree: ast.Module, *, module_name: str) -> set[str]:
+    bindings, absolute_modules = _core_owner_imports(tree, module_name=module_name)
     calls: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -87,14 +109,19 @@ def _validity_owner_calls(tree: ast.Module) -> set[str]:
         dotted = _dotted_name(node.func)
         if dotted is None:
             continue
-        resolved = _resolve_validity_call(
+        resolved = _resolve_core_owner_call(
             dotted,
+            module_name=module_name,
             bindings=bindings,
             absolute_modules=absolute_modules,
         )
         if resolved is not None:
             calls.add(resolved)
     return calls
+
+
+def _validity_owner_calls(tree: ast.Module) -> set[str]:
+    return _core_owner_calls(tree, module_name="validity_values")
 
 
 def _imports_param_engine_validity_mask(tree: ast.Module) -> bool:
@@ -118,6 +145,75 @@ def _imports_param_engine_validity_mask(tree: ast.Module) -> bool:
             node.level == 2 and node.module == relative_parent
         )
         if parent_import and any(alias.name == "validity_mask" for alias in node.names):
+            return True
+    return False
+
+
+def _imports_reducer_ops_validity(tree: ast.Module) -> bool:
+    absolute = "tal.core.reducer_ops.validity"
+    parent = "tal.core.reducer_ops"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name in {absolute, parent} for alias in node.names):
+                return True
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0 and node.module == absolute:
+            return True
+        if node.level == 2 and node.module == "reducer_ops.validity":
+            return True
+        parent_import = (
+            node.level == 0 and node.module == parent
+        ) or (
+            node.level == 2 and node.module == "reducer_ops"
+        )
+        if parent_import and any(alias.name == "validity" for alias in node.names):
+            return True
+        if node.level == 2 and node.module is None:
+            if any(alias.name == "reducer_ops" for alias in node.names):
+                return True
+        if node.level == 0 and node.module == "tal.core":
+            if any(alias.name == "reducer_ops" for alias in node.names):
+                return True
+    return False
+
+
+def _references_reducer_validity_base(tree: ast.Module) -> bool:
+    absolute = "tal.core.reducer_ops.validity"
+    parent = "tal.core.reducer_ops"
+    base_name = "resolve_structural_valid_mask_base"
+    module_bindings: set[str] = {absolute}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == absolute and alias.asname:
+                    module_bindings.add(alias.asname)
+                if alias.name == parent and alias.asname:
+                    module_bindings.add(f"{alias.asname}.validity")
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        direct_module = node.module in {absolute, "reducer_ops.validity"}
+        if direct_module and any(alias.name == base_name for alias in node.names):
+            return True
+        parent_module = node.module in {"tal.core.reducer_ops", "reducer_ops"}
+        if parent_module:
+            for alias in node.names:
+                if alias.name == "validity":
+                    module_bindings.add(alias.asname or alias.name)
+        if node.module is None:
+            for alias in node.names:
+                if alias.name == "reducer_ops":
+                    module_bindings.add(f"{alias.asname or alias.name}.validity")
+        if node.module == "tal.core":
+            for alias in node.names:
+                if alias.name == "reducer_ops":
+                    module_bindings.add(f"{alias.asname or alias.name}.validity")
+    target = f".{base_name}"
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        dotted = _dotted_name(node)
+        if dotted is not None and any(dotted == f"{binding}{target}" for binding in module_bindings):
             return True
     return False
 
@@ -218,7 +314,7 @@ def test_orch_arch_013_sequence_size_value_contract_has_shared_core_owner() -> N
     consumer_calls = {
         Path("tal/core/schema_validate/phase_validity.py"): "normalize_sequence_size_values",
         Path("tal/core/param_engine/validity_mask.py"): "require_valid_sequence_size_values",
-        Path("tal/core/reducer_ops/validity.py"): "require_valid_sequence_size_values",
+        Path("tal/core/validity_mask.py"): "require_valid_sequence_size_values",
         Path("tal/core/combine_ops/align.py"): "require_valid_sequence_size_values",
         Path("tal/core/combine_ops/concat_batch.py"): "require_valid_sequence_size_values",
         Path("tal/core/combine_ops/concat_topology.py"): "require_valid_sequence_size_values",
@@ -280,6 +376,66 @@ def test_orch_arch_014_validity_owner_guard_resolves_import_forms() -> None:
         assert _imports_param_engine_validity_mask(ast.parse(source))
     assert not _imports_param_engine_validity_mask(
         ast.parse("import other.param_engine.validity_mask")
+    )
+
+
+def test_orch_arch_015_structural_valid_mask_has_shared_core_owner() -> None:
+    """ID: ORCH_ARCH_015_structural_valid_mask_has_shared_core_owner."""
+    owner_path = Path("tal/core/validity_mask.py")
+    owner_defs = _top_level_function_names(_module_tree(owner_path))
+    consumers = {
+        Path("tal/core/group_ops/foundation.py"): "resolve_validated_structural_mask_base",
+        Path("tal/core/group_ops/runtime_plan.py"): "resolve_validated_structural_mask_base",
+        Path("tal/core/reducer_ops/api.py"): "resolve_validated_structural_mask_base",
+        Path("tal/core/reducer_ops/validity.py"): "resolve_structural_valid_mask_base",
+    }
+    assert {
+        "resolve_structural_valid_mask_base",
+        "resolve_validated_structural_mask_base",
+    } <= owner_defs
+    assert file_loc(path=owner_path) <= 600
+    for name, length in function_lengths(owner_path).items():
+        assert length <= 50, f"{owner_path}:{name} exceeds function budget ({length} > 50)."
+    for path, call_name in consumers.items():
+        calls = _core_owner_calls(_module_tree(path), module_name="validity_mask")
+        assert call_name in calls, f"shared structural-mask owner call is missing from {path}"
+        assert not owner_defs.intersection(_top_level_function_names(_module_tree(path)))
+    reducer_validity_path = Path("tal/core/reducer_ops/validity.py")
+    assert "resolve_structural_valid_mask_base" in _module_exports(
+        _module_tree(reducer_validity_path)
+    )
+    for path in sorted(Path("tal").rglob("*.py")):
+        if path == reducer_validity_path:
+            continue
+        assert not _references_reducer_validity_base(
+            _module_tree(path)
+        ), f"deprecated reducer-local structural-mask owner referenced from {path}"
+    for path in sorted(Path("tal/core/group_ops").glob("*.py")):
+        assert not _imports_reducer_ops_validity(
+            _module_tree(path)
+        ), f"grouping imports reducer validity ownership from {path}"
+    valid_sources = (
+        "from .. import validity_mask as vm\nvm.resolve_validated_structural_mask_base(value)",
+        "from ..validity_mask import resolve_validated_structural_mask_base as resolve\nresolve(value)",
+        "import tal.core.validity_mask as vm\nvm.resolve_validated_structural_mask_base(value)",
+    )
+    for source in valid_sources:
+        calls = _core_owner_calls(ast.parse(source), module_name="validity_mask")
+        assert "resolve_validated_structural_mask_base" in calls
+    forbidden_sources = (
+        "from ..reducer_ops.validity import resolve_structural_valid_mask_base",
+        "from tal.core.reducer_ops import validity\nvalidity.resolve_structural_valid_mask_base(value)",
+        "from .. import reducer_ops\nreducer_ops.validity.resolve_structural_valid_mask_base(value)",
+        "from tal.core import reducer_ops as ro\nro.validity.resolve_structural_valid_mask_base(value)",
+        "import tal.core.reducer_ops as ro\nro.validity.resolve_structural_valid_mask_base(value)",
+        "import tal.core.reducer_ops.validity\n"
+        "tal.core.reducer_ops.validity.resolve_structural_valid_mask_base(value)",
+    )
+    for source in forbidden_sources:
+        assert _imports_reducer_ops_validity(ast.parse(source))
+        assert _references_reducer_validity_base(ast.parse(source))
+    assert not _imports_reducer_ops_validity(
+        ast.parse("from ..reducer_ops.finalize_policy import resolve_reducer_finalize_source")
     )
 
 

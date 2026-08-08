@@ -211,7 +211,7 @@ def test_viz_core_008_group_key_uses_foundation_na_policy(monkeypatch: pytest.Mo
     _install_fake_hv_modules(monkeypatch)
     ao = _build_base_ao()
     group_key = xr.DataArray(
-        np.asarray([[1.0, 2.0, np.nan], [1.0, 2.0, 3.0]], dtype=float),
+        np.asarray([[1.0, np.nan, 3.0], [1.0, 2.0, 3.0]], dtype=float),
         dims=("trial", "time"),
         coords={
             "trial": ao.unsafe_data.coords["trial"],
