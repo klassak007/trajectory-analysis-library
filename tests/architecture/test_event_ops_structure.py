@@ -614,6 +614,59 @@ def test_event_arch_054_intervals_normal_path_vectorize_true_removed() -> None:
     assert "vectorize=True" not in section
 
 
+def test_event_arch_055_scalar_operand_broadcast_has_single_event_owner() -> None:
+    """ID: EVENT_ARCH_055_scalar_operand_broadcast_has_single_event_owner."""
+    owner = Path("tal/core/event_ops/evaluate.py")
+    definitions: list[Path] = []
+    for path in _event_ops_files():
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, ast.FunctionDef) and node.name == "_broadcast_scalar_operand"
+            for node in module.body
+        ):
+            definitions.append(path)
+    assert definitions == [owner]
+
+    module = ast.parse(owner.read_text(encoding="utf-8"))
+    resolver = next(
+        node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "_resolve_operand"
+    )
+    scalar_branches = [
+        node
+        for node in resolver.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Call)
+        and isinstance(node.test.func, ast.Attribute)
+        and isinstance(node.test.func.value, ast.Name)
+        and node.test.func.value.id == "np"
+        and node.test.func.attr == "isscalar"
+    ]
+    assert len(scalar_branches) == 1
+    branch = scalar_branches[0]
+    assert len(branch.test.args) == 1
+    guarded_operand = branch.test.args[0]
+    assert isinstance(guarded_operand, ast.Name)
+    assert guarded_operand.id == "operand"
+    assert len(branch.body) == 1 and isinstance(branch.body[0], ast.Return)
+    scalar_call = branch.body[0].value
+    assert isinstance(scalar_call, ast.Call)
+    assert isinstance(scalar_call.func, ast.Name)
+    assert scalar_call.func.id == "_broadcast_scalar_operand"
+    assert len(scalar_call.args) == 1
+    broadcast_operand = scalar_call.args[0]
+    assert isinstance(broadcast_operand, ast.Name)
+    assert broadcast_operand.id == guarded_operand.id
+
+    owner_calls = [
+        node
+        for node in ast.walk(resolver)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_broadcast_scalar_operand"
+    ]
+    assert owner_calls == [scalar_call]
+
+
 def test_event_arch_052_bounded_event_numba_helper_parameter_budget() -> None:
     """ID: EVENT_ARCH_052_bounded_event_numba_helper_parameter_budget."""
     module = ast.parse(Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8"))

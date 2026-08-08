@@ -38,6 +38,23 @@ def _ao_series(
     return AnalysisObject.from_data(ds, **kwargs)
 
 
+def _ao_with_clock(clock: np.ndarray) -> AnalysisObject:
+    ds = xr.Dataset(
+        data_vars={"value": (("sample",), np.asarray([0.25, 0.75], dtype="float64"))},
+        coords={
+            "sample": np.arange(2, dtype="int64"),
+            "time": (("sample",), clock),
+        },
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=(),
+        core_dims=(),
+        param_coord="time",
+    )
+
+
 def test_event_cond_001_three_valued_not_preserves_unknown() -> None:
     """ID: EVENT_COND_001_three_valued_not_preserves_unknown."""
     ao = _ao_series(values=[0.0, 1.0, 2.0], time=[0.0, 1.0, np.nan])
@@ -508,6 +525,243 @@ def test_event_cond_010_validity_mode_auto_parity_with_resolved_runtime_mask() -
     auto_mask = ao.events.mask(cond, opts=ConditionEvalOptions(validity_mode="auto"))
     np.testing.assert_array_equal(default_mask.values, np.asarray([True, True, False], dtype=bool))
     np.testing.assert_array_equal(auto_mask.values, default_mask.values)
+
+
+@pytest.mark.parametrize(
+    "clock",
+    [
+        pytest.param(np.asarray([0, 1], dtype="int64"), id="integer"),
+        pytest.param(np.asarray([0.0, 1.0], dtype="float64"), id="floating"),
+        pytest.param(
+            np.asarray(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"),
+            id="datetime",
+        ),
+    ],
+)
+def test_event_cond_014_scalar_operand_dtype_independent_of_context_clock(clock: np.ndarray) -> None:
+    """ID: EVENT_COND_014_scalar_operand_dtype_independent_of_context_clock."""
+    ao = _ao_with_clock(clock)
+    scalar = np.float32(0.5)
+    context_clock = ao.unsafe_data.coords["time"]
+    resolved = event_eval_mod._broadcast_scalar_operand(
+        scalar,
+        clock=context_clock,
+        owner="events.mask",
+        field="right operand",
+    )
+
+    assert np.dtype(resolved.dtype) == np.dtype("float32")
+    assert resolved.dims == context_clock.dims
+    assert set(resolved.coords) == set(context_clock.coords)
+    for name in context_clock.coords:
+        xr.testing.assert_identical(resolved.coords[name], context_clock.coords[name])
+
+    mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", scalar))
+    np.testing.assert_array_equal(mask.values, np.asarray([False, True], dtype=bool))
+
+    with pytest.raises(ValueError, match="events.mask: right operand must be numeric"):
+        ao.events.mask(Condition.compare(Condition.var("value"), "gt", "threshold"))
+
+
+def test_event_cond_015_scalar_operand_broadcast_is_side_symmetric() -> None:
+    """ID: EVENT_COND_015_scalar_operand_broadcast_is_side_symmetric."""
+    ao = _ao_with_clock(np.asarray([0, 1], dtype="int64"))
+    scalar = np.float32(0.5)
+    right_scalar = ao.events.mask(Condition.compare(Condition.var("value"), "gt", scalar))
+    left_scalar = ao.events.mask(Condition.compare(scalar, "lt", Condition.var("value")))
+
+    expected = np.asarray([False, True], dtype=bool)
+    np.testing.assert_array_equal(right_scalar.values, expected)
+    np.testing.assert_array_equal(left_scalar.values, expected)
+
+
+def test_event_cond_017_scalar_metadata_does_not_leak_into_mask() -> None:
+    """ID: EVENT_COND_017_scalar_metadata_does_not_leak_into_mask."""
+    ds = xr.Dataset(
+        data_vars={
+            "value": xr.DataArray(
+                np.asarray([0.25, 0.75], dtype="float64"),
+                dims=("sample",),
+                attrs={"units": "m", "source": "value"},
+            ),
+        },
+        coords={
+            "sample": xr.DataArray(
+                np.arange(2, dtype="int64"),
+                dims=("sample",),
+                attrs={"axis": "sample"},
+            ),
+            "time": xr.DataArray(
+                np.asarray([0, 1], dtype="int64"),
+                dims=("sample",),
+                attrs={"units": "s", "source": "clock"},
+            ),
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=(),
+        core_dims=(),
+        param_coord="time",
+    )
+    clock = ao.unsafe_data.coords["time"]
+    scalar = event_eval_mod._broadcast_scalar_operand(
+        np.float32(0.5),
+        clock=clock,
+        owner="events.mask",
+        field="left operand",
+    )
+
+    assert scalar.name is None
+    assert scalar.attrs == {}
+    xr.testing.assert_identical(scalar.coords["sample"], clock.coords["sample"])
+
+    with xr.set_options(keep_attrs=True):
+        left = ao.events.mask(Condition.compare(np.float32(0.5), "lt", Condition.var("value")))
+        right = ao.events.mask(Condition.compare(Condition.var("value"), "gt", np.float32(0.5)))
+
+    expected = np.asarray([False, True], dtype=bool)
+    np.testing.assert_array_equal(left.values, expected)
+    np.testing.assert_array_equal(right.values, expected)
+    assert left.name == right.name
+    assert left.attrs == right.attrs == {}
+
+
+@pytest.mark.parametrize(
+    "clock",
+    [
+        pytest.param(np.asarray([0, 1], dtype="int64"), id="integer"),
+        pytest.param(
+            np.asarray(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"),
+            id="datetime",
+        ),
+    ],
+)
+def test_event_hard_024_temporal_scalar_operands_fail_owned_validation(clock: np.ndarray) -> None:
+    """ID: EVENT_HARD_024_temporal_scalar_operands_fail_owned_validation."""
+    ao = _ao_with_clock(clock)
+    duration = np.timedelta64(1, "s")
+
+    with pytest.raises(ValueError) as right_err:
+        ao.events.mask(Condition.compare(Condition.var("value"), "gt", duration))
+    assert "events.mask: right operand must be numeric" in str(right_err.value)
+
+    with pytest.raises(ValueError) as left_err:
+        ao.events.mask(Condition.compare(duration, "lt", Condition.var("value")))
+    assert "events.mask: left operand must be numeric" in str(left_err.value)
+
+
+def test_event_cond_016_timedelta_array_ordering_preserved() -> None:
+    """ID: EVENT_COND_016_timedelta_array_ordering_preserved."""
+    ds = xr.Dataset(
+        data_vars={
+            "duration": (
+                ("sample",),
+                np.asarray([1, 3], dtype="timedelta64[s]"),
+            ),
+        },
+        coords={
+            "sample": np.arange(2, dtype="int64"),
+            "time": (("sample",), np.asarray([0.0, 1.0], dtype="float64")),
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=(),
+        core_dims=(),
+        param_coord="time",
+    )
+    threshold = xr.DataArray(
+        np.asarray([2, 2], dtype="timedelta64[s]"),
+        dims=("sample",),
+        coords={"sample": np.arange(2, dtype="int64")},
+    )
+
+    named_left = ao.events.mask(Condition.compare(Condition.var("duration"), "gt", threshold))
+    array_left = ao.events.mask(Condition.compare(threshold, "lt", Condition.var("duration")))
+    expected = np.asarray([False, True], dtype=bool)
+    np.testing.assert_array_equal(named_left.values, expected)
+    np.testing.assert_array_equal(array_left.values, expected)
+
+
+def test_event_perf_002_invalid_scalar_fails_before_broadcast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: EVENT_PERF_002_invalid_scalar_fails_before_broadcast."""
+    clock = _ao_with_clock(np.asarray([0, 1], dtype="int64")).unsafe_data.coords["time"]
+
+    def reject_broadcast(*args: object, **kwargs: object) -> xr.DataArray:
+        raise AssertionError("invalid scalar must fail before xr.full_like")
+
+    monkeypatch.setattr(event_eval_mod.xr, "full_like", reject_broadcast)
+    invalid_scalars = (
+        "threshold",
+        np.bool_(True),
+        np.datetime64("2025-01-01", "ns"),
+        np.timedelta64(1, "s"),
+    )
+    for invalid in invalid_scalars:
+        assert np.isscalar(invalid)
+        with pytest.raises(ValueError, match="events.mask: right operand must be numeric"):
+            event_eval_mod._broadcast_scalar_operand(
+                invalid,
+                clock=clock,
+                owner="events.mask",
+                field="right operand",
+            )
+
+
+def test_event_perf_001_scalar_operand_broadcast_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: EVENT_PERF_001_scalar_operand_broadcast_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+    ds = xr.Dataset(
+        data_vars={
+            "value": (("sample",), da.from_array(np.asarray([0.25, 0.75]), chunks=1)),
+        },
+        coords={
+            "sample": np.arange(2, dtype="int64"),
+            "time": (
+                ("sample",),
+                da.from_array(
+                    np.asarray(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]"),
+                    chunks=1,
+                ),
+            ),
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=(),
+        core_dims=(),
+        param_coord="time",
+    )
+
+    def _fail_compute(*args: object, **kwargs: object) -> object:
+        raise AssertionError("unexpected eager compute")
+
+    monkeypatch.setattr(da.Array, "compute", _fail_compute, raising=True)
+    context_clock = ao.unsafe_data.coords["time"]
+    scalar_operand = event_eval_mod._broadcast_scalar_operand(
+        np.float32(0.5),
+        clock=context_clock,
+        owner="events.mask",
+        field="right operand",
+    )
+    assert isinstance(scalar_operand.data, da.Array)
+    assert scalar_operand.chunks == context_clock.chunks
+    assert scalar_operand.dtype == np.dtype("float32")
+
+    mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", np.float32(0.5)))
+    assert isinstance(mask.data, da.Array)
+    assert mask.dtype == np.dtype(bool)
+
+    monkeypatch.undo()
+    np.testing.assert_array_equal(mask.compute().values, np.asarray([False, True], dtype=bool))
 
 
 @pytest.mark.parametrize("invalid", ["x", None])

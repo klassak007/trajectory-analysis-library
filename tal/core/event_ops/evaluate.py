@@ -107,6 +107,22 @@ def _resolve_ao_operand(
     return rename_dims_collision_safe(resolved, mapping=to_context)
 
 
+def _broadcast_scalar_operand(
+    operand: object,
+    *,
+    clock: xr.DataArray,
+    owner: str,
+    field: str,
+) -> xr.DataArray:
+    scalar_dtype = np.asarray(operand).dtype
+    scalar_is_numeric = np.issubdtype(scalar_dtype, np.number)
+    scalar_is_timedelta = np.issubdtype(scalar_dtype, np.timedelta64)
+    if not scalar_is_numeric or scalar_is_timedelta:
+        raise ValueError(f"{owner}: {field} must be numeric, got dtype {scalar_dtype!r}.")
+    broadcast = xr.full_like(clock, operand, dtype=scalar_dtype)
+    return broadcast.drop_attrs(deep=False).rename(None)
+
+
 def _resolve_operand(
     operand: object,
     *,
@@ -120,7 +136,7 @@ def _resolve_operand(
     if isinstance(operand, xr.DataArray):
         return _align_operand_to_clock(operand, clock=context.clock, owner=owner, field=field)
     if np.isscalar(operand):
-        return xr.full_like(context.clock, operand)
+        return _broadcast_scalar_operand(operand, clock=context.clock, owner=owner, field=field)
     return _align_operand_to_clock(
         _resolve_ao_operand(operand, context=context, owner=owner),
         clock=context.clock,
@@ -240,7 +256,8 @@ def evaluate_mask(
     if not isinstance(condition, Condition):
         raise TypeError(f"{owner}: condition must be Condition.")
     evaluated = _eval_node(condition.node, context=context, owner=owner)
-    return (evaluated.truth & evaluated.determinate & context.valid_mask).astype(bool)
+    effective = (evaluated.truth & evaluated.determinate & context.valid_mask).astype(bool)
+    return effective.drop_attrs(deep=False)
 
 
 __all__ = ["evaluate_mask"]
