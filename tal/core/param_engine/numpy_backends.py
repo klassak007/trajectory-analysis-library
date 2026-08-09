@@ -18,7 +18,7 @@ def map_block_numpy(
     method: str,
     dup_code: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    from .map_build import _map_row
+    from .numeric_rows import numeric_map_row
 
     param_rows, valid_rows, query_rows, output_shape = prepare_map_block_rows(param_block, valid_block, query_block)
     rows = int(param_rows.shape[0])
@@ -28,7 +28,7 @@ def map_block_numpy(
     alpha = np.zeros((rows, query_size), dtype=np.float64)
     valid = np.zeros((rows, query_size), dtype=bool)
     for row in range(rows):
-        row_i0, row_i1, row_alpha, row_valid = _map_row(
+        row_i0, row_i1, row_alpha, row_valid = numeric_map_row(
             param_rows[row],
             valid_rows[row],
             query_rows[row],
@@ -48,7 +48,7 @@ def bounds_block_numpy(
     start_block: np.ndarray,
     stop_block: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    from .map_build import _bounds_row
+    from .numeric_rows import numeric_bounds_row
 
     param_rows, valid_rows, start_rows, stop_rows, output_shape = prepare_bounds_block_rows(
         param_block,
@@ -60,7 +60,7 @@ def bounds_block_numpy(
     i0 = np.zeros(rows, dtype=np.int64)
     i1 = np.zeros(rows, dtype=np.int64)
     for row in range(rows):
-        row_i0, row_i1 = _bounds_row(param_rows[row], valid_rows[row], start_rows[row], stop_rows[row])
+        row_i0, row_i1 = numeric_bounds_row(param_rows[row], valid_rows[row], start_rows[row], stop_rows[row])
         i0[row] = row_i0
         i1[row] = row_i1
     return i0.reshape(output_shape), i1.reshape(output_shape)

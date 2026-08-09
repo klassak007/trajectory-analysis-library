@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from ..ordered_dtypes import is_integral_dtype, is_ordered_real_numeric_dtype
 from .guards import coerce_float_scalar, validate_query_dim_name
 from .types import ParamKind, ParamEvalOptions, ParamSelectOptions, ParamSyncOptions
 
@@ -116,10 +117,16 @@ def normalize_sync_tol(opts: ParamSyncOptions, *, owner: str, param_kind: ParamK
         return _normalize_datetime_tol(opts.tol, owner=owner)
     if _is_timedelta_like(opts.tol):
         raise ValueError(f"{owner}: timedelta opts.tol is only valid for datetime64 params.")
-    tol = coerce_float_scalar(opts.tol, owner=owner, field="opts.tol")
-    if not np.isfinite(tol) or tol < 0.0:
+    try:
+        arr = np.asarray(opts.tol)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{owner}: opts.tol must be a numeric scalar.") from exc
+    if arr.ndim != 0 or not is_ordered_real_numeric_dtype(arr.dtype):
+        raise ValueError(f"{owner}: opts.tol must be a numeric scalar.")
+    tol = arr.item()
+    if not np.isfinite(tol) or tol < 0:
         raise ValueError(f"{owner}: opts.tol must be finite and >= 0.0, got {opts.tol!r}.")
-    return tol
+    return int(tol) if is_integral_dtype(arr.dtype) else float(tol)
 
 
 def normalize_sync_fill_value(value: object, *, owner: str) -> float | int:

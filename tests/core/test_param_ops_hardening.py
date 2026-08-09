@@ -1,8 +1,10 @@
 import numpy as np
+import pytest
 import xarray as xr
 from pathlib import Path
 
 from tal.core import AnalysisObject, ParamEvalOptions
+from tal.core.param_engine import ParamMapOptions, build_param_map
 import tal.core.param_ops.evaluate as eval_mod
 
 
@@ -32,6 +34,37 @@ def test_param_perf_015_map_reuse_across_multiple_vars(monkeypatch) -> None:
     assert calls["n"] == 1
     np.testing.assert_allclose(out.data["v1"].values, [5.0, 25.0])
     np.testing.assert_allclose(out.data["v2"].values, [6.0, 26.0])
+
+
+def test_param_perf_016_integral_param_mapping_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: PARAM_PERF_016_integral_param_mapping_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+    base = 2**53
+    param = xr.DataArray(
+        da.from_array(np.asarray([base, base + 1], dtype="int64"), chunks=1),
+        dims=("sample",),
+    )
+    query = xr.DataArray(
+        da.from_array(np.asarray([base + 1], dtype="int64"), chunks=1),
+        dims=("query",),
+    )
+
+    with monkeypatch.context() as guarded:
+        guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
+        pmap = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+            options=ParamMapOptions(method="nearest"),
+        )
+        assert hasattr(pmap.i0.data, "chunks")
+        assert hasattr(pmap.valid.data, "chunks")
+
+    assert int(pmap.i0.compute().item()) == 1
+    assert bool(pmap.valid.compute().item()) is True
 
 
 def test_param_ops_063_sequence_size_finalize_policy_single_owner() -> None:

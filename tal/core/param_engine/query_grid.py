@@ -7,6 +7,7 @@ import pandas as pd
 import xarray as xr
 from tal.utils.xarray_namespace import dataarray_namespace_names, rename_dims_collision_safe, unique_temp_dim
 
+from ..ordered_dtypes import is_float64_exact_integer, is_integral_dtype, is_ordered_real_numeric_dtype
 from .types import QueryGrid
 
 
@@ -82,10 +83,9 @@ def _as_query_dataarray(
 
 def _coerce_query_dataarray(query: xr.DataArray, *, owner: str, param_kind: str) -> xr.DataArray:
     if param_kind == "numeric":
-        try:
-            return query.astype("float64")
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{owner}: query values must be numeric (coercible to float64).") from exc
+        if is_ordered_real_numeric_dtype(query.dtype):
+            return query
+        raise ValueError(f"{owner}: query values must be numeric with an ordered real dtype.")
     if param_kind == "datetime64":
         if np.issubdtype(np.dtype(query.dtype), np.number):
             raise ValueError(f"{owner}: datetime64 param queries must be datetime-like, got numeric dtype.")
@@ -104,6 +104,18 @@ def _reject_raw_lazy_query(value: object, *, owner: str) -> None:
         )
 
 
+def _validate_raw_numeric_promotion(query: object, out: np.ndarray, *, owner: str) -> None:
+    if out.dtype.kind != "f" or isinstance(query, np.ndarray) or np.isscalar(query):
+        return
+    for value in query:
+        scalar = np.asarray(value)
+        if scalar.ndim == 0 and is_integral_dtype(scalar.dtype) and not is_float64_exact_integer(scalar.item()):
+            raise ValueError(
+                f"{owner}: mixed numeric query would convert integer value {int(scalar.item())!r} "
+                "lossily to float64. Pass a homogeneous integer array or rescale the parameter domain."
+            )
+
+
 def _coerce_query_array(
     query: xr.DataArray | np.ndarray | Sequence[float] | float,
     *,
@@ -112,9 +124,13 @@ def _coerce_query_array(
 ) -> np.ndarray:
     if param_kind == "numeric":
         try:
-            return np.asarray(query, dtype="float64")
+            out = np.asarray(query)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"{owner}: query values must be numeric (coercible to float64).") from exc
+            raise ValueError(f"{owner}: query values must be numeric with an ordered real dtype.") from exc
+        if not is_ordered_real_numeric_dtype(out.dtype):
+            raise ValueError(f"{owner}: query values must be numeric with an ordered real dtype.")
+        _validate_raw_numeric_promotion(query, out, owner=owner)
+        return out
     if param_kind == "datetime64":
         probe = np.asarray(query)
         if np.issubdtype(np.dtype(probe.dtype), np.number):
@@ -231,6 +247,14 @@ def _reindex_batch_dim(
         dim=dim,
         owner="normalize_query_grid",
     )
+    source_index = query.get_index(dim)
+    target_index = indexer.get_index(dim)
+    if is_integral_dtype(query.dtype) and not bool(target_index.isin(source_index).all()):
+        raise ValueError(
+            "normalize_query_grid: integral query batch reindex would introduce missing labels "
+            f"along {dim!r} and require a lossy NaN upcast. Provide every target batch label "
+            "or use an ordered floating-point query dtype."
+        )
     fill = np.datetime64("NaT", "ns") if param_kind == "datetime64" else np.nan
     return query.reindex({dim: indexer}, fill_value=fill)
 

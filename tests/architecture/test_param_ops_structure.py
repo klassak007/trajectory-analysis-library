@@ -221,19 +221,74 @@ def test_arch_doc_001_hotspot_modules_have_required_docstrings() -> None:
         assert docs >= 1, f"{path.as_posix()} has no function-level docstrings"
 
 
-def test_arch_param_engine_001_map_row_kernels_have_no_python_query_loops() -> None:
+def test_arch_param_engine_001_map_orchestrator_has_no_row_kernels() -> None:
     """ID: ARCH_PARAM_ENGINE_001_map_row_kernels_have_no_python_query_loops."""
-    path = Path("tal/core/param_engine/map_build.py")
-    module = ast.parse(path.read_text(encoding="utf-8"))
-    kernels = {
+    module = ast.parse(Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8"))
+    definitions = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
+    assert definitions.isdisjoint({"_nearest_row", "_linear_row", "_map_row", "_bounds_row"})
+    exact_module = ast.parse(Path("tal/core/param_engine/numeric_rows.py").read_text(encoding="utf-8"))
+    float_kernels = {
         node.name: node
-        for node in module.body
-        if isinstance(node, ast.FunctionDef) and node.name in {"_nearest_row", "_linear_row"}
+        for node in exact_module.body
+        if isinstance(node, ast.FunctionDef) and node.name in {"_float_nearest_row", "_float_linear_row"}
     }
-    assert set(kernels) == {"_nearest_row", "_linear_row"}
-    for name, node in kernels.items():
+    assert set(float_kernels) == {"_float_nearest_row", "_float_linear_row"}
+    for name, node in float_kernels.items():
         loops = [sub for sub in ast.walk(node) if isinstance(sub, (ast.For, ast.While, ast.AsyncFor))]
-        assert not loops, f"{name} regressed to Python query loops"
+        assert not loops, f"{name} must retain vectorized float fallback execution"
+
+
+def test_param_arch_048_ordered_numeric_dtype_has_shared_core_owner() -> None:
+    """ID: PARAM_ARCH_048_ordered_numeric_dtype_has_shared_core_owner."""
+    owner_name = "is_ordered_real_numeric_dtype"
+    definitions = []
+    for path in sorted(Path("tal/core").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        if any(isinstance(node, ast.FunctionDef) and node.name == owner_name for node in module.body):
+            definitions.append(path.as_posix())
+    assert definitions == ["tal/core/ordered_dtypes.py"]
+
+    consumers = (
+        Path("tal/core/schema_validate/phase_param.py"),
+        Path("tal/core/orchestration/resolve.py"),
+        Path("tal/core/param_engine/query_grid.py"),
+        Path("tal/core/param_engine/map_build.py"),
+    )
+    for path in consumers:
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {
+            alias.name
+            for node in ast.walk(module)
+            if isinstance(node, ast.ImportFrom) and node.module == "ordered_dtypes"
+            for alias in node.names
+        }
+        assert owner_name in imported, f"{path} must consume the neutral ordered dtype owner"
+
+
+def test_param_arch_049_integral_param_maps_use_exact_block_owner() -> None:
+    """ID: PARAM_ARCH_049_integral_param_maps_use_exact_block_owner."""
+    exact_path = Path("tal/core/param_engine/numeric_rows.py")
+    exact_module = ast.parse(exact_path.read_text(encoding="utf-8"))
+    exact_defs = {node.name for node in exact_module.body if isinstance(node, ast.FunctionDef)}
+    assert {"numeric_map_row", "numeric_bounds_row"} <= exact_defs
+
+    map_path = Path("tal/core/param_engine/map_build.py")
+    map_text = map_path.read_text(encoding="utf-8")
+    map_module = ast.parse(map_text)
+    map_defs = {node.name for node in map_module.body if isinstance(node, ast.FunctionDef)}
+    assert {"numeric_map_row", "numeric_bounds_row", "_map_row", "_bounds_row"}.isdisjoint(map_defs)
+    assert "def _float_numba_compatible(" in map_text
+    assert 'np.dtype(value.dtype).kind == "f"' in map_text
+    assert "backend = _select_map_normal_backend(param=param_da, query=query_da)" in map_text
+
+    numpy_module = ast.parse(Path("tal/core/param_engine/numpy_backends.py").read_text(encoding="utf-8"))
+    imports = {
+        alias.name
+        for node in ast.walk(numpy_module)
+        if isinstance(node, ast.ImportFrom) and node.module == "numeric_rows"
+        for alias in node.names
+    }
+    assert imports == {"numeric_map_row", "numeric_bounds_row"}
 
 
 def test_arch_paramops_005_no_ad_hoc_compute_in_select_or_sync_runtime() -> None:

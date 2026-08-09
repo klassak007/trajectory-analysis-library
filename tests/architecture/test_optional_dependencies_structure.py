@@ -512,8 +512,8 @@ def test_param_arch_043_param_numba_paths_are_blockwise_vectorize_false() -> Non
     numba_backends = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
     assert "_build_param_map_numba" not in map_build
     assert "_build_param_bounds_map_numba" not in map_build
-    assert "backend = _select_map_normal_backend()" in map_build
-    assert "backend = _select_bounds_normal_backend()" in map_build
+    assert "backend = _select_map_normal_backend(param=param_da, query=query_da)" in map_build
+    assert "backend = _select_bounds_normal_backend(" in map_build
     assert "vectorize=True" not in numba_backends
 
 

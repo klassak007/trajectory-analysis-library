@@ -2,11 +2,12 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tal.core import set_param_coord, set_roles, set_validity
+from tal.core import AnalysisObject, set_param_coord, set_roles, set_validity
 from tal.core.param_engine import (
     ParamMap,
     ParamMapOptions,
     apply_param_map,
+    build_param_bounds_map,
     build_param_map,
     declared_param_coord_name,
     normalize_query_grid,
@@ -293,3 +294,90 @@ def test_param_engine_019_build_param_map_query_dim_equals_sequence_dim_fails_fa
         )
     msg = str(err.value)
     assert "query_dim must differ from sequence_dim" in msg
+
+
+def test_param_engine_033_integer_query_dtype_preserved() -> None:
+    """ID: PARAM_ENGINE_033_integer_query_dtype_preserved."""
+    integer = normalize_query_grid(np.asarray([1, 2], dtype="int32"), query_dim="query")
+    floating = normalize_query_grid(np.asarray([0.25, 0.75], dtype="float32"), query_dim="query")
+    assert integer.values.dtype == np.dtype("int32")
+    assert floating.values.dtype == np.dtype("float32")
+
+
+def test_param_engine_034_large_integer_exact_lookup_preserved() -> None:
+    """ID: PARAM_ENGINE_034_large_integer_exact_lookup_preserved."""
+    base = 2**53
+    ds = xr.Dataset(
+        {"value": ("sample", [10.0, 20.0])},
+        coords={"sample": [0, 1], "tau": ("sample", np.asarray([base, base + 1], dtype="int64"))},
+    )
+    ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=(), param_coord="tau")
+    assert int(ao.param.index(np.int64(base + 1)).item()) == 1
+    assert float(ao.param.sel(np.int64(base + 1)).unsafe_data["value"].item()) == 20.0
+
+    maximum = np.iinfo(np.uint64).max
+    param = xr.DataArray(np.asarray([maximum - 1, maximum], dtype="uint64"), dims=("sample",))
+    query = xr.DataArray(np.asarray([maximum], dtype="uint64"), dims=("query",))
+    pmap = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+        options=ParamMapOptions(method="nearest"),
+    )
+    assert int(pmap.i0.item()) == 1
+
+    tie_param = xr.DataArray(np.asarray([maximum - 2, maximum], dtype="uint64"), dims=("sample",))
+    tie_query = xr.DataArray(np.asarray([maximum - 1], dtype="uint64"), dims=("query",))
+    tie = build_param_map(
+        param=tie_param,
+        query=tie_query,
+        sequence_dim="sample",
+        query_dim="query",
+        options=ParamMapOptions(method="nearest"),
+    )
+    assert int(tie.i0.item()) == 0
+
+
+def test_param_engine_035_large_integer_linear_and_bounds_preserved() -> None:
+    """ID: PARAM_ENGINE_035_large_integer_linear_and_bounds_preserved."""
+    base = 2**53
+    param = xr.DataArray(np.asarray([base, base + 2], dtype="int64"), dims=("sample",))
+    query = xr.DataArray(np.asarray([base + 1], dtype="int64"), dims=("query",))
+    pmap = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+        options=ParamMapOptions(method="linear"),
+    )
+    assert (int(pmap.i0.item()), int(pmap.i1.item()), float(pmap.alpha.item())) == (0, 1, 0.5)
+
+    bound_param = xr.DataArray(np.asarray([base, base + 1, base + 2], dtype="int64"), dims=("sample",))
+    bounds = build_param_bounds_map(
+        param=bound_param,
+        start=np.int64(base + 1),
+        stop=np.int64(base + 2),
+        sequence_dim="sample",
+    )
+    assert (int(bounds.i0.item()), int(bounds.i1.item())) == (1, 3)
+    open_bounds = build_param_bounds_map(
+        param=bound_param,
+        start=None,
+        stop=np.int64(base + 1),
+        sequence_dim="sample",
+    )
+    assert (int(open_bounds.i0.item()), int(open_bounds.i1.item())) == (0, 2)
+
+    duplicates = xr.DataArray(
+        np.asarray([base, base + 1, base + 1, base + 2], dtype="int64"),
+        dims=("sample",),
+    )
+    duplicate_map = build_param_map(
+        param=duplicates,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+        options=ParamMapOptions(method="linear", duplicate_policy="right"),
+    )
+    assert (int(duplicate_map.i0.item()), int(duplicate_map.i1.item())) == (2, 2)

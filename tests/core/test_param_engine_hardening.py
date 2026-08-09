@@ -9,6 +9,7 @@ from tal.core.param_engine import (
     apply_param_map,
     build_param_bounds_map,
     build_param_map,
+    finite_param_mask,
     normalize_query_grid,
     resolve_param_coord,
     resolve_param_coord_name,
@@ -849,3 +850,118 @@ def test_param_hard_034_param_bounds_build_stopgap_routes_through_backend_interf
         sequence_dim="sample",
     )
     assert calls["n"] >= 1
+
+
+def test_param_hard_036_complex_param_and_query_dtypes_rejected() -> None:
+    """ID: PARAM_HARD_036_complex_param_and_query_dtypes_rejected."""
+    declared = xr.Dataset(
+        {"value": ("sample", [1.0, 2.0])},
+        coords={"sample": [0, 1], "phase": ("sample", np.asarray([0.0, 1.0], dtype="complex128"))},
+    )
+    with pytest.raises(SchemaError) as schema_err:
+        AnalysisObject.from_data(declared, sequence_dim="sample", core_dims=(), param_coord="phase")
+    assert schema_err.value.code == "schema.param_coord.dtype.invalid"
+    assert schema_err.value.path == "tal.core.param_coord.name"
+
+    undeclared = AnalysisObject.from_data(declared, sequence_dim="sample", core_dims=())
+    with pytest.raises(ValueError, match="ordered real numeric or datetime64"):
+        undeclared.param.index(0.0, on="phase")
+    with pytest.raises(ValueError, match="ordered real dtype"):
+        normalize_query_grid(np.asarray([1 + 2j], dtype="complex128"))
+    with pytest.raises(ValueError, match="slice.start must have an ordered real numeric dtype"):
+        build_param_bounds_map(
+            param=xr.DataArray([0.0, 1.0], dims=("sample",)),
+            start=np.complex128(0.0),
+            stop=1.0,
+            sequence_dim="sample",
+        )
+
+
+def test_param_hard_037_unsafe_mixed_numeric_conversion_fails_closed() -> None:
+    """ID: PARAM_HARD_037_unsafe_mixed_numeric_conversion_fails_closed."""
+    unsafe = np.int64(2**53 + 1)
+    with pytest.raises(ValueError, match="cannot be represented exactly as float64"):
+        build_param_map(
+            param=xr.DataArray([0.0, 1.0], dims=("sample",)),
+            query=xr.DataArray([unsafe], dims=("query",)),
+            sequence_dim="sample",
+            query_dim="query",
+            options=ParamMapOptions(method="nearest"),
+        )
+
+    base = 2**53
+    integral_param = xr.DataArray(
+        np.asarray([base, base + 3], dtype="int64"),
+        dims=("sample",),
+    )
+    floating_query = xr.DataArray(
+        np.asarray([float(base + 2)], dtype="float64"),
+        dims=("query",),
+    )
+    for method in ("nearest", "linear"):
+        with pytest.raises(ValueError, match="integer parameter value.*cannot be represented exactly as float64"):
+            build_param_map(
+                param=integral_param,
+                query=floating_query,
+                sequence_dim="sample",
+                query_dim="query",
+                options=ParamMapOptions(method=method),  # type: ignore[arg-type]
+            )
+    with pytest.raises(ValueError, match="integer parameter value.*cannot be represented exactly as float64"):
+        build_param_bounds_map(
+            param=integral_param,
+            start=float(base + 2),
+            stop=float(base + 4),
+            sequence_dim="sample",
+        )
+
+    query = xr.DataArray(
+        np.asarray([[1, 2]], dtype="int64"),
+        dims=("trial", "query"),
+        coords={"trial": ["a"]},
+    )
+    with pytest.raises(ValueError, match="integral query batch reindex would introduce missing labels"):
+        normalize_query_grid(
+            query,
+            query_dim="query",
+            batch_dims=("trial",),
+            batch_coords={"trial": xr.DataArray(["a", "b"], dims=("trial",))},
+        )
+
+    with pytest.raises(ValueError, match="mixed numeric query would convert integer value"):
+        normalize_query_grid([np.uint64(np.iinfo(np.uint64).max), -1])
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(np.asarray([1 + 0j, np.inf + 0j], dtype="complex128"), id="complex"),
+        pytest.param(np.asarray([True, False], dtype=bool), id="boolean"),
+        pytest.param(np.asarray(["a", "b"], dtype="U1"), id="string"),
+    ],
+)
+def test_param_hard_038_invalid_validity_dtype_fails_closed(values: np.ndarray) -> None:
+    """ID: PARAM_HARD_038_invalid_validity_dtype_fails_closed."""
+    coord = xr.DataArray(values, dims=("sample",), name="phase")
+    with pytest.raises(ValueError, match="ordered real numeric or datetime64 dtype"):
+        finite_param_mask(coord)
+
+    ds = xr.Dataset(coords={"sample": [0, 1], "phase": coord})
+    spec = ParamCoordSpec(
+        name="phase",
+        coord=ds.coords["phase"],
+        sequence_dim="sample",
+        batch_dims=(),
+    )
+    with pytest.raises(ValueError, match="ordered real numeric or datetime64 dtype"):
+        resolve_param_valid_mask(ds, spec=spec)
+
+    sized = ds.assign_coords(group_size=xr.DataArray(np.int64(2)))
+    sized_spec = ParamCoordSpec(
+        name="phase",
+        coord=sized.coords["phase"],
+        sequence_dim="sample",
+        batch_dims=(),
+    )
+    with pytest.raises(ValueError, match="ordered real numeric or datetime64 dtype"):
+        resolve_param_valid_mask(sized, spec=sized_spec, sequence_size_coord="group_size")

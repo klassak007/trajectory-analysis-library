@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import numpy as np
 import xarray as xr
 
+from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from ..combine_ops.types import CombineContext
 from .context import DatasetContextOptions, resolve_dataset_contexts
 from ..param_engine.schema_resolve import _resolve_schema_context_validated
@@ -18,12 +19,12 @@ from ..param_ops.types import ParamKind, ParamRuntimeContext
 
 def _resolve_param_kind(coord: xr.DataArray, *, name: str) -> ParamKind:
     dtype = np.dtype(coord.dtype)
-    if np.issubdtype(dtype, np.number):
+    if is_ordered_real_numeric_dtype(dtype):
         return "numeric"
     if np.issubdtype(dtype, np.datetime64):
         return "datetime64"
     raise ValueError(
-        "param operations require numeric or datetime64 param_coord values; "
+        "param operations require ordered real numeric or datetime64 param_coord values; "
         f"coord {name!r} has dtype {coord.dtype!r}. "
         "Object datetime coordinates must be converted to xarray-visible datetime64 before calling ao.param.*."
     )

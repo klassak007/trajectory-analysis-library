@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from .common import ALLOWED_PARAM_KEYS
 from .common import (
     fail,
@@ -114,11 +115,11 @@ def phase_param_coord(
             hint="use dims (sequence_dim,) or (*batch_dims, sequence_dim)",
         )
     dtype = np.dtype(ds.coords[name].dtype)
-    if not (np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.datetime64)):
+    if not (is_ordered_real_numeric_dtype(dtype) or np.issubdtype(dtype, np.datetime64)):
         fail(
             code="schema.param_coord.dtype.invalid",
             path="tal.core.param_coord.name",
-            expected="numeric or datetime64 coordinate dtype",
+            expected="ordered real numeric or datetime64 coordinate dtype",
             actual={"coord": name, "dtype": str(ds.coords[name].dtype)},
-            hint="set param_coord to a numeric or datetime64 coordinate",
+            hint="set param_coord to an integer, floating-point, or datetime64 coordinate",
         )

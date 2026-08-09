@@ -44,9 +44,9 @@ def test_arch_agents_006_hotspot_function_length_budget_guard() -> None:
 
 def test_arch_agents_007_hotspot_param_count_budget_guard() -> None:
     """ID: ARCH_AGENTS_007_hotspot_param_count_budget_guard."""
-    node = _function_node("tal/core/param_engine/map_build.py", "_apply_linear_interior")
+    node = _function_node("tal/core/param_engine/numeric_rows.py", "_apply_linear_value")
     params = len(node.args.args) + len(node.args.kwonlyargs)
-    assert params <= 10, f"map_build._apply_linear_interior exceeds parameter budget ({params} > 10)"
+    assert params <= 10, f"numeric_rows._apply_linear_value exceeds parameter budget ({params} > 10)"
 
 
 def test_arch_agents_008_non_deferred_nesting_hotspot_guard() -> None:

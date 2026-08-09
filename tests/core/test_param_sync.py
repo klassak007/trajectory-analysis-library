@@ -24,6 +24,17 @@ def _ao_sync_right() -> AnalysisObject:
     return AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=(), core_dims=(), param_coord="tau")
 
 
+def _integer_sync_ao(param: np.ndarray, values: list[float]) -> AnalysisObject:
+    ds = xr.Dataset(
+        data_vars={"value": ("sample", np.asarray(values, dtype="float64"))},
+        coords={
+            "sample": np.arange(param.size, dtype="int64"),
+            "tau": ("sample", param),
+        },
+    )
+    return AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=(), core_dims=(), param_coord="tau")
+
+
 def _ao_sync_left_valid() -> AnalysisObject:
     ds = xr.Dataset(
         data_vars={"value": (("sample",), [0.0, 10.0, 20.0])},
@@ -1113,6 +1124,54 @@ def test_param_sync_055_autogrid_join_width_and_nan_tail_packing_are_determinist
     sizes = out_left.data.coords["group_size"]
     assert int(sizes.sel(trial="a")) == 4
     assert int(sizes.sel(trial="b")) == 1
+
+
+def test_param_sync_056_unsafe_large_integer_autogrid_fails_closed() -> None:
+    """ID: PARAM_SYNC_056_unsafe_large_integer_autogrid_fails_closed."""
+    base = 2**53
+    left = _integer_sync_ao(np.asarray([base, base + 1], dtype="int64"), [1.0, 2.0])
+    right = _integer_sync_ao(np.asarray([base + 2, base + 3], dtype="int64"), [3.0, 4.0])
+    with pytest.raises(ValueError, match="synthesized numeric grid would convert integer value"):
+        synchronize_param(
+            [left, right],
+            opts=ParamSyncOptions(join="outer", how="nearest"),
+        )
+
+
+def test_param_sync_057_explicit_large_integer_grid_and_tolerance_are_exact() -> None:
+    """ID: PARAM_SYNC_057_explicit_large_integer_grid_and_tolerance_are_exact."""
+    maximum = np.iinfo(np.uint64).max
+    source = _integer_sync_ao(np.asarray([0, maximum], dtype="uint64"), [10.0, 20.0])
+    grid = np.asarray([maximum - 1, maximum], dtype="uint64")
+    [out] = synchronize_param(
+        [source],
+        grid=grid,
+        opts=ParamSyncOptions(join="override", how="fill", tol=np.uint64(1), fill_value=-1),
+    )
+    np.testing.assert_array_equal(out.unsafe_data.coords["tau"].values, grid)
+    np.testing.assert_allclose(out.unsafe_data["value"].values, [20.0, 20.0])
+    np.testing.assert_array_equal(out.unsafe_data.coords["valid"].values, [True, True])
+
+
+def test_param_sync_058_unsafe_mixed_grid_tolerance_fails_closed() -> None:
+    """ID: PARAM_SYNC_058_unsafe_mixed_grid_tolerance_fails_closed."""
+    runtime = importlib.import_module("tal.core.param_ops.sync_runtime")
+    base = 2**53
+    with pytest.raises(ValueError, match="mixed integer/float tolerance comparison"):
+        runtime._numeric_within_tolerance_block(
+            np.asarray([base + 3], dtype="int64"),
+            np.asarray([float(base + 2)], dtype="float64"),
+            np.asarray([True], dtype=bool),
+            tol=1,
+        )
+
+    source = _integer_sync_ao(np.asarray([base + 3], dtype="int64"), [7.0])
+    with pytest.raises(ValueError, match="integer parameter value.*cannot be represented exactly as float64"):
+        synchronize_param(
+            [source],
+            grid=np.asarray([float(base + 2)], dtype="float64"),
+            opts=ParamSyncOptions(join="override", how="fill", tol=1, fill_value=-1),
+        )
 
 
 def test_orch_lazy_parity_001_sync_auto_grid_chunked_failfast_stable() -> None:

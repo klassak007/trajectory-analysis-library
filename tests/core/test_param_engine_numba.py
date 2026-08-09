@@ -21,11 +21,10 @@ from tal.core.event_ops.backends import (
 from tal.linalg.ops.solve_backends import LSTSQ_BACKEND_NUMBA, lstsq_block_backend
 from tal.core.param_engine.map_build import (
     _DUPLICATE_CODES,
-    _bounds_row,
-    _map_row,
     build_param_bounds_map,
     build_param_map,
 )
+from tal.core.param_engine.numeric_rows import numeric_bounds_row, numeric_map_row
 import tal.core.param_engine.map_build as map_build_mod
 
 
@@ -47,7 +46,7 @@ def _baseline_map_block(
     valid_rows = np.broadcast_to(valid, outer + (valid.shape[-1],)).reshape(rows, valid.shape[-1])
     query_rows = np.broadcast_to(query, outer + (query.shape[-1],)).reshape(rows, query.shape[-1])
     outputs = [
-        _map_row(param_rows[row], valid_rows[row], query_rows[row], method=method, dup_code=dup_code)
+        numeric_map_row(param_rows[row], valid_rows[row], query_rows[row], method=method, dup_code=dup_code)
         for row in range(rows)
     ]
     return tuple(np.stack([out[idx] for out in outputs]).reshape(outer + (query.shape[-1],)) for idx in range(4))
@@ -65,7 +64,10 @@ def _baseline_bounds_block(
     valid_rows = np.broadcast_to(valid, outer + (valid.shape[-1],)).reshape(rows, valid.shape[-1])
     start_rows = np.broadcast_to(start, outer).reshape(rows)
     stop_rows = np.broadcast_to(stop, outer).reshape(rows)
-    outputs = [_bounds_row(param_rows[row], valid_rows[row], start_rows[row], stop_rows[row]) for row in range(rows)]
+    outputs = [
+        numeric_bounds_row(param_rows[row], valid_rows[row], start_rows[row], stop_rows[row])
+        for row in range(rows)
+    ]
     return tuple(np.stack([out[idx] for out in outputs]).reshape(outer) for idx in range(2))
 
 

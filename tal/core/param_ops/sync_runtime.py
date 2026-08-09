@@ -11,6 +11,7 @@ import pandas as pd
 import xarray as xr
 
 from ..ao_internal import finalize_structural
+from ..ordered_dtypes import is_float64_exact_integer
 from ..param_engine import ParamMapOptions, build_param_map, normalize_query_grid
 from ..param_engine.map_apply import gather_along_sequence
 from ..validity_finalize import assign_sequence_size_from_valid_mask
@@ -295,7 +296,47 @@ def _within_tolerance(
         delta = (nearest - query).astype("timedelta64[ns]").astype("int64")
         safe_delta = delta.where(valid, other=0)
         return valid & (xr.apply_ufunc(np.abs, safe_delta, dask="allowed") <= int(tol))
+    if np.dtype(nearest.dtype).kind in {"i", "u"} or np.dtype(query.dtype).kind in {"i", "u"}:
+        return xr.apply_ufunc(
+            _numeric_within_tolerance_block,
+            nearest,
+            query,
+            valid,
+            kwargs={"tol": tol},
+            vectorize=False,
+            dask="parallelized",
+            output_dtypes=[bool],
+        )
     return valid & (xr.apply_ufunc(np.abs, nearest - query, dask="allowed") <= float(tol))
+
+
+def _numeric_within_tolerance_block(
+    nearest: np.ndarray,
+    query: np.ndarray,
+    valid: np.ndarray,
+    *,
+    tol: float | int,
+) -> np.ndarray:
+    nearest_values, query_values, valid_values = np.broadcast_arrays(nearest, query, valid)
+    nearest_integral = nearest_values.dtype.kind in {"i", "u"}
+    query_integral = query_values.dtype.kind in {"i", "u"}
+    mixed_float_integer = nearest_integral != query_integral
+    out = np.zeros(valid_values.shape, dtype=bool)
+    for index in np.ndindex(valid_values.shape):
+        if not bool(valid_values[index]):
+            continue
+        left = np.asarray(nearest_values[index]).reshape(()).item()
+        right = np.asarray(query_values[index]).reshape(()).item()
+        integer_value = left if nearest_integral else right
+        if mixed_float_integer and not is_float64_exact_integer(integer_value):
+            raise ValueError(
+                "synchronize_param: mixed integer/float tolerance comparison would convert "
+                f"integer value {int(integer_value)!r} lossily to float64. "
+                "Use matching integer parameter/grid dtypes or rescale the parameter domain."
+            )
+        if np.isfinite(left) and np.isfinite(right):
+            out[index] = abs(left - right) <= tol
+    return out
 
 
 def _mask_numeric_sequence(

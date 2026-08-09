@@ -14,7 +14,10 @@ def test_arch_time_t1_002_datetime_maps_use_numpy_path_not_numeric_numba() -> No
     """ID: ARCH_TIME_T1_002_datetime_maps_use_numpy_path_not_numeric_numba."""
     text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
     section = text.split("def _apply_param_map_block", 1)[1].split("def build_param_map", 1)[0]
-    datetime_branch = section.split('if param_kind == "datetime64":', 1)[1].split("backend = _select_map_normal_backend()", 1)[0]
+    datetime_branch = section.split('if param_kind == "datetime64":', 1)[1].split(
+        "backend = _select_map_normal_backend(",
+        1,
+    )[0]
     assert "datetime_map_block_numpy" in datetime_branch
     assert "_select_map_normal_backend" not in datetime_branch
     assert "PARAM_MAP_BACKEND_NUMBA" not in datetime_branch

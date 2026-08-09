@@ -9,6 +9,7 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
+from ..ordered_dtypes import is_float64_exact_integer, is_integral_dtype
 from .sync_autogrid_backend import join_datetime_rows_batched, join_rows_batched
 from .types import ParamRuntimeContext
 
@@ -36,14 +37,17 @@ def _materialize_data_rows(
     sequence_dim: str,
     batch_dim: str | None,
     batch_size: int,
-    dtype: np.dtype,
+    dtype: np.dtype | None,
 ) -> np.ndarray:
     if batch_dim is None:
-        row = np.asarray(da.transpose(sequence_dim).data, dtype=dtype)
+        data = da.transpose(sequence_dim).data
+        row = np.asarray(data) if dtype is None else np.asarray(data, dtype=dtype)
         return row[np.newaxis, :]
     if batch_dim in da.dims:
-        return np.asarray(da.transpose(batch_dim, sequence_dim).data, dtype=dtype)
-    row = np.asarray(da.transpose(sequence_dim).data, dtype=dtype)
+        data = da.transpose(batch_dim, sequence_dim).data
+        return np.asarray(data) if dtype is None else np.asarray(data, dtype=dtype)
+    data = da.transpose(sequence_dim).data
+    row = np.asarray(data) if dtype is None else np.asarray(data, dtype=dtype)
     return np.broadcast_to(row, (batch_size, row.size))
 
 
@@ -69,8 +73,29 @@ def _materialize_param_rows(
         sequence_dim=sequence_dim,
         batch_dim=batch_dim,
         batch_size=batch_size,
-        dtype=np.dtype("float64"),
+        dtype=None,
     )
+
+
+def _require_safe_integer_param(param: np.ndarray, valid: np.ndarray, *, owner: str) -> None:
+    if not is_integral_dtype(param.dtype):
+        return
+    for value in param[np.asarray(valid, dtype=bool)]:
+        if not is_float64_exact_integer(value):
+            raise ValueError(
+                f"{owner}: synthesized numeric grid would convert integer value {int(value)!r} "
+                "lossily to float64. Pass an explicit integer grid or rescale the parameter domain."
+            )
+
+
+def _require_safe_numeric_join(inputs: AutoGridJoinInputs, *, tol: float | int, owner: str) -> None:
+    for param, valid in zip(inputs.param_rows, inputs.valid_rows, strict=True):
+        _require_safe_integer_param(param, valid, owner=owner)
+    if isinstance(tol, int) and not is_float64_exact_integer(tol):
+        raise ValueError(
+            f"{owner}: synthesized numeric grid would convert integer tolerance {tol!r} lossily "
+            "to float64. Pass an explicit grid or use a representable tolerance."
+        )
 
 
 def _materialize_join_inputs(
@@ -154,6 +179,7 @@ def build_auto_grid_from_join(
             owner=owner,
         ).view("datetime64[ns]")
     else:
+        _require_safe_numeric_join(inputs, tol=tol, owner=owner)
         joined = join_rows_batched(
             inputs.param_rows,
             inputs.valid_rows,

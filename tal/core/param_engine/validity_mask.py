@@ -4,8 +4,20 @@ import numpy as np
 import xarray as xr
 
 from .. import validity_values
+from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from .schema_resolve import _resolve_schema_context, _resolve_schema_context_validated
 from .types import ParamCoordSpec
+
+
+def _validate_param_mask_dtype(param: xr.DataArray, *, owner: str) -> bool:
+    if is_ordered_real_numeric_dtype(param.dtype):
+        return True
+    if np.issubdtype(np.dtype(param.dtype), np.datetime64):
+        return False
+    raise ValueError(
+        f"{owner}: param coordinate must have an ordered real numeric or datetime64 dtype, "
+        f"got {param.dtype!r}."
+    )
 
 
 def _sequence_index(ds: xr.Dataset, sequence_dim: str) -> xr.DataArray:
@@ -68,14 +80,16 @@ def finite_param_mask(param: xr.DataArray) -> xr.DataArray:
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    if np.issubdtype(param.dtype, np.number):
+    if _validate_param_mask_dtype(param, owner="finite_param_mask"):
         return xr.apply_ufunc(np.isfinite, param, dask="allowed")
     return param.notnull()
 
 
 def _mask_from_context(context, spec: ParamCoordSpec) -> xr.DataArray:
+    param = _resolved_param_coord(context, spec)
     if context.sequence_size_coord is None:
-        return finite_param_mask(_resolved_param_coord(context, spec))
+        return finite_param_mask(param)
+    _validate_param_mask_dtype(param, owner="resolve_param_valid_mask")
     return _mask_from_sequence_size(
         context.ds,
         sequence_dim=context.sequence_dim,

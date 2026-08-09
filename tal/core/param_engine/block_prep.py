@@ -13,9 +13,9 @@ def prepare_map_block_rows(
     prepared = prepare_block_rows(
         (param_block, valid_block, query_block),
         (
-            BlockInputSpec("param", 1, np.float64),
+            BlockInputSpec("param", 1),
             BlockInputSpec("valid", 1, bool),
-            BlockInputSpec("query", 1, np.float64),
+            BlockInputSpec("query", 1),
         ),
         output_core_shape=(),
         owner="build_param_map",
@@ -60,10 +60,10 @@ def prepare_bounds_block_rows(
     prepared = prepare_block_rows(
         (param_block, valid_block, start_block, stop_block),
         (
-            BlockInputSpec("param", 1, np.float64),
+            BlockInputSpec("param", 1),
             BlockInputSpec("valid", 1, bool),
-            BlockInputSpec("start", 0, np.float64),
-            BlockInputSpec("stop", 0, np.float64),
+            BlockInputSpec("start", 0),
+            BlockInputSpec("stop", 0),
         ),
         output_core_shape=(),
         owner="build_param_bounds_map",
