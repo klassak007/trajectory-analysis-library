@@ -41,6 +41,19 @@ def _ao_static(name: str, value: float) -> AnalysisObject:
     return AnalysisObject(xr.Dataset(data_vars={name: xr.DataArray(value)}))
 
 
+def _ao_outer_cell(*, trial: str, sample: int, value: float) -> AnalysisObject:
+    ds = xr.Dataset(
+        data_vars={"value": (("trial", "sample"), [[value]])},
+        coords={"trial": [trial], "sample": [sample]},
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+    )
+
+
 def test_combine_merge_001_merge_exact_sequence_and_inner_batch_default() -> None:
     """ID: COMBINE_MERGE_001_merge_exact_sequence_and_inner_batch_default."""
     right = _ao_grouped(
@@ -378,6 +391,153 @@ def test_combine_merge_014_no_conflicts_chunked_overlap_fails_fast() -> None:
     with pytest.raises(ValueError) as err:
         left.combine.merge([right], opts=MergeOptions(compat="no_conflicts"))
     assert "does not support overlapping chunked variables/coords" in str(err.value)
+
+
+@pytest.mark.parametrize("compat", ["no_conflicts", "override"])
+@pytest.mark.parametrize("mapped_fill", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_combine_merge_015_outer_fill_uses_union_of_all_variable_sources(
+    compat: str,
+    mapped_fill: bool,
+    reverse: bool,
+) -> None:
+    """ID: COMBINE_MERGE_015_outer_fill_uses_union_of_all_variable_sources."""
+    first = _ao_grouped(
+        trial_labels=("a", "nan"),
+        tau_rows=[[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]],
+        values=[[1.0, 1.0, 1.0], [np.nan, np.nan, np.nan]],
+        var_name="value",
+    )
+    later = _ao_grouped(
+        trial_labels=("b",),
+        tau_rows=[[0.0, 1.0, 2.0]],
+        values=[[2.0, 2.0, 2.0]],
+        var_name="value",
+    )
+    domain = _ao_grouped(
+        trial_labels=("c",),
+        tau_rows=[[0.0, 1.0, 2.0]],
+        values=[[3.0, 3.0, 3.0]],
+        var_name="domain_only",
+    )
+    inputs = [later, first] if reverse else [first, later]
+    fill: float | dict[str, float] = {"value": -1.0} if mapped_fill else -1.0
+    out = inputs[0].combine.merge(
+        [*inputs[1:], domain],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="exact",
+            compat=compat,  # type: ignore[arg-type]
+            outer_fill_value=fill,
+        ),
+    )
+    np.testing.assert_allclose(out.data["value"].sel(trial="a"), [1.0, 1.0, 1.0])
+    np.testing.assert_allclose(out.data["value"].sel(trial="b"), [2.0, 2.0, 2.0])
+    np.testing.assert_allclose(out.data["value"].sel(trial="c"), [-1.0, -1.0, -1.0])
+    assert bool(out.data["value"].sel(trial="nan").isnull().all())
+
+
+def test_combine_merge_016_outer_fill_preserves_multi_axis_source_coverage() -> None:
+    """ID: COMBINE_MERGE_016_outer_fill_preserves_multi_axis_source_coverage."""
+    left = _ao_outer_cell(trial="a", sample=0, value=1.0)
+    right = _ao_outer_cell(trial="b", sample=1, value=2.0)
+    out = left.combine.merge(
+        [right],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="outer",
+            compat="override",
+            outer_fill_value={"value": -1.0},
+        ),
+    )
+    np.testing.assert_allclose(
+        out.data["value"].sel(trial=["a", "b"], sample=[0, 1]),
+        [[1.0, -1.0], [-1.0, 2.0]],
+    )
+
+
+def test_combine_merge_017_outer_fill_treats_omitted_outer_dims_as_invariant() -> None:
+    """ID: COMBINE_MERGE_017_outer_fill_treats_omitted_outer_dims_as_invariant."""
+    left_ds = xr.Dataset(
+        data_vars={
+            "value": ("sample", [5.0, 6.0]),
+            "left_domain": (("trial", "sample"), [[1.0, 1.0]]),
+        },
+        coords={"trial": ["a"], "sample": [0, 1]},
+    )
+    right_ds = xr.Dataset(
+        data_vars={"value": (("trial", "sample"), [[20.0, 21.0]])},
+        coords={"trial": ["b"], "sample": [0, 1]},
+    )
+    left = AnalysisObject.from_data(
+        left_ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+    )
+    right = AnalysisObject.from_data(
+        right_ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+    )
+    out = left.combine.merge(
+        [right],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="exact",
+            compat="override",
+            outer_fill_value={"value": -1.0},
+        ),
+    )
+    np.testing.assert_allclose(out.data["value"].sel(trial="a"), [5.0, 6.0])
+    np.testing.assert_allclose(out.data["value"].sel(trial="b"), [5.0, 6.0])
+
+
+def test_combine_perf_001_outer_fill_coverage_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: COMBINE_PERF_001_outer_fill_coverage_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+
+    def _chunked(trial: str, values: list[float], *, name: str = "value") -> AnalysisObject:
+        payload = da.from_array(np.asarray([values], dtype="float64"), chunks=(1, 2))
+        ds = xr.Dataset(
+            data_vars={name: (("trial", "sample"), payload)},
+            coords={"trial": [trial], "sample": [0, 1, 2]},
+        )
+        return AnalysisObject.from_data(
+            ds,
+            sequence_dim="sample",
+            batch_dims=("trial",),
+            core_dims=(),
+        )
+
+    left = _chunked("a", [1.0, 1.0, 1.0])
+    right = _chunked("b", [2.0, 2.0, 2.0])
+    domain = _chunked("c", [3.0, 3.0, 3.0], name="domain_only")
+    original_compute = da.Array.compute
+
+    def _forbid_compute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("merge outer-fill planning must not compute Dask payloads")
+
+    monkeypatch.setattr(da.Array, "compute", _forbid_compute)
+    out = left.combine.merge(
+        [right, domain],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="exact",
+            compat="override",
+            outer_fill_value={"value": -1.0},
+        ),
+    )
+    assert getattr(out.unsafe_data["value"].data, "chunks", None) is not None
+
+    monkeypatch.setattr(da.Array, "compute", original_compute)
+    np.testing.assert_allclose(
+        out.unsafe_data["value"].sel(trial=["a", "b", "c"]).compute(),
+        [[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [-1.0, -1.0, -1.0]],
+    )
 
 
 def test_combine_dry_003_sequence_size_derivation_single_owner_parity() -> None:

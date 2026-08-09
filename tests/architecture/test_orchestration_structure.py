@@ -14,6 +14,13 @@ def _top_level_function_names(tree: ast.Module) -> set[str]:
     return {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
 
 
+def _top_level_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"function {name!r} not found")
+
+
 def _module_exports(tree: ast.Module) -> set[str]:
     for node in tree.body:
         if not isinstance(node, ast.Assign):
@@ -437,6 +444,33 @@ def test_orch_arch_015_structural_valid_mask_has_shared_core_owner() -> None:
     assert not _imports_reducer_ops_validity(
         ast.parse("from ..reducer_ops.finalize_policy import resolve_reducer_finalize_source")
     )
+
+
+def test_combine_arch_001_outer_fill_coverage_has_single_merge_owner() -> None:
+    """ID: COMBINE_ARCH_001_outer_fill_coverage_has_single_merge_owner."""
+    tree = _module_tree(Path("tal/core/combine_ops/merge.py"))
+    names = _top_level_function_names(tree)
+    assert "_find_var_source" not in names
+    assert {"_find_var_sources", "_source_outer_hole_mask", "_mask_for_outer_holes"} <= names
+
+    apply_owner = _top_level_function(tree, "_apply_outer_fill_scoped")
+    apply_calls = {
+        node.func.id
+        for node in ast.walk(apply_owner)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {"_find_var_sources", "_mask_for_outer_holes"} <= apply_calls
+
+    mask_owner = _top_level_function(tree, "_mask_for_outer_holes")
+    source_calls = [
+        node
+        for node in ast.walk(mask_owner)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_source_outer_hole_mask"
+    ]
+    assert len(source_calls) == 1
+    assert any(isinstance(node, ast.BitAnd) for node in ast.walk(mask_owner))
 
 
 def test_orch_arch_010_typed_lifecycle_core_owner_exists() -> None:

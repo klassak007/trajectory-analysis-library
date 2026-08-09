@@ -32,30 +32,38 @@ def _outer_dims(
     return tuple(dims)
 
 
-def _find_var_source(var_name: str, *, sources: list[CombineContext]) -> xr.Dataset | None:
-    for ctx in sources:
-        if var_name in ctx.ds.data_vars:
-            return ctx.ds
-    return None
+def _find_var_sources(var_name: str, *, sources: list[CombineContext]) -> tuple[xr.DataArray, ...]:
+    return tuple(ctx.ds[var_name] for ctx in sources if var_name in ctx.ds.data_vars)
 
 
-def _mask_for_outer_holes(
-    source: xr.Dataset,
-    target: xr.Dataset,
+def _source_outer_hole_mask(
+    source: xr.DataArray,
+    target: xr.DataArray,
     *,
-    var_dims: tuple[str, ...],
     outer_dims: tuple[str, ...],
 ) -> xr.DataArray | None:
     mask: xr.DataArray | None = None
-    for dim in var_dims:
-        if dim not in outer_dims or dim not in target.dims:
+    for dim in target.dims:
+        if dim not in outer_dims or dim not in source.dims:
             continue
-        if dim in source.dims:
-            missing = ~target.get_index(dim).isin(source.get_index(dim))
-        else:
-            continue
+        missing = ~target.get_index(dim).isin(source.get_index(dim))
         axis = xr.DataArray(np.asarray(missing, dtype=bool), dims=(dim,), coords={dim: target.coords[dim]})
         mask = axis if mask is None else (mask | axis)
+    return mask
+
+
+def _mask_for_outer_holes(
+    sources: tuple[xr.DataArray, ...],
+    target: xr.DataArray,
+    *,
+    outer_dims: tuple[str, ...],
+) -> xr.DataArray | None:
+    mask: xr.DataArray | None = None
+    for source in sources:
+        source_mask = _source_outer_hole_mask(source, target, outer_dims=outer_dims)
+        if source_mask is None:
+            return None
+        mask = source_mask if mask is None else (mask & source_mask)
     return mask
 
 
@@ -89,13 +97,12 @@ def _apply_outer_fill_scoped(
         fill_value = _fill_value_for_var(opts.outer_fill_value, var_name=str(name))
         if _is_noop_fill(fill_value):
             continue
-        source = _find_var_source(str(name), sources=sources)
-        if source is None:
+        source_vars = _find_var_sources(str(name), sources=sources)
+        if not source_vars:
             continue
         mask = _mask_for_outer_holes(
-            source,
-            out,
-            var_dims=tuple(var.dims),
+            source_vars,
+            var,
             outer_dims=outer_dims,
         )
         if mask is None:
