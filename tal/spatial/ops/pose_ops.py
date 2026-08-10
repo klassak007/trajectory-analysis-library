@@ -28,7 +28,8 @@ from tal.utils.topology_operation_families import operation_intent_support_for_o
 from ..conversion.finalize import allocate_dim_pair, dataset_dim_names
 from ..policies.frame import resolve_compose_output_frames, resolve_components_shared_frames
 from ..metadata import get_pose_rep, set_pose_rep, set_position_rep
-from ..kernels.pose_kernels import matrix_to_components_kernel
+from ..kernels.pose_kernels import _matrix_to_components_prevalidated_kernel
+from .pose_matrix_validation import prepare_pose_matrix_for_conversion, validate_pose_matrix_dataset
 from .pose_context import (
     build_position_dataset as _build_position_dataset,
     pose_compose_topology_operands as _pose_compose_topology_operands,
@@ -43,7 +44,6 @@ from .pose_kernel_adapters import (
 )
 from ..position import Position
 from ..rotation import Rotation
-from ..policies.wrap import wrap_as
 
 if TYPE_CHECKING:
     from ..pose import Pose
@@ -66,8 +66,13 @@ def _pose_cls() -> type["Pose"]:
     return Pose
 
 
-def _wrap_pose_output(ds: xr.Dataset, *, validate: bool) -> "Pose":
-    return wrap_as(_pose_cls(), ds, validate=validate)
+def _wrap_pose_output(ds: xr.Dataset, *, validate: bool, owner: str) -> "Pose":
+    cls = _pose_cls()
+    if not validate:
+        return cls._from_unvalidated(ds)
+    if get_pose_rep(ds, owner=owner) == "matrix":
+        ds = validate_pose_matrix_dataset(ds, owner=owner)
+    return cls._from_rigid_validated(ds, owner=owner)
 
 
 def _coerce_pose_operand(value: object, *, owner: str) -> "Pose":
@@ -148,17 +153,17 @@ def _build_pose_matrix_output(
 def _matrix_to_components_arrays(
     source: xr.Dataset,
     *,
-    var_name: str,
     row_dim: str,
     col_dim: str,
     axis_dim: str,
     quat_dim: str,
     owner: str,
 ) -> tuple[xr.DataArray, xr.DataArray]:
+    matrix = prepare_pose_matrix_for_conversion(source, owner=owner)
     try:
         position_da, rotation_da = xr.apply_ufunc(
-            matrix_to_components_kernel,
-            source[var_name],
+            _matrix_to_components_prevalidated_kernel,
+            matrix,
             input_core_dims=[[row_dim, col_dim]],
             output_core_dims=[[axis_dim], [quat_dim]],
             vectorize=False,
@@ -311,7 +316,6 @@ def _matrix_to_components_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
     if len(core_dims) != 2:
         raise ValueError(f"{owner}: Pose matrix layout requires exactly two core dims.")
     row_dim, col_dim = core_dims
-    var_name = select_single_numeric_var(source, owner=owner, what="Pose matrix layout")
     axis_dim, quat_dim = allocate_dim_pair(
         existing_dims=dataset_dim_names(source),
         first_candidates=("axis", "position_axis"),
@@ -324,7 +328,6 @@ def _matrix_to_components_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
     )
     position_da, rotation_da = _matrix_to_components_arrays(
         source,
-        var_name=var_name,
         row_dim=row_dim,
         col_dim=col_dim,
         axis_dim=axis_dim,
@@ -356,7 +359,8 @@ def pose_to_rep(pose: "Pose", rep: str, *, validate: bool) -> "Pose":
     owner = "spatial.pose.to_rep"
     target = _normalize_target_rep(rep, owner=owner)
     pose._enforce_invariants(owner=owner)
-    return _wrap_pose_output(_pose_to_rep_dataset(pose, target_rep=target, owner=owner), validate=validate)
+    output = _pose_to_rep_dataset(pose, target_rep=target, owner=owner)
+    return _wrap_pose_output(output, validate=validate, owner=owner)
 
 
 def pose_as_components(pose: "Pose", *, validate: bool) -> "Pose":
@@ -505,7 +509,7 @@ def _pose_compose_with_owner(
     )
     out_rot_ds = set_frames(out_rot.unsafe_data, parent=parent, child=child, validate=False)
     components = _pose_cls().from_components(Rotation._from_unvalidated(out_rot_ds), Position._from_unvalidated(out_pos_ds), validate=False)
-    return _wrap_pose_output(_pose_to_rep_dataset(components, target_rep=left_rep, owner=owner), validate=validate)
+    return _wrap_pose_output(_pose_to_rep_dataset(components, target_rep=left_rep, owner=owner), validate=validate, owner=owner)
 
 
 def pose_inverse(pose: "Pose", *, validate: bool) -> "Pose":
@@ -545,7 +549,7 @@ def _pose_inverse_with_owner(
     out_pos_ds = set_frames(out_pos_ds, parent=child, child=parent, validate=False)
     out_rot_ds = set_frames(out_rot.unsafe_data, parent=child, child=parent, validate=False)
     components = _pose_cls().from_components(Rotation._from_unvalidated(out_rot_ds), Position._from_unvalidated(out_pos_ds), validate=False)
-    return _wrap_pose_output(_pose_to_rep_dataset(components, target_rep=source_rep, owner=owner), validate=validate)
+    return _wrap_pose_output(_pose_to_rep_dataset(components, target_rep=source_rep, owner=owner), validate=validate, owner=owner)
 
 
 __all__ = [

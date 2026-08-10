@@ -36,6 +36,7 @@ from .fixed_size_primitives import (
     quat_multiply as _quat_multiply,
     rotate_vec3 as _rotate_vec3,
 )
+from .rigid_matrix_validation import require_real_matrix_dtype
 
 _HELPERS_JITTED = False
 
@@ -133,6 +134,7 @@ def quat_to_matrix_block_numba(values: object, *, owner: str) -> np.ndarray:
 
 def matrix_to_quat_block_numba(matrix: object, *, owner: str) -> np.ndarray:
     require_numba(owner)
+    require_real_matrix_dtype(matrix, owner=owner)
     return _run_unary(prepare_matrix_to_quat_rows(matrix, owner=owner), _compiled_matrix_to_quat(), owner=owner)
 
 

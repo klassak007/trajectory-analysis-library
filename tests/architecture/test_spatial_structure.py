@@ -281,7 +281,7 @@ def test_arch_spatial_014_pose_canonical_kernel_path_no_pairwise_rep_matrix() ->
     assert "CANONICAL_ROTATION_REP" in pose_text
     assert "set_position_rep(" in pose_text
     assert "set_rotation_rep(" in pose_text
-    assert "matrix3_to_quat_kernel" in pose_text
+    assert "_matrix3_to_quat_prevalidated_kernel" in pose_text
 
 
 def test_arch_spatial_015_pose_reuses_component_and_frame_owners_no_duplication() -> None:
@@ -677,7 +677,7 @@ def test_arch_spatial_039_slice_b3_pose_orchestrate_kernel_finalize_split_enforc
     assert "compose_translation_kernel" in pose_ops_text
     assert "inverse_translation_kernel" in pose_ops_text
     assert "components_to_matrix_kernel" in pose_ops_text
-    assert "matrix_to_components_kernel" in pose_ops_text
+    assert "_matrix_to_components_prevalidated_kernel" in pose_ops_text
     assert "set_pose_rep(" in pose_ops_text
     assert "set_frames(" in pose_ops_text
     assert "SciRotation" not in pose_ops_text
@@ -774,12 +774,12 @@ def test_arch_spatial_046_pose_matrix_decompose_reuses_single_matrix_to_quat_ker
     """ID: ARCH_SPATIAL_046_pose_matrix_decompose_reuses_single_matrix_to_quat_kernel_owner."""
     pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
     kernels_text = Path("tal/spatial/kernels/pose_kernels.py").read_text(encoding="utf-8")
-    assert "from .kernels.pose_kernels import matrix3_to_quat_kernel" in pose_text
-    assert "return matrix3_to_quat_kernel(values)" in pose_text
+    assert "from .kernels.pose_kernels import _matrix3_to_quat_prevalidated_kernel" in pose_text
+    assert "return _matrix3_to_quat_prevalidated_kernel(values)" in pose_text
     assert "_matrix3_to_quat_decompose_kernel," in pose_text
     assert "def _matrix_to_quat_kernel(" not in pose_text
     assert "def matrix3_to_quat_kernel(" in kernels_text
-    assert "quat = matrix3_to_quat_kernel(rotm)" in kernels_text
+    assert "def _matrix3_to_quat_prevalidated_kernel(" in kernels_text
 
 
 def test_arch_spatial_047_slice_b3_pose_decompose_uses_owner_wrapped_kernel_callable_for_lazy_errors() -> None:
@@ -787,10 +787,10 @@ def test_arch_spatial_047_slice_b3_pose_decompose_uses_owner_wrapped_kernel_call
     pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
     assert "def _matrix3_to_quat_decompose_kernel(" in pose_text
     assert 'owner = "spatial.pose.decompose"' in pose_text
-    assert "return matrix3_to_quat_kernel(values)" in pose_text
+    assert "return _matrix3_to_quat_prevalidated_kernel(values)" in pose_text
     assert "matrix decomposition quaternion kernel failed." in pose_text
     assert "_matrix3_to_quat_decompose_kernel," in pose_text
-    assert "matrix3_to_quat_kernel," not in pose_text.split("_matrix3_to_quat_decompose_kernel,")[0]
+    assert "_matrix3_to_quat_prevalidated_kernel," not in pose_text.split("_matrix3_to_quat_decompose_kernel,")[0]
 
 
 def test_arch_spatial_048_slice_b4_apply_owner_split_and_budget() -> None:
@@ -2235,6 +2235,7 @@ def test_spatial_arch_153_fixed_size_spatial_numba_backends_are_owner_routed() -
     """ID: SPATIAL_ARCH_153_fixed_size_spatial_numba_backends_are_owner_routed."""
     backend_text = Path("tal/spatial/kernels/fixed_size_backends.py").read_text(encoding="utf-8")
     common_text = Path("tal/spatial/kernels/_fixed_size_common.py").read_text(encoding="utf-8")
+    rigid_text = Path("tal/spatial/kernels/rigid_matrix_validation.py").read_text(encoding="utf-8")
     numba_text = Path("tal/spatial/kernels/fixed_size_numba_backends.py").read_text(encoding="utf-8")
     primitive_text = Path("tal/spatial/kernels/fixed_size_primitives.py").read_text(encoding="utf-8")
     topology_text = Path("tal/spatial/kernels/topology_scan_numba_backends.py").read_text(encoding="utf-8")
@@ -2245,7 +2246,9 @@ def test_spatial_arch_153_fixed_size_spatial_numba_backends_are_owner_routed() -
     assert "baseline fixed-size scipy kernel failed" in backend_text
     assert "prepare_block_rows(" in common_text
     assert "validate_quat_rows(" in common_text
-    assert "validate_matrix_rows(" in common_text
+    assert "validate_rotation_matrix_rows(" in rigid_text
+    assert "require_real_matrix_dtype(raw, owner=_OWNER)" in backend_text
+    assert "validate_rotation_matrix_rows(raw, owner=_OWNER)" in backend_text
     assert "prepare_binary_quat_rows(" in numba_text
     assert "require_numba(owner)" in numba_text
     assert "njit_kernel(" in numba_text
@@ -2271,6 +2274,59 @@ def test_spatial_arch_153_fixed_size_spatial_numba_backends_are_owner_routed() -
         text = path.read_text(encoding="utf-8")
         assert "fixed_size_backends" not in text
         assert "fixed_size_numba_backends" not in text
+
+
+def test_spatial_arch_192_rigid_matrix_validation_has_single_spatial_owner() -> None:
+    """ID: SPATIAL_ARCH_192_rigid_matrix_validation_has_single_spatial_owner."""
+    owner = Path("tal/spatial/kernels/rigid_matrix_validation.py")
+    orchestration = Path("tal/spatial/ops/pose_matrix_validation.py")
+    pose_kernels = Path("tal/spatial/kernels/pose_kernels.py")
+    pose_ops = Path("tal/spatial/ops/pose_ops.py")
+    pose = Path("tal/spatial/pose.py")
+    _assert_agents_budget(owner)
+    _assert_agents_budget(orchestration)
+
+    definitions: dict[str, list[str]] = {
+        "require_real_matrix_dtype": [],
+        "validate_rotation_matrix_rows": [],
+        "validate_pose_matrix_rows": [],
+    }
+    for path in sorted(Path("tal/spatial").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name in definitions:
+                definitions[node.name].append(path.as_posix())
+    expected = [owner.as_posix()]
+    assert definitions["require_real_matrix_dtype"] == expected
+    assert definitions["validate_rotation_matrix_rows"] == expected
+    assert definitions["validate_pose_matrix_rows"] == expected
+
+    for path in (
+        Path("tal/spatial/kernels/rotation_kernels.py"),
+        Path("tal/spatial/kernels/pose_kernels.py"),
+        Path("tal/spatial/kernels/fixed_size_backends.py"),
+        Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
+    ):
+        assert "rigid_matrix_validation import" in path.read_text(encoding="utf-8")
+    orchestration_text = orchestration.read_text(encoding="utf-8")
+    pose_kernels_text = pose_kernels.read_text(encoding="utf-8")
+    fixed_backend_text = Path("tal/spatial/kernels/fixed_size_backends.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'dask="parallelized"' in orchestration_text
+    assert "vectorize=False" in orchestration_text
+    assert '"allow_rechunk": True' in orchestration_text
+    assert ".compute(" not in orchestration_text
+    assert pose_kernels_text.count("validate_pose_matrix_rows(") == 1
+    assert pose_kernels_text.count("validate_rotation_matrix_rows(") == 1
+    assert "require_real_matrix_dtype(raw, owner=_OWNER)" in fixed_backend_text
+    assert "_run_scipy_kernel(_matrix_to_quat_prevalidated_kernel, values)" in fixed_backend_text
+    assert fixed_backend_text.count("validate_rotation_matrix_rows(") == 1
+    assert "_matrix_to_components_prevalidated_kernel" in pose_ops.read_text(encoding="utf-8")
+    assert "_matrix3_to_quat_prevalidated_kernel" in pose.read_text(encoding="utf-8")
+    assert "obj = cls._from_rigid_validated(ds, owner=owner)" in pose.read_text(encoding="utf-8")
+    assert "return cls._from_rigid_validated(ds, owner=owner)" in pose_ops.read_text(encoding="utf-8")
+    assert 'current == target == "matrix"' not in pose_ops.read_text(encoding="utf-8")
 
 
 def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() -> None:

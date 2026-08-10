@@ -49,8 +49,9 @@ from .kinematics.paired_components import (
     resolve_pair_registry,
     resolve_paired_roles,
 )
-from .kernels.pose_kernels import matrix3_to_quat_kernel
+from .kernels.pose_kernels import _matrix3_to_quat_prevalidated_kernel
 from .ops.pose_apply_ops import pose_apply
+from .ops.pose_matrix_validation import prepare_pose_matrix_for_conversion, validate_pose_matrix_dataset
 from .ops.pose_ops import pose_as_components, pose_as_matrix, pose_compose, pose_inverse, pose_to_rep
 from .position import Position
 from .rotation import Rotation
@@ -223,6 +224,12 @@ def _normalize_pose_metadata(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     )
 
 
+def _validate_pose_matrix_if_needed(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
+    if get_pose_rep(ds, owner=owner) != "matrix":
+        return ds
+    return validate_pose_matrix_dataset(ds, owner=owner)
+
+
 def _build_components_pose_dataset(
     rotation_ds: xr.Dataset,
     position_ds: xr.Dataset,
@@ -301,7 +308,7 @@ def _resolve_quat_dim_name(ds: xr.Dataset) -> str:
 def _matrix3_to_quat_decompose_kernel(values: np.ndarray) -> np.ndarray:
     owner = "spatial.pose.decompose"
     try:
-        return matrix3_to_quat_kernel(values)
+        return _matrix3_to_quat_prevalidated_kernel(values)
     except ValueError as exc:
         raise ValueError(f"{owner}: matrix decomposition quaternion kernel failed.") from exc
 
@@ -375,11 +382,26 @@ class Pose(AnalysisObject):
         super().__init__(source.unsafe_data)
         self._normalize_metadata(owner="spatial.pose.__init__")
         self._enforce_invariants(owner="spatial.pose.__init__")
+        self._bind_dataset(
+            _validate_pose_matrix_if_needed(self.unsafe_data, owner="spatial.pose.__init__")
+        )
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Pose":
+        owner = f"{cls.__name__}._from_validated"
+        obj = cls._from_rigid_validated(ds, owner=owner)
+        obj._bind_dataset(_validate_pose_matrix_if_needed(obj.unsafe_data, owner=owner))
+        return obj
+    @classmethod
+    def _from_rigid_validated(
+        cls,
+        ds: xr.Dataset | xr.DataArray,
+        *,
+        owner: str,
+    ) -> "Pose":
+        """Wrap data whose matrix payload has already passed rigid validation."""
         obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
+        obj._normalize_metadata(owner=owner)
+        obj._enforce_invariants(owner=owner)
         return obj
     @classmethod
     def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Pose":
@@ -498,17 +520,25 @@ class Pose(AnalysisObject):
         matrix : object
             Operand/component input consumed by this operation.
         validate : bool, optional
-            When ``True``, validate output schema/layout invariants before returning.
+            When ``True``, validate output schema, layout, and rigid-transform
+            invariants before returning.
 
         Returns
         -------
         Pose
             Result of applying this operation with TAL semantic constraints preserved.
 
+        Raises
+        ------
+        ValueError
+            If a structurally valid matrix is non-finite, not a proper rigid
+            transform, or has a malformed homogeneous bottom row.
+
         Notes
         -----
         The input must already declare two 4-element core dimensions containing
-        homogeneous transform matrices.
+        homogeneous transform matrices. Validation is immediate for eager
+        arrays and remains lazy for Dask-backed payloads.
 
         Examples
         --------
@@ -530,7 +560,11 @@ class Pose(AnalysisObject):
         source = _coerce_pose_source(matrix, owner=owner)
         ds = _clear_component_registry_for_matrix_layout(source, owner=owner)
         ds = set_pose_rep(ds, rep="matrix", validate=False, owner=owner)
-        return _wrap_pose_output(ds, validate=validate)
+        if validate:
+            _enforce_matrix_layout_invariants(ds, owner=owner)
+            ds = validate_pose_matrix_dataset(ds, owner=owner)
+            return cls._from_rigid_validated(ds, owner=owner)
+        return cls._from_unvalidated(ds)
     def decompose(self, *, validate: bool = True) -> tuple[Position, Rotation]:
         """Decompose this pose into ``(Position, Rotation)`` components.
 
@@ -857,7 +891,7 @@ class Pose(AnalysisObject):
         row_dim, col_dim = core_dims
         var_name = select_single_numeric_var(candidate, owner=owner, what="Pose matrix layout")
         require_var_contains_dims(candidate, var_name=var_name, required_dims=(row_dim, col_dim), owner=owner, what="Pose matrix layout")
-        matrix = candidate[var_name]
+        matrix = prepare_pose_matrix_for_conversion(candidate, owner=owner)
         rot_matrix = matrix.sel({row_dim: list(_XYZ_LABELS), col_dim: list(_XYZ_LABELS)})
         translation = matrix.sel({row_dim: list(_XYZ_LABELS), col_dim: "w"})
 

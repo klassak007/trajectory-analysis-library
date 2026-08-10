@@ -4,20 +4,19 @@ import numpy as np
 
 from ._fixed_size_common import (
     prepare_binary_quat_rows,
-    prepare_matrix_to_quat_rows,
     prepare_pose_compose_rows,
     prepare_pose_inverse_rows,
     prepare_pose_matrix_rows,
     prepare_quat_to_matrix_rows,
     prepare_unary_quat_rows,
     prepare_vec_quat_rows,
-    validate_matrix_rows,
     validate_quat_rows,
 )
 from .pose_kernels import components_to_matrix_kernel, compose_translation_kernel, inverse_translation_kernel
 from .rotation_apply_kernels import rotate_vec3_kernel
 from .rotation_compose_kernels import compose_quat_kernel, inverse_quat_kernel
-from .rotation_kernels import matrix_to_quat_kernel, quat_to_matrix_kernel
+from .rotation_kernels import _matrix_to_quat_prevalidated_kernel, quat_to_matrix_kernel
+from .rigid_matrix_validation import require_real_matrix_dtype, validate_rotation_matrix_rows
 
 SPATIAL_FIXED_BACKEND_NUMBA = "numba"
 SPATIAL_FIXED_BACKEND_SCIPY = "scipy"
@@ -72,15 +71,17 @@ def quat_to_matrix_block_backend(values: object, *, backend: str = SPATIAL_FIXED
 
 
 def matrix_to_quat_block_backend(matrix: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:
+    if backend not in (SPATIAL_FIXED_BACKEND_SCIPY, SPATIAL_FIXED_BACKEND_NUMBA):
+        raise ValueError(f"{_OWNER}: unsupported fixed-size backend {backend!r}.")
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
-        rows = prepare_matrix_to_quat_rows(matrix, owner=_OWNER)
-        validate_matrix_rows(rows.row_arrays[0], owner=_OWNER)
-        return _run_scipy_kernel(matrix_to_quat_kernel, np.asarray(matrix, dtype=np.float64))
-    if backend == SPATIAL_FIXED_BACKEND_NUMBA:
-        from .fixed_size_numba_backends import matrix_to_quat_block_numba
+        raw = np.asarray(matrix)
+        require_real_matrix_dtype(raw, owner=_OWNER)
+        validate_rotation_matrix_rows(raw, owner=_OWNER)
+        values = raw.astype(np.float64, copy=False)
+        return _run_scipy_kernel(_matrix_to_quat_prevalidated_kernel, values)
+    from .fixed_size_numba_backends import matrix_to_quat_block_numba
 
-        return matrix_to_quat_block_numba(matrix, owner=_OWNER)
-    raise ValueError(f"{_OWNER}: unsupported fixed-size backend {backend!r}.")
+    return matrix_to_quat_block_numba(matrix, owner=_OWNER)
 
 
 def rotate_vec3_block_backend(values: object, quat: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:

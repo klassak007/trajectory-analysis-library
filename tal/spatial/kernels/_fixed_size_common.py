@@ -8,7 +8,6 @@ from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
 
 from ._fixed_size_constants import (
     DET_ATOL,
-    ORTHO_ATOL,
     POSE_MATRIX_SIZE,
     QUAT_SIZE,
     ROT_MATRIX_SIZE,
@@ -124,58 +123,6 @@ def validate_quat_rows(*row_arrays: np.ndarray, owner: str) -> None:
         raise_fixed_status(_quat_status(values), owner=owner)
 
 
-def _matrix_det(matrix: np.ndarray, row: int) -> float:
-    m = matrix[row]
-    return (
-        m[0, 0] * (m[1, 1] * m[2, 2] - m[1, 2] * m[2, 1])
-        - m[0, 1] * (m[1, 0] * m[2, 2] - m[1, 2] * m[2, 0])
-        + m[0, 2] * (m[1, 0] * m[2, 1] - m[1, 1] * m[2, 0])
-    )
-
-
-def _column_dot(matrix: np.ndarray, row: int, col_a: int, col_b: int) -> tuple[int, float]:
-    dot = 0.0
-    for idx in range(ROT_MATRIX_SIZE):
-        value = matrix[row, idx, col_a]
-        other = matrix[row, idx, col_b]
-        if not np.isfinite(value) or not np.isfinite(other):
-            return STATUS_NONFINITE_MATRIX, 0.0
-        dot += value * other
-    return STATUS_OK, dot
-
-
-def _orthonormal_status(matrix: np.ndarray, row: int) -> int:
-    max_error = 0.0
-    for pair in range(ROT_MATRIX_SIZE * ROT_MATRIX_SIZE):
-        col_a = pair // ROT_MATRIX_SIZE
-        col_b = pair - col_a * ROT_MATRIX_SIZE
-        status, dot = _column_dot(matrix, row, col_a, col_b)
-        if status != STATUS_OK:
-            return status
-        expected = 1.0 if col_a == col_b else 0.0
-        max_error = max(max_error, abs(dot - expected))
-    if max_error <= ORTHO_ATOL:
-        return STATUS_OK
-    return STATUS_NONORTHONORMAL_MATRIX
-
-
-def _matrix_status(matrix: np.ndarray) -> int:
-    for row in range(matrix.shape[0]):
-        status = _orthonormal_status(matrix, row)
-        if status != STATUS_OK:
-            return status
-        det = _matrix_det(matrix, row)
-        if not np.isfinite(det):
-            return STATUS_NONFINITE_DET
-        if abs(det - 1.0) > DET_ATOL:
-            return STATUS_INVALID_DET
-    return STATUS_OK
-
-
-def validate_matrix_rows(matrix: np.ndarray, *, owner: str) -> None:
-    raise_fixed_status(_matrix_status(matrix), owner=owner)
-
-
 def raise_fixed_status(status: int, *, owner: str) -> None:
     if status == STATUS_INVALID_QUAT:
         raise ValueError(f"{owner}: quaternion norm must be finite and > 0.")
@@ -201,6 +148,5 @@ __all__ = [
     "prepare_unary_quat_rows",
     "prepare_vec_quat_rows",
     "raise_fixed_status",
-    "validate_matrix_rows",
     "validate_quat_rows",
 ]

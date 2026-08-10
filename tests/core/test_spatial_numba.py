@@ -935,6 +935,16 @@ def test_spatial_numba_033_matrix_to_quat_backend_parity() -> None:
     expected = matrix_to_quat_block_backend(matrix, backend=SPATIAL_FIXED_BACKEND_SCIPY)
     actual = matrix_to_quat_block_backend(matrix, backend=SPATIAL_FIXED_BACKEND_NUMBA)
     _assert_quat_equivalent(actual, expected, atol=1e-12)
+    complex_matrix = matrix.astype(np.complex128)
+    complex_matrix[0, 0, 0, 1] += 7j
+    for backend in (SPATIAL_FIXED_BACKEND_SCIPY, SPATIAL_FIXED_BACKEND_NUMBA):
+        with pytest.raises(ValueError, match=r"matrix dtype must be real integer or floating-point"):
+            matrix_to_quat_block_backend(complex_matrix, backend=backend)
+    with pytest.raises(
+        ValueError,
+        match=r"custom\.fixed: matrix dtype must be real integer or floating-point",
+    ):
+        matrix_to_quat_block_numba(complex_matrix, owner="custom.fixed")
     with pytest.raises(ValueError, match=r"spatial\.fixed_size_backend: matrix must have trailing shape"):
         matrix_to_quat_block_backend(np.zeros((2, 3, 4, 4)), backend=SPATIAL_FIXED_BACKEND_NUMBA)
     bad = matrix.copy()

@@ -528,6 +528,198 @@ def test_spatial_hard_024_pose_from_matrix_clears_preexisting_component_registry
     assert pose.unsafe_data["pose_matrix"].dims == with_registry.unsafe_data["pose_matrix"].dims
 
 
+@pytest.mark.parametrize(
+    "rotation",
+    [
+        pytest.param(np.diag([2.0, 1.0, 1.0]), id="scale"),
+        pytest.param(np.asarray([[1.0, 0.2, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), id="shear"),
+        pytest.param(np.diag([-1.0, 1.0, 1.0]), id="reflection"),
+    ],
+)
+def test_spatial_hard_192_pose_matrix_rejects_non_rigid_rotation_blocks(rotation: np.ndarray) -> None:
+    """ID: SPATIAL_HARD_192_pose_matrix_rejects_non_rigid_rotation_blocks."""
+    ds = _matrix_dataset()
+    ds["pose_matrix"].data[0, :3, :3] = rotation
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(ds, validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.__init__"):
+        Pose(ds)
+
+    near = _matrix_dataset()
+    near["pose_matrix"].data[0, 0, 0] += 1.0e-7
+    near["pose_matrix"].data[0, 3, 0] = 5.0e-7
+    Pose.from_matrix(near, validate=True)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("nan", "inf", "complex", "bottom_x", "bottom_y", "bottom_z", "bottom_w"),
+)
+def test_spatial_hard_193_pose_matrix_rejects_nonfinite_values_and_malformed_bottom_rows(case: str) -> None:
+    """ID: SPATIAL_HARD_193_pose_matrix_rejects_nonfinite_values_and_malformed_bottom_rows."""
+    ds = _matrix_dataset()
+    if case == "complex":
+        ds["pose_matrix"] = ds["pose_matrix"].astype(np.complex128)
+        ds["pose_matrix"].data[0, 0, 3] += 1j
+    elif case == "nan":
+        ds["pose_matrix"].data[0, 0, 3] = np.nan
+    elif case == "inf":
+        ds["pose_matrix"].data[0, 1, 1] = np.inf
+    else:
+        index = {"bottom_x": 0, "bottom_y": 1, "bottom_z": 2, "bottom_w": 3}[case]
+        ds["pose_matrix"].data[0, 3, index] = 0.25 if index < 3 else 0.75
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(ds, validate=True)
+
+
+def test_spatial_hard_194_pose_matrix_conversion_revalidates_unvalidated_inputs() -> None:
+    """ID: SPATIAL_HARD_194_pose_matrix_conversion_revalidates_unvalidated_inputs."""
+    ds = _matrix_dataset()
+    ds["pose_matrix"].data[0, 3, 0] = 0.5
+    pose = Pose.from_matrix(ds, validate=False)
+
+    with pytest.raises(ValueError, match="spatial.pose.decompose"):
+        pose.decompose(validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.to_rep"):
+        pose.as_components(validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.to_rep"):
+        pose.as_matrix(validate=True)
+    with pytest.raises(ValueError, match="Pose._from_validated"):
+        pose.rename({"sample": "step"}, validate=True)
+
+
+def test_spatial_hard_195_pose_matrix_validation_ignores_structural_padding() -> None:
+    """ID: SPATIAL_HARD_195_pose_matrix_validation_ignores_structural_padding."""
+    values = np.broadcast_to(np.eye(4), (2, 3, 4, 4)).copy()
+    values[0, 2] = 0.0
+    values[1, 1:] = 0.0
+    arr = xr.DataArray(
+        values,
+        dims=("trial", "sample", "row", "col"),
+        coords={
+            "trial": ["a", "b"],
+            "sample": [0, 1, 2],
+            "row": list(_QUAT),
+            "col": list(_QUAT),
+            "sample_size": ("trial", [2, 1]),
+        },
+        name="pose_matrix",
+    )
+    ao = AnalysisObject.from_data(
+        arr.to_dataset(),
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        sequence_size_coord="sample_size",
+        validate=True,
+    )
+    ds = set_pose_rep(ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    pose = Pose.from_matrix(ds, validate=True)
+    np.testing.assert_array_equal(pose.unsafe_data["pose_matrix"].values, values)
+    converted = pose.as_components(validate=True)
+    assert read_sequence_size_coord_name(converted.unsafe_data) == "sample_size"
+    np.testing.assert_array_equal(converted.unsafe_data.coords["sample_size"], [2, 1])
+
+    invariant = np.broadcast_to(np.eye(4), (3, 4, 4)).copy()
+    invariant[2] = 0.0
+    invariant_arr = xr.DataArray(
+        invariant,
+        dims=("sample", "row", "col"),
+        coords={
+            "sample": [0, 1, 2],
+            "row": list(_QUAT),
+            "col": list(_QUAT),
+        },
+        name="pose_matrix",
+    )
+    invariant_ds_raw = invariant_arr.to_dataset().assign_coords(
+        trial=("trial", ["a", "b"]),
+        sample_size=("trial", [2, 1]),
+    )
+    invariant_ao = AnalysisObject.from_data(
+        invariant_ds_raw,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        sequence_size_coord="sample_size",
+        validate=True,
+    )
+    invariant_ds = set_pose_rep(invariant_ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    Pose.from_matrix(invariant_ds, validate=True)
+    invariant_ds["pose_matrix"].data[1] = 0.0
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(invariant_ds, validate=True)
+
+    sequence_invariant = np.broadcast_to(np.eye(4), (2, 4, 4)).copy()
+    sequence_invariant[0] = 0.0
+    sequence_invariant_arr = xr.DataArray(
+        sequence_invariant,
+        dims=("trial", "row", "col"),
+        coords={
+            "trial": ["a", "b"],
+            "row": list(_QUAT),
+            "col": list(_QUAT),
+        },
+        name="pose_matrix",
+    )
+    sequence_invariant_raw = sequence_invariant_arr.to_dataset().assign_coords(
+        sample=("sample", [0, 1, 2]),
+        sample_size=("trial", [0, 1]),
+    )
+    sequence_invariant_ao = AnalysisObject.from_data(
+        sequence_invariant_raw,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        sequence_size_coord="sample_size",
+        validate=True,
+    )
+    sequence_invariant_ds = set_pose_rep(
+        sequence_invariant_ao.unsafe_data,
+        rep="matrix",
+        validate=False,
+        owner="test",
+    )
+    Pose.from_matrix(sequence_invariant_ds, validate=True)
+    sequence_invariant_ds["pose_matrix"].data[1] = 0.0
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(sequence_invariant_ds, validate=True)
+
+
+def test_spatial_perf_001_pose_matrix_validation_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_PERF_001_pose_matrix_validation_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+    ds = _matrix_dataset()
+    expected = ds["pose_matrix"].values.copy()
+    ds["pose_matrix"].attrs["matrix_kind"] = "rigid"
+    ds["pose_matrix"] = xr.DataArray(
+        da.from_array(expected, chunks=(1, 2, 2)),
+        dims=ds["pose_matrix"].dims,
+        coords=ds["pose_matrix"].coords,
+        attrs=ds["pose_matrix"].attrs,
+        name="pose_matrix",
+    )
+    with monkeypatch.context() as guarded:
+        guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
+        pose = Pose.from_matrix(ds, validate=True)
+        assert getattr(pose.unsafe_data["pose_matrix"].data, "chunks", None) is not None
+        assert pose.unsafe_data["pose_matrix"].dims == ds["pose_matrix"].dims
+        assert pose.unsafe_data["pose_matrix"].attrs["matrix_kind"] == "rigid"
+    np.testing.assert_allclose(pose.unsafe_data["pose_matrix"].compute(), expected)
+
+    bad = ds.copy(deep=True)
+    bad_values = expected.copy()
+    bad_values[0, 0, 0] = 2.0
+    bad["pose_matrix"].data = da.from_array(bad_values, chunks=(1, 2, 2))
+    with monkeypatch.context() as guarded:
+        guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
+        bad_pose = Pose.from_matrix(bad, validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        bad_pose.unsafe_data["pose_matrix"].compute()
+
+
 def test_spatial_core_045_pose_to_rep_components_to_matrix_deterministic() -> None:
     """ID: SPATIAL_CORE_045_pose_to_rep_components_to_matrix_deterministic."""
     pose = _component_pose()
@@ -1114,7 +1306,7 @@ def test_spatial_hard_054_pose_decompose_matrix_kernel_failure_wrapped_with_deco
     """ID: SPATIAL_HARD_054_pose_decompose_matrix_kernel_failure_wrapped_with_decompose_owner_context."""
     matrix_ds = _matrix_dataset()
     matrix_ds["pose_matrix"].data[:, :3, :3] = 0.0
-    pose = Pose(matrix_ds)
+    pose = Pose.from_matrix(matrix_ds, validate=False)
 
     with pytest.raises(ValueError) as exc_info:
         pose.decompose(validate=True)
@@ -1135,7 +1327,7 @@ def test_spatial_hard_055_pose_decompose_matrix_dask_lazy_kernel_failure_wrapped
         dims=matrix_ds["pose_matrix"].dims,
         coords=matrix_ds["pose_matrix"].coords,
     )
-    pose = Pose(matrix_ds)
+    pose = Pose.from_matrix(matrix_ds, validate=False)
 
     _, rot = pose.decompose(validate=True)
     rot_var = str(next(iter(rot.unsafe_data.data_vars)))
