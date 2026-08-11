@@ -21,7 +21,8 @@ from tal.frames import Frame, FrameGraph, get_active_frame_graph, get_or_create_
 
 `FrameGraph` owns `Frame` nodes. It supports context-scoped active graphs,
 explicit reparent and rename policies, and optional freezing to prevent further
-mutation.
+mutation. Active graph selection and nested context entry are task-local across
+asyncio `await` boundaries; this does not synchronize concurrent graph mutations.
 
 ```python
 from tal.frames import find_path, fold_path

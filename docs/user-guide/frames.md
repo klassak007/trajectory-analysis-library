@@ -46,6 +46,10 @@ renamed = retagged.frames.rename_frame("drone", "drone_0", graph=graph)
 The AO carries only metadata until it is bound or used by a spatial operation.
 The graph is the runtime object that owns topology.
 
+Active graph selection is task-local. A synchronous `with graph:` block may
+span asyncio `await` points without sharing its context-entry state with sibling
+tasks. This context isolation does not make concurrent topology mutation atomic.
+
 ## Working With Frame Topology
 
 - Use `FrameGraph.get_or_create_frame(...)` to build topology.

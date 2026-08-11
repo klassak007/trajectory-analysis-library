@@ -225,7 +225,6 @@ class FrameGraph:
 
     def __init__(self, *, frozen: bool = False) -> None:
         self._frames: dict[str, Frame] = {}
-        self._tokens: list[contextvars.Token[FrameGraph]] = []
         self._frozen = bool(frozen)
 
     @property
@@ -601,14 +600,29 @@ class FrameGraph:
 
     def __enter__(self) -> "FrameGraph":
         token = _ACTIVE_FRAME_GRAPH.set(self)
-        self._tokens.append(token)
+        stack = _FRAME_GRAPH_CONTEXT_STACK.get()
+        _FRAME_GRAPH_CONTEXT_STACK.set((*stack, (self, token)))
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        token = self._tokens.pop()
-        _ACTIVE_FRAME_GRAPH.reset(token)
+        stack = _FRAME_GRAPH_CONTEXT_STACK.get()
+        if not stack or stack[-1][0] is not self:
+            raise RuntimeError(
+                "FrameGraph.__exit__: no matching context-local entry for this graph."
+            )
+        _, token = stack[-1]
+        try:
+            _ACTIVE_FRAME_GRAPH.reset(token)
+        except (RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "FrameGraph.__exit__: no matching context-local entry for this graph."
+            ) from exc
+        _FRAME_GRAPH_CONTEXT_STACK.set(stack[:-1])
 
 
+_FRAME_GRAPH_CONTEXT_STACK: contextvars.ContextVar[
+    tuple[tuple[FrameGraph, contextvars.Token[FrameGraph]], ...]
+] = contextvars.ContextVar("tal_frame_graph_context_stack", default=())
 _DEFAULT_FRAME_GRAPH = FrameGraph()
 _ACTIVE_FRAME_GRAPH: contextvars.ContextVar[FrameGraph] = contextvars.ContextVar(
     "tal_active_frame_graph",

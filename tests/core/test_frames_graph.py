@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from tal.frames import Frame, FrameGraph, get_active_frame_graph
@@ -17,6 +19,94 @@ def test_frame_core_003_framegraph_context_scope_returns_active_graph() -> None:
         with g2:
             assert get_active_frame_graph() is g2
         assert get_active_frame_graph() is g1
+    assert get_active_frame_graph() is default_graph
+
+
+@pytest.mark.parametrize("shared_graph", (True, False), ids=("shared", "distinct"))
+def test_frame_hard_033_framegraph_async_context_tokens_are_task_local(
+    shared_graph: bool,
+) -> None:
+    """ID: FRAME_HARD_033_framegraph_async_context_tokens_are_task_local."""
+    default_graph = get_active_frame_graph()
+
+    async def run_interleaved() -> None:
+        first_graph = FrameGraph()
+        second_graph = first_graph if shared_graph else FrameGraph()
+        first_entered = asyncio.Event()
+        second_entered = asyncio.Event()
+        first_left = asyncio.Event()
+
+        async def first() -> None:
+            previous = get_active_frame_graph()
+            try:
+                with first_graph:
+                    assert get_active_frame_graph() is first_graph
+                    first_entered.set()
+                    await second_entered.wait()
+            finally:
+                first_left.set()
+            assert get_active_frame_graph() is previous
+
+        async def second() -> None:
+            await first_entered.wait()
+            previous = get_active_frame_graph()
+            with second_graph:
+                assert get_active_frame_graph() is second_graph
+                second_entered.set()
+                await first_left.wait()
+            assert get_active_frame_graph() is previous
+
+        await asyncio.gather(first(), second())
+
+    asyncio.run(run_interleaved())
+    assert get_active_frame_graph() is default_graph
+
+
+def test_frame_core_023_framegraph_nested_context_restores_previous_graph() -> None:
+    """ID: FRAME_CORE_023_framegraph_nested_context_restores_previous_graph."""
+    default_graph = get_active_frame_graph()
+    outer = FrameGraph()
+    inner = FrameGraph()
+
+    with outer:
+        assert get_active_frame_graph() is outer
+        with outer:
+            assert get_active_frame_graph() is outer
+        assert get_active_frame_graph() is outer
+        with inner:
+            assert get_active_frame_graph() is inner
+        assert get_active_frame_graph() is outer
+    assert get_active_frame_graph() is default_graph
+
+
+def test_frame_hard_034_framegraph_context_exception_restores_previous_graph() -> None:
+    """ID: FRAME_HARD_034_framegraph_context_exception_restores_previous_graph."""
+    default_graph = get_active_frame_graph()
+    outer = FrameGraph()
+    inner = FrameGraph()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with outer:
+            with inner:
+                raise RuntimeError("boom")
+    assert get_active_frame_graph() is default_graph
+
+    error = r"FrameGraph\.__exit__: no matching context-local entry"
+    with pytest.raises(RuntimeError, match=error):
+        inner.__exit__(None, None, None)
+    assert get_active_frame_graph() is default_graph
+
+    async def reject_inherited_entry_exit() -> None:
+        async def child() -> None:
+            with pytest.raises(RuntimeError, match=error):
+                outer.__exit__(None, None, None)
+            assert get_active_frame_graph() is outer
+
+        with outer:
+            await asyncio.create_task(child())
+            assert get_active_frame_graph() is outer
+
+    asyncio.run(reject_inherited_entry_exit())
     assert get_active_frame_graph() is default_graph
 
 

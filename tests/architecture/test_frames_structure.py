@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from ._budget import executable_source, file_loc, function_lengths
@@ -297,6 +298,29 @@ def test_arch_frames_030_visualization_no_core_spatial_import_boundary_regressio
     assert "attrs['tal']" not in visualization
 
 
+def test_arch_frames_031_framegraph_context_tokens_have_context_local_owner() -> None:
+    """ID: ARCH_FRAMES_031_framegraph_context_tokens_have_context_local_owner."""
+    registry = Path("tal/frames/registry.py").read_text(encoding="utf-8")
+    module = ast.parse(registry)
+    graph_class = next(
+        node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "FrameGraph"
+    )
+    instance_token_attrs = {
+        node.attr
+        for node in ast.walk(graph_class)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+        and "token" in node.attr.lower()
+    }
+    assert not instance_token_attrs
+    assert "_FRAME_GRAPH_CONTEXT_STACK: contextvars.ContextVar[" in registry
+    assert 'contextvars.ContextVar("tal_frame_graph_context_stack", default=())' in registry
+    assert "_FRAME_GRAPH_CONTEXT_STACK.set((*stack, (self, token)))" in registry
+    assert "_ACTIVE_FRAME_GRAPH.reset(token)" in registry
+    assert "_FRAME_GRAPH_CONTEXT_STACK.set(stack[:-1])" in registry
+
+
 def test_arch_frames_c6_001_motion_and_inertial_metadata_owners_stay_frames_or_utils() -> None:
     """ID: ARCH_FRAMES_C6_001_motion_and_inertial_metadata_owners_stay_frames_or_utils."""
     spatial_motion_path = Path("tal/spatial/metadata/frame_motion.py")
@@ -356,6 +380,8 @@ def test_frame_doc_001_phase7_slice_a_frames_docs_and_api_entries_present() -> N
     assert "tal.utils.frame_schema.set_frames" in schema_doc
     assert "FrameGraph" in api_frames
     assert "get_active_frame_graph" in api_frames
+    assert "task-local" in api_frames.lower()
+    assert "task-local" in user_frames.lower()
     assert "metadata" in user_frames.lower()
 
 
