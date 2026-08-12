@@ -32,6 +32,24 @@ def _query_catalog() -> Catalog:
     return Catalog(ao)
 
 
+def _datatree_query_catalog_with_root_batch_metadata() -> Catalog:
+    root = xr.Dataset(
+        coords={
+            "group": ["root-a", "root-b", "root-c"],
+            "rank": ("group", [10, 20, 30]),
+        }
+    )
+    tree = xr.DataTree.from_dict(
+        {
+            "/": root,
+            "/a": xr.Dataset({"value": ("sample", [1.0, 2.0])}),
+            "/b": xr.Dataset({"value": ("sample", [3.0, 4.0])}),
+            "/c": xr.Dataset({"value": ("sample", [5.0, 6.0])}),
+        }
+    )
+    return Catalog(tree)
+
+
 def test_cat_core_p11b_001_query_no_match_returns_empty_catalog() -> None:
     """ID: CAT_CORE_P11B_001_query_no_match_returns_empty_catalog."""
     cat = _query_catalog()
@@ -188,3 +206,20 @@ def test_cat_hard_p11b_008_ambiguous_grouping_context_for_query_extract_fails_cl
         Catalog(single_batch, batch_dim="sample").query(
             where={"op": "==", "field": "batch.sample", "value": 1}
         )
+
+
+def test_cat_core_p11b_013_chained_datatree_query_uses_selected_root_batch_metadata() -> None:
+    """ID: CAT_CORE_P11B_013_chained_datatree_query_uses_selected_root_batch_metadata."""
+    catalog = _datatree_query_catalog_with_root_batch_metadata()
+    reordered = catalog.sel(["b", "a"])
+    assert reordered.query(
+        where={"op": "==", "field": "batch.rank", "value": 20}
+    ).group_labels == ("b",)
+    subset = catalog.sel(["b"])
+    assert subset.query(
+        where={"op": "==", "field": "batch.rank", "value": 20}
+    ).group_labels == ("b",)
+    empty = catalog.sel([])
+    assert empty.query(
+        where={"op": "==", "field": "batch.rank", "value": 20}
+    ).group_labels == ()

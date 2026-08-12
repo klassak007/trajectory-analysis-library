@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import xarray as xr
@@ -10,9 +10,26 @@ from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec, final
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.core.validity_finalize import set_left_packed_validity_or_prune_from_size_coord
 
-from .backends import datatree_children, validate_batch_dim_role_compatibility
-from .metadata_domain import collect_extract_metadata_columns, promote_extract_metadata
-from .options import CatalogExtractOptions, CatalogQueryOptions
+from .backends import (
+    datatree_children,
+    validate_batch_dim_role_compatibility,
+    validate_datatree_root_batch_alignment,
+)
+from .extract_coords import (
+    canonicalize_selected_payload_vars,
+    concat_datatree_rows,
+    expand_empty_datatree_template,
+    expand_datatree_rows,
+    plan_datatree_child_payloads,
+    structural_scalar_metadata_coord_names,
+)
+from .metadata_domain import apply_extract_metadata_promotion
+from .options import CatalogExtractOptions
+from .ownership import (
+    isolate_dataset_result_values,
+    isolate_result_metadata,
+    isolate_result_values,
+)
 from .types import CatalogState
 
 
@@ -83,7 +100,9 @@ def _extract_dataset_payload(
         ignore_missing=options.ignore_missing_vars,
         owner=owner,
     )
-    return _select_vars(source, selected)
+    selected_payload = _select_vars(source, selected)
+    isolated = isolate_dataset_result_values(selected_payload, owner=owner)
+    return isolate_result_metadata(isolated, owner=owner)
 
 
 def _extract_datatree_payload(
@@ -94,7 +113,7 @@ def _extract_datatree_payload(
     options: CatalogExtractOptions,
     owner: str,
 ) -> tuple[xr.Dataset, xr.Dataset]:
-    children = datatree_children(tree)
+    children = _validated_datatree_children(tree, batch_dim=state.batch_dim, owner=owner)
     labels = tuple(children.keys())
     if not children:
         return _extract_empty_datatree_payload(
@@ -103,35 +122,101 @@ def _extract_datatree_payload(
             options=options,
             owner=owner,
         )
-    ordered_children = tuple(children[label].ds for label in labels)
-    available = _shared_child_vars(ordered_children)
+    ordered_children, batch_coord_specs = plan_datatree_child_payloads(
+        children,
+        labels=labels,
+        batch_dim=state.batch_dim,
+        owner=owner,
+    )
+    selected_children = _select_datatree_payload_vars(
+        ordered_children,
+        variables=variables,
+        options=options,
+        labels=labels,
+        owner=owner,
+    )
+    rows = expand_datatree_rows(
+        selected_children,
+        children=children,
+        labels=labels,
+        batch_dim=state.batch_dim,
+        batch_coord_specs=batch_coord_specs,
+        owner=owner,
+    )
+    merged = concat_datatree_rows(rows, batch_dim=state.batch_dim)
+    merged = merged.assign_coords({state.batch_dim: xr.DataArray(np.asarray(labels, dtype=object), dims=(state.batch_dim,))})
+    promoted = _promote_datatree_metadata(
+        _strip_dataset_attrs(merged),
+        state=state,
+        options=options,
+        represented_coord_names=structural_scalar_metadata_coord_names(batch_coord_specs),
+        protected_coord_names=_schema_owned_extract_coord_names(ordered_children[0]),
+        owner=owner,
+    )
+    isolated = isolate_result_values(promoted, batch_dim=state.batch_dim, owner=owner)
+    return isolate_result_metadata(isolated, owner=owner), ordered_children[0]
+
+
+def _select_datatree_payload_vars(
+    payloads: tuple[xr.Dataset, ...],
+    *,
+    variables: tuple[str, ...] | None,
+    options: CatalogExtractOptions,
+    labels: tuple[str, ...],
+    owner: str,
+) -> tuple[xr.Dataset, ...]:
     selected = _resolve_selected_vars(
-        available=available,
+        available=_shared_child_vars(payloads),
         requested=variables,
         ignore_missing=options.ignore_missing_vars,
         owner=owner,
     )
-    rows = [
-        _expand_child_row(
-            _select_vars(ds, selected),
-            batch_dim=state.batch_dim,
-            label=label,
-            owner=owner,
-        )
-        for ds, label in zip(ordered_children, labels, strict=True)
-    ]
-    merged = xr.concat(rows, dim=state.batch_dim, join="exact", compat="identical", combine_attrs="drop_conflicts")
-    merged = merged.assign_coords({state.batch_dim: xr.DataArray(np.asarray(labels, dtype=object), dims=(state.batch_dim,))})
-    merged = _strip_dataset_attrs(merged)
-    metadata = collect_extract_metadata_columns(state, owner=owner, options=CatalogQueryOptions())
-    promoted = promote_extract_metadata(
-        merged,
-        batch_dim=state.batch_dim,
-        metadata=metadata,
-        options=options.metadata_promotion,
+    subsets = tuple(_select_vars(ds, selected) for ds in payloads)
+    return canonicalize_selected_payload_vars(
+        subsets,
+        selected=selected,
+        labels=labels,
         owner=owner,
     )
-    return promoted, ordered_children[0]
+
+
+def _promote_datatree_metadata(
+    merged: xr.Dataset,
+    *,
+    state: CatalogState,
+    options: CatalogExtractOptions,
+    represented_coord_names: frozenset[str],
+    protected_coord_names: frozenset[str],
+    metadata_template: xr.Dataset | None = None,
+    owner: str,
+) -> xr.Dataset:
+    return apply_extract_metadata_promotion(
+        merged,
+        state=state,
+        options=options.metadata_promotion,
+        represented_coord_names=represented_coord_names,
+        protected_coord_names=protected_coord_names,
+        metadata_template=metadata_template,
+        owner=owner,
+    )
+
+
+def _schema_owned_extract_coord_names(source: xr.Dataset) -> frozenset[str]:
+    names = (
+        read_param_coord_name(source),
+        read_sequence_size_coord_name(source),
+    )
+    return frozenset(name for name in names if name is not None)
+
+
+def _validated_datatree_children(
+    tree: xr.DataTree,
+    *,
+    batch_dim: str,
+    owner: str,
+) -> Mapping[str, xr.DataTree]:
+    validate_datatree_root_batch_alignment(tree, batch_dim=batch_dim, owner=owner)
+    return datatree_children(tree)
 
 
 def _extract_empty_datatree_payload(
@@ -156,19 +241,21 @@ def _extract_empty_datatree_payload(
         owner=owner,
     )
     base = _select_vars(template, selected)
-    expanded = base.expand_dims({state.batch_dim: np.asarray([], dtype=object)})
-    size_name = read_sequence_size_coord_name(template)
-    if size_name is not None and size_name in expanded.coords and expanded.coords[size_name].dims == ():
-        expanded = expanded.drop_vars(size_name)
-        expanded = expanded.assign_coords(
-            {
-                size_name: xr.DataArray(
-                    np.asarray([], dtype=np.int64),
-                    dims=(state.batch_dim,),
-                )
-            }
-        )
-    return expanded, template
+    expanded, represented = expand_empty_datatree_template(
+        base,
+        batch_dim=state.batch_dim,
+    )
+    promoted = _promote_datatree_metadata(
+        _strip_dataset_attrs(expanded),
+        state=state,
+        options=options,
+        represented_coord_names=represented,
+        protected_coord_names=_schema_owned_extract_coord_names(template),
+        metadata_template=template,
+        owner=owner,
+    )
+    isolated = isolate_result_values(promoted, batch_dim=state.batch_dim, owner=owner)
+    return isolate_result_metadata(isolated, owner=owner), template
 
 
 def _shared_child_vars(children: Sequence[xr.Dataset]) -> tuple[str, ...]:
@@ -202,16 +289,6 @@ def _resolve_selected_vars(
             f"{owner}: unknown extract variable(s) {unknown!r}; set ignore_missing_vars=True to ignore."
         )
     return tuple(name for name in requested if name in available)
-
-
-def _expand_child_row(ds: xr.Dataset, *, batch_dim: str, label: str, owner: str) -> xr.Dataset:
-    try:
-        return ds.expand_dims({batch_dim: [label]})
-    except ValueError as exc:
-        raise ValueError(
-            f"{owner}: explicit batch_dim {batch_dim!r} collides with child payload dims for group "
-            f"{label!r}; choose a non-colliding constructor batch_dim."
-        ) from exc
 
 
 def _select_vars(ds: xr.Dataset, selected: tuple[str, ...]) -> xr.Dataset:

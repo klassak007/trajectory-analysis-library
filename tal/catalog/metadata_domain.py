@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from tal.core.orchestration.lazy import is_chunked_dataarray
@@ -12,7 +13,7 @@ from .backends import datatree_children
 from .options import CatalogMetadataPromotionOptions, CatalogQueryOptions
 from .query_plan import QueryFieldIndex
 from .query_types import FieldRef
-from .types import CatalogState
+from .types import CatalogState, make_catalog_state
 
 _MISSING = object()
 
@@ -65,6 +66,7 @@ def collect_extract_metadata_columns(
     *,
     owner: str,
     options: CatalogQueryOptions,
+    excluded_coord_names: frozenset[str] = frozenset(),
 ) -> dict[str, np.ndarray]:
     if state.backend != "datatree":
         return {}
@@ -79,6 +81,8 @@ def collect_extract_metadata_columns(
         )
         _add_named_metadata(namespaced, name=name, values=arr, owner=owner)
     for name in sorted(index.coord):
+        if name in excluded_coord_names:
+            continue
         arr = _project_one_field(
             state,
             field=FieldRef(namespace="coord", name=name),
@@ -87,6 +91,78 @@ def collect_extract_metadata_columns(
         )
         _add_named_metadata(namespaced, name=name, values=arr, owner=owner)
     return namespaced
+
+
+def apply_extract_metadata_promotion(
+    ds: xr.Dataset,
+    *,
+    state: CatalogState,
+    options: CatalogMetadataPromotionOptions,
+    represented_coord_names: frozenset[str],
+    protected_coord_names: frozenset[str],
+    metadata_template: xr.Dataset | None = None,
+    owner: str,
+) -> xr.Dataset:
+    protected = protected_coord_names.intersection(ds.coords)
+    represented = represented_coord_names.intersection(ds.coords).difference(protected)
+    preserve = _preserve_structural_metadata_coords(options)
+    promotion_source = ds if preserve else ds.drop_vars(sorted(represented))
+    if _metadata_promotion_is_disabled(options):
+        return promotion_source
+    projection_state = _extract_metadata_projection_state(
+        state,
+        template=metadata_template,
+    )
+    metadata = collect_extract_metadata_columns(
+        projection_state,
+        owner=owner,
+        options=CatalogQueryOptions(
+            metadata_eager_policy="forbid" if preserve else "allow",
+        ),
+        excluded_coord_names=protected.union(represented if preserve else frozenset()),
+    )
+    return promote_extract_metadata(
+        promotion_source,
+        batch_dim=state.batch_dim,
+        metadata=metadata,
+        options=options,
+        owner=owner,
+    )
+
+
+def _extract_metadata_projection_state(
+    state: CatalogState,
+    *,
+    template: xr.Dataset | None,
+) -> CatalogState:
+    if template is None or state.backend != "datatree":
+        return state
+    tree = _require_datatree_payload(state.data)
+    metadata_template = template.drop_vars(list(template.data_vars))
+    metadata_tree = xr.DataTree.from_dict(
+        {
+            "/": tree.to_dataset(inherit=False),
+            "/__template__": metadata_template,
+        }
+    )
+    return make_catalog_state(
+        backend="datatree",
+        batch_dim=state.batch_dim,
+        data=metadata_tree,
+        template=template,
+    )
+
+
+def _preserve_structural_metadata_coords(
+    options: CatalogMetadataPromotionOptions,
+) -> bool:
+    return options.scalar_target == "batch_coord" and options.nonscalar_target == "none"
+
+
+def _metadata_promotion_is_disabled(
+    options: CatalogMetadataPromotionOptions,
+) -> bool:
+    return options.scalar_target == "none" and options.nonscalar_target == "none"
 
 
 def promote_extract_metadata(
@@ -272,7 +348,7 @@ def _datatree_attrs_values(tree: xr.DataTree, *, labels: tuple[str, ...], name: 
             out.append(_python_scalar(root))
         else:
             out.append(None)
-    return np.asarray(out, dtype=object)
+    return _object_vector(out)
 
 
 def _datatree_scalar_coord_values(
@@ -299,7 +375,7 @@ def _datatree_scalar_coord_values(
             out.append(root_value)
         else:
             out.append(None)
-    return np.asarray(out, dtype=object)
+    return _object_vector(out)
 
 
 def _require_coord(ds: xr.Dataset, *, name: str, dims: tuple[str, ...], owner: str) -> xr.DataArray:
@@ -402,12 +478,67 @@ def _column_scalar(values: np.ndarray) -> object:
 
 
 def _equal_or_nan(left: object, right: object) -> bool:
+    if _is_missing_scalar(left) and _is_missing_scalar(right):
+        return True
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        return _mappings_equal(left, right)
+    if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+        return _arrays_equal(left, right)
+    if _is_nested_sequence(left) or _is_nested_sequence(right):
+        return _sequences_equal(left, right)
     try:
-        if bool(np.isnan(left)) and bool(np.isnan(right)):  # type: ignore[arg-type]
-            return True
+        equal = left == right
     except Exception:
-        pass
-    return left == right
+        return False
+    return isinstance(equal, (bool, np.bool_)) and bool(equal)
+# Mapping equality must recurse because values may be arrays or missing scalars.
+def _mappings_equal(left: object, right: object) -> bool:
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return False
+    if left.keys() != right.keys():
+        return False
+    return all(_equal_or_nan(left[key], right[key]) for key in left)
+# Object arrays need elementwise recursion instead of ambiguous vector truth.
+def _arrays_equal(left: object, right: object) -> bool:
+    try:
+        left_array = np.asarray(left)
+        right_array = np.asarray(right)
+    except Exception:
+        return False
+    if left_array.shape != right_array.shape:
+        return False
+    if left_array.dtype.hasobject or right_array.dtype.hasobject:
+        pairs = zip(left_array.flat, right_array.flat, strict=True)
+        return all(_equal_or_nan(a, b) for a, b in pairs)
+    try:
+        return bool(np.array_equal(left_array, right_array, equal_nan=True))
+    except TypeError:
+        return bool(np.array_equal(left_array, right_array))
+
+
+def _is_nested_sequence(value: object) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
+def _sequences_equal(left: object, right: object) -> bool:
+    if not _is_nested_sequence(left) or not _is_nested_sequence(right):
+        return False
+    left_items = tuple(left)  # type: ignore[arg-type]
+    right_items = tuple(right)  # type: ignore[arg-type]
+    if len(left_items) != len(right_items):
+        return False
+    return all(
+        _equal_or_nan(a, b)
+        for a, b in zip(left_items, right_items, strict=True)
+    )
+
+
+def _is_missing_scalar(value: object) -> bool:
+    try:
+        missing = pd.isna(value)
+    except Exception:
+        return False
+    return isinstance(missing, (bool, np.bool_)) and bool(missing)
 
 
 def _promote_scalar_column(
@@ -429,8 +560,17 @@ def _promote_scalar_column(
         out.attrs = attrs
         return out
     _require_promotion_name_available(ds, name=name, target="batch_coord", owner=owner)
-    values = np.full((ds.sizes[batch_dim],), _python_scalar(scalar), dtype=object)
+    values = _object_vector(
+        [_python_scalar(scalar)] * ds.sizes[batch_dim]
+    )
     return ds.assign_coords({name: xr.DataArray(values, dims=(batch_dim,))})
+
+
+def _object_vector(values: Sequence[object]) -> np.ndarray:
+    out = np.empty((len(values),), dtype=object)
+    for index, value in enumerate(values):
+        out[index] = value
+    return out
 
 
 def _require_promotion_name_available(ds: xr.Dataset, *, name: str, target: str, owner: str) -> None:
@@ -454,6 +594,7 @@ def _require_datatree_payload(payload: xr.Dataset | xr.DataTree) -> xr.DataTree:
 
 __all__ = [
     "MetadataProjection",
+    "apply_extract_metadata_promotion",
     "collect_extract_metadata_columns",
     "discover_metadata_fields",
     "project_metadata",

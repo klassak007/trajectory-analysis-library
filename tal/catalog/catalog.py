@@ -23,6 +23,7 @@ from .options import (
     coerce_catalog_query_options,
     coerce_extract_variables,
 )
+from .ownership import copy_catalog_payload_for_public_access
 from .query import run_catalog_query
 from .selection import (
     catalog_group_labels,
@@ -81,7 +82,15 @@ class Catalog:
             batch_dim=opts.batch_dim,
             owner="Catalog.__init__",
         )
-        template = datatree_extract_template(resolved_payload) if resolved_backend == "datatree" else None
+        template = (
+            datatree_extract_template(
+                resolved_payload,
+                batch_dim=resolved_batch_dim,
+                owner="Catalog.__init__",
+            )
+            if resolved_backend == "datatree"
+            else None
+        )
         self._state = make_catalog_state(
             backend=resolved_backend,
             batch_dim=resolved_batch_dim,
@@ -130,14 +139,18 @@ class Catalog:
 
     @property
     def data(self) -> xr.Dataset | xr.DataTree:
-        """Return a deep copy of the underlying browse payload.
+        """Return an independently owned copy of the browse payload.
 
         Returns
         -------
         xr.Dataset | xr.DataTree
-            Resolved property value.
+            Public payload copy. Object-bearing Dask arrays are isolated by
+            lazy tasks and are not computed by property access.
         """
-        return self._state.data.copy(deep=True)
+        return copy_catalog_payload_for_public_access(
+            self._state.data,
+            owner="Catalog.data",
+        )
 
     def sel(self, selector: object) -> Catalog:
         """Select catalog groups by batch labels.

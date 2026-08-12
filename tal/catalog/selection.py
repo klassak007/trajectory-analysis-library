@@ -7,7 +7,11 @@ import xarray as xr
 
 from tal.core.group_ops.label_keys import canonical_group_label_key
 
-from .backends import datatree_children
+from .backends import (
+    datatree_children,
+    datatree_extract_template,
+    validate_datatree_root_batch_alignment,
+)
 from .types import CatalogBackend, CatalogState, make_catalog_state
 
 
@@ -48,12 +52,22 @@ def select_by_labels(state: CatalogState, labels: tuple[object, ...], *, owner: 
             template=state.template,
         )
     tree = state.data if isinstance(state.data, xr.DataTree) else _invalid_datatree_payload(state.data)
-    selected_tree = _datatree_select_labels(tree, labels=labels, owner=owner)
+    selected_tree = _datatree_select_labels(
+        tree,
+        labels=labels,
+        batch_dim=state.batch_dim,
+        owner=owner,
+    )
     return make_catalog_state(
         backend="datatree",
         batch_dim=state.batch_dim,
         data=selected_tree,
-        template=state.template,
+        template=_selected_datatree_template(
+            selected_tree,
+            batch_dim=state.batch_dim,
+            fallback=state.template,
+            owner=owner,
+        ),
     )
 
 
@@ -83,13 +97,24 @@ def select_by_positions(
             template=state.template,
         )
     tree = state.data if isinstance(state.data, xr.DataTree) else _invalid_datatree_payload(state.data)
-    labels = _datatree_position_labels(tree, selector=normalized)
-    selected_tree = _datatree_select_labels(tree, labels=labels, owner=owner)
+    labels, positions = _datatree_position_plan(tree, selector=normalized)
+    selected_tree = _datatree_select_labels(
+        tree,
+        labels=labels,
+        batch_dim=state.batch_dim,
+        owner=owner,
+        positions=positions,
+    )
     return make_catalog_state(
         backend="datatree",
         batch_dim=state.batch_dim,
         data=selected_tree,
-        template=state.template,
+        template=_selected_datatree_template(
+            selected_tree,
+            batch_dim=state.batch_dim,
+            fallback=state.template,
+            owner=owner,
+        ),
     )
 
 
@@ -198,25 +223,110 @@ def _dataset_select_positions(
         raise IndexError(f"{owner}: positional selector {selector!r} is out of range.") from exc
 
 
-def _datatree_position_labels(
+def _datatree_position_plan(
     tree: xr.DataTree,
     *,
     selector: slice | tuple[int, ...],
-) -> tuple[object, ...]:
-    labels = tuple(datatree_children(tree).keys())
-    if isinstance(selector, slice):
-        return labels[selector]
-    return tuple(labels[idx] for idx in selector)
-
-
-def _datatree_select_labels(tree: xr.DataTree, *, labels: tuple[object, ...], owner: str) -> xr.DataTree:
+) -> tuple[tuple[str, ...], tuple[int, ...]]:
     children = datatree_children(tree)
-    selected: dict[str, xr.DataTree] = {}
+    positions = tuple(range(len(children))[selector]) if isinstance(selector, slice) else selector
+    return _datatree_labels_at_positions(children, positions=positions), positions
+
+
+def _datatree_select_labels(
+    tree: xr.DataTree,
+    *,
+    labels: tuple[object, ...],
+    batch_dim: str,
+    owner: str,
+    positions: tuple[int, ...] | None = None,
+) -> xr.DataTree:
+    children = datatree_children(tree)
+    selected_labels = _require_datatree_labels(children, labels=labels, owner=owner)
+    validate_datatree_root_batch_alignment(tree, batch_dim=batch_dim, owner=owner)
+    root = tree.to_dataset(inherit=False)
+    if batch_dim in root.dims and positions is None:
+        positions = _datatree_label_positions(children, labels=selected_labels)
+    root = _project_datatree_root_dataset(
+        root,
+        positions=positions or (),
+        batch_dim=batch_dim,
+    )
+    selected: dict[str, xr.DataTree] = {
+        label: xr.DataTree(dataset=children[label].to_dataset(inherit=False).copy(deep=True))
+        for label in selected_labels
+    }
+    return xr.DataTree(dataset=root, children=selected, name=tree.name)
+
+
+def _require_datatree_labels(
+    children: Mapping[str, xr.DataTree],
+    *,
+    labels: tuple[object, ...],
+    owner: str,
+) -> tuple[str, ...]:
+    selected: list[str] = []
     for label in labels:
         if not isinstance(label, str) or label not in children:
             raise KeyError(f"{owner}: unknown group label {label!r}.")
-        selected[label] = children[label].copy(deep=True)
-    return xr.DataTree(dataset=tree.ds.copy(deep=True), children=selected)
+        selected.append(label)
+    return tuple(selected)
+
+
+def _datatree_label_positions(
+    children: Mapping[str, xr.DataTree],
+    *,
+    labels: tuple[str, ...],
+) -> tuple[int, ...]:
+    if not labels:
+        return ()
+    wanted = set(labels)
+    positions: dict[str, int] = {}
+    for index, label in enumerate(children):
+        if label in wanted:
+            positions[label] = index
+        if len(positions) == len(wanted):
+            break
+    return tuple(positions[label] for label in labels)
+
+
+def _datatree_labels_at_positions(
+    children: Mapping[str, xr.DataTree],
+    *,
+    positions: tuple[int, ...],
+) -> tuple[str, ...]:
+    if not positions:
+        return ()
+    wanted = set(positions)
+    labels: dict[int, str] = {}
+    for index, label in enumerate(children):
+        if index in wanted:
+            labels[index] = label
+        if len(labels) == len(wanted):
+            break
+    return tuple(labels[index] for index in positions)
+
+
+def _project_datatree_root_dataset(
+    root: xr.Dataset,
+    *,
+    positions: tuple[int, ...],
+    batch_dim: str,
+) -> xr.Dataset:
+    if batch_dim not in root.dims:
+        return root.copy(deep=True)
+    return root.isel({batch_dim: list(positions)}).copy(deep=True)
+
+
+def _selected_datatree_template(
+    tree: xr.DataTree,
+    *,
+    batch_dim: str,
+    fallback: xr.Dataset | None,
+    owner: str,
+) -> xr.Dataset | None:
+    selected = datatree_extract_template(tree, batch_dim=batch_dim, owner=owner)
+    return fallback if selected is None else selected
 
 
 def _invalid_dataset_payload(payload: xr.Dataset | xr.DataTree) -> xr.Dataset:

@@ -145,7 +145,7 @@ def validate_batch_dim_role_compatibility(
 
 def _first_child_dim_collision(tree: xr.DataTree, *, dim: str) -> str | None:
     for name, child in tree.children.items():
-        if dim in child.ds.dims:
+        if dim in child.to_dataset(inherit=False).dims:
             return str(name)
     return None
 
@@ -170,18 +170,117 @@ def datatree_children(tree: xr.DataTree) -> Mapping[str, xr.DataTree]:
     return tree.children
 
 
-def datatree_extract_template(tree: xr.DataTree) -> xr.Dataset | None:
+def validate_datatree_root_batch_alignment(
+    tree: xr.DataTree,
+    *,
+    batch_dim: str,
+    owner: str,
+) -> None:
+    root = tree.to_dataset(inherit=False)
+    if batch_dim not in root.dims:
+        return
+    size = int(root.sizes[batch_dim])
+    group_count = len(datatree_children(tree))
+    if size != group_count:
+        raise ValueError(
+            f"{owner}: root batch dimension {batch_dim!r} length {size} "
+            f"does not match DataTree group count {group_count}."
+        )
+
+
+def datatree_child_payload_dataset(
+    child: xr.DataTree,
+    *,
+    batch_dim: str,
+    batch_position: int,
+) -> xr.Dataset:
+    local = child.to_dataset(inherit=False)
+    parent = child.parent
+    if parent is None:
+        return local
+    parent_ds = parent.to_dataset(inherit=False)
+    payload_dims = set(local.dims)
+    inherited_payload_coords: dict[str, xr.Variable] = {}
+    for name, coord in parent_ds.coords.items():
+        if name in local.variables:
+            continue
+        resolved = _root_payload_coord(
+            coord,
+            payload_dims=payload_dims,
+            batch_dim=batch_dim,
+            batch_position=batch_position,
+        )
+        if resolved is not None:
+            inherited_payload_coords[name] = resolved.variable
+    if not inherited_payload_coords:
+        return local
+    indexes = _inherited_payload_indexes(
+        parent_ds,
+        coord_names=frozenset(inherited_payload_coords),
+        batch_dim=batch_dim,
+    )
+    coords = xr.Coordinates(inherited_payload_coords, indexes=indexes)
+    return local.assign_coords(coords)
+
+
+def _inherited_payload_indexes(
+    parent: xr.Dataset,
+    *,
+    coord_names: frozenset[str],
+    batch_dim: str,
+) -> dict[object, xr.Index]:
+    indexes: dict[object, xr.Index] = {}
+    for index, variables in parent.xindexes.group_by_index():
+        names = frozenset(variables)
+        if not names or not names.issubset(coord_names):
+            continue
+        if any(batch_dim in variable.dims for variable in variables.values()):
+            continue
+        indexes.update(dict.fromkeys(names, index))
+    return indexes
+
+
+def _root_payload_coord(
+    coord: xr.DataArray,
+    *,
+    payload_dims: set[str],
+    batch_dim: str,
+    batch_position: int,
+) -> xr.DataArray | None:
+    if coord.dims and set(coord.dims).issubset(payload_dims):
+        return coord
+    if batch_dim not in coord.dims:
+        return None
+    row_dims = tuple(dim for dim in coord.dims if dim != batch_dim)
+    if not row_dims or not set(row_dims).issubset(payload_dims):
+        return None
+    return coord.isel({batch_dim: batch_position}, drop=True)
+
+
+def datatree_extract_template(
+    tree: xr.DataTree,
+    *,
+    batch_dim: str,
+    owner: str,
+) -> xr.Dataset | None:
+    validate_datatree_root_batch_alignment(tree, batch_dim=batch_dim, owner=owner)
     children = datatree_children(tree)
     if not children:
         return None
     first = next(iter(children.values()))
-    return first.ds.copy(deep=True)
+    return datatree_child_payload_dataset(
+        first,
+        batch_dim=batch_dim,
+        batch_position=0,
+    ).copy(deep=False)
 
 
 __all__ = [
+    "datatree_child_payload_dataset",
     "datatree_children",
     "datatree_extract_template",
     "detect_catalog_backend",
     "normalize_catalog_payload",
     "resolve_catalog_batch_dim",
+    "validate_datatree_root_batch_alignment",
 ]
