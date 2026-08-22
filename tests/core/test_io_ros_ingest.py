@@ -5,9 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tal.catalog import Catalog
-from tal.core import AnalysisObject
-from tal.io import RosIngestOptions, read_ros_logs, read_ros_logs_catalog
+from tal.io import RosIngestOptions, read_ros_logs
 from tal.io import ros_logs as ros_logs_module
 
 
@@ -156,29 +154,3 @@ def test_io_hard_p10b_003_ingest_no_valid_rows_or_messages_fails_closed(
             [str(path)],
             opts=RosIngestOptions(topic="/pose", timestamp_source="header", invalid_time="drop"),
         )
-
-
-def test_io_core_p10b_004_ros_adapter_supports_optional_catalog_bridge_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ROS adapter bridge path remains available alongside AO-direct output."""
-    path = tmp_path / "bridge.bag"
-    path.write_text("stub", encoding="utf-8")
-
-    def _single_valid(_path: str, *, owner: str):
-        _ = owner
-        return [
-            ros_logs_module._RosMessage(
-                topic="/pose",
-                msgtype="geometry_msgs/msg/PoseStamped",
-                msg=_pose_stamped(5, 0),
-                receive_ns=5_000_000_000,
-            )
-        ]
-
-    monkeypatch.setattr(ros_logs_module, "_iter_ros_messages", _single_valid)
-    ao = read_ros_logs([str(path)], opts=RosIngestOptions(topic="/pose"))
-    catalog = read_ros_logs_catalog([str(path)], opts=RosIngestOptions(topic="/pose"))
-    assert isinstance(ao, AnalysisObject)
-    assert isinstance(catalog, Catalog)

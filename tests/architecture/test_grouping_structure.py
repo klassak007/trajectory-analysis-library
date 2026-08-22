@@ -97,8 +97,6 @@ def test_group_hard_p9a_003_grouping_foundation_remains_datatree_agnostic_in_cor
     for path in sorted(Path("tal/core/group_ops").glob("*.py")):
         text = path.read_text(encoding="utf-8")
         assert "DataTree" not in text
-        assert "tal.catalog" not in text
-        assert "catalog" not in text
 
 
 def test_grouping_owner_budget_and_schema_write_boundary() -> None:

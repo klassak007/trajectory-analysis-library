@@ -9,8 +9,7 @@ TAL provides two I/O layers:
 - AO-direct persistence for existing `AnalysisObject` instances.
 - Log-oriented adapters for ingesting CSV or ROS-style recordings.
 
-AO-direct persistence is the canonical round-trip path. Catalog bridge helpers
-are optional convenience.
+AO-direct persistence is the canonical round-trip path.
 
 ```{contents}
 :local:
@@ -41,16 +40,13 @@ reconstruction proceeds.
 ## Log Readers and Writers
 
 ```python
-from tal.io import read_csv_logs, read_csv_logs_catalog, read_ros_logs, read_ros_logs_catalog
+from tal.io import read_csv_logs, read_ros_logs, write_csv_logs
 ```
 
-CSV and ROS readers ingest external logs into TAL objects or catalog views. CSV
-export is available through `write_csv_logs(...)` when grouped AOs should be
-written back to per-run tabular files.
-
-`read_csv_logs_catalog(...)` and `read_ros_logs_catalog(...)` are convenience
-constructors over the same adapter inputs. ROS readers use message timestamps
-when available before falling back to receive/log time.
+CSV and ROS readers ingest external logs directly into TAL objects. CSV export
+is available through `write_csv_logs(...)` when grouped AOs should be written
+back to per-run tabular files. ROS readers use message timestamps when
+available before falling back to receive/log time.
 
 ## Deterministic Input Policy
 
@@ -100,13 +96,10 @@ match available numeric columns.
    tal.io.CsvExportOptions
    tal.io.RosIngestOptions
    tal.io.read_csv_logs
-   tal.io.read_csv_logs_catalog
    tal.io.write_csv_logs
    tal.io.read_ros_logs
-   tal.io.read_ros_logs_catalog
 ```
 
 ## See Also
 
 - {doc}`analysis-object`
-- {doc}`catalog`

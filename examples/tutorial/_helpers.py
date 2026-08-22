@@ -4,7 +4,7 @@ This file contains boilerplate NumPy/xarray data generation used to keep the
 release notebooks focused on TAL APIs and semantics.
 
 In real workflows, you would typically load data from CSV, ROS bag/MCAP, or a
-database using TAL I/O surfaces (`tal.io` / catalog ingestion).
+database using TAL I/O surfaces (`tal.io`).
 """
 
 from __future__ import annotations

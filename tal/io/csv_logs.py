@@ -332,58 +332,6 @@ def read_csv_logs(
     )
 
 
-def read_csv_logs_catalog(
-    inputs: str | Sequence[str] | Mapping[str, str],
-    *,
-    opts: CsvIngestOptions | None = None,
-    validate: bool = True,
-):
-    """Load CSV logs and expose them through the browse-only ``Catalog`` API.
-
-    Parameters
-    ----------
-    inputs : str | Sequence[str] | Mapping[str, str]
-        Input paths/mapping consumed by ingestion.
-    opts : tal.io.CsvIngestOptions or None
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``CsvIngestOptions`` key fields: ``time_col`` (default None), ``allow_time_infer`` (default False), ``sort_time`` (default True), ``monotonic_order`` (default 'nondecreasing').
-    validate : bool
-        When ``True``, validate output schema/layout invariants before returning.
-
-    Returns
-    -------
-    object
-        Operation result preserving TAL semantic/topology guarantees.
-
-    Raises
-    ------
-    TypeError
-        If option payload types are invalid for this API.
-    ValueError
-        If option values violate fail-closed semantic/layout constraints.
-
-    Notes
-    -----
-    Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
-
-    Examples
-    --------
-    >>> import tempfile
-    >>> from pathlib import Path
-    >>> from tal.io import CsvIngestOptions, read_csv_logs_catalog
-    >>> with tempfile.TemporaryDirectory() as tmpdir:
-    ...     path = Path(tmpdir) / "run.csv"
-    ...     _ = path.write_text("time,value\\n0.0,1.0\\n1.0,2.0\\n", encoding="utf-8")
-    ...     catalog = read_csv_logs_catalog(str(path), opts=CsvIngestOptions(time_col="time"))
-    >>> catalog.group_labels
-    ('run',)
-    """
-    from tal.catalog import Catalog
-
-    ao = read_csv_logs(inputs, opts=opts, validate=validate)
-    options = coerce_csv_ingest_options(opts, owner="tal.io.read_csv_logs_catalog")
-    return Catalog(ao, backend="dataset", batch_dim=options.batch_dim)
-
-
 def _raw_label_key(label: object) -> tuple[str, object]:
     try:
         if bool(np.isnan(label)):  # type: ignore[arg-type]
@@ -631,4 +579,4 @@ def write_csv_logs(
     return tuple(paths)
 
 
-__all__ = ["read_csv_logs", "read_csv_logs_catalog", "write_csv_logs"]
+__all__ = ["read_csv_logs", "write_csv_logs"]

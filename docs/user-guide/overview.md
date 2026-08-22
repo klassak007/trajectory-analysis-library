@@ -174,7 +174,6 @@ This overview names the main surfaces without duplicating their full guides.
 | Group runs or bins | `ao.group.groupby(...)`, `ao.group.groupby_bins(...)`, grouped reducers | {doc}`../api/analysis-object` |
 | Manage named components | `ao.components.define(...)`, `registry(...)`, `extract(...)`, `patch(...)`, `compose(...)` | {doc}`../api/components` |
 | Persist and ingest data | `ao.io.to_zarr(...)`, `AnalysisObject.from_zarr(...)`, CSV and log readers | {doc}`../api/io` |
-| Browse collections | `tal.catalog.Catalog` | {doc}`../api/catalog` |
 | Visualize trajectories | `ao.viz.line(...)`, `ao.viz.scatter(...)`, `ao.viz.explorer(...)` | {doc}`viewing`, {doc}`../api/viz` |
 
 ## Dimension Roles In Practice
@@ -258,7 +257,6 @@ Good TAL code is explicit about those answers.
 | ragged sequence | A set of sequences with unequal valid lengths. |
 | frame | Coordinate frame such as `world`, `map`, `odom`, `base_link`, or `camera`. |
 | representation | Storage form such as quaternion, rotation matrix, component pose, or matrix pose. |
-| catalog | Browse/query/extract layer for collections of grouped data. |
 
 TAL is useful when data is more than an anonymous array: dimensions have roles,
 trajectories need alignment, samples live on a parameter grid, vectors and

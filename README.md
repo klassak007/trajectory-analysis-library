@@ -126,7 +126,7 @@ In this example:
 | Frame semantics | parent/child frame relationships and expressed-in frames |
 | Events/windows | threshold crossings, intervals, boundary samples, and around-event windows |
 | Grouping/reductions | summaries across runs, scenarios, laps, agents, or segments |
-| I/O/catalogs | persistence and browse/query/extract workflows for trajectory collections |
+| I/O | AO persistence plus CSV and ROS log ingestion |
 | Visualization | inspection of trajectories, components, events, and grouped results |
 
 ## Where TAL Shines
@@ -196,7 +196,6 @@ The `examples/tutorial/` notebooks form the recommended learning path. The serie
 | [09](examples/tutorial/09_kinematics_velocity_acceleration.ipynb) | Kinematics, velocity, and acceleration |
 | [10](examples/tutorial/10_frames_and_topology.ipynb) | Frames and topology |
 | [11](examples/tutorial/11_framegraph_and_spatial_types.ipynb) | Frame graphs and spatial types |
-| [12](examples/tutorial/12_catalog_and_io.ipynb) | Catalogs and I/O |
 | [13](examples/tutorial/13_visualization_holoviews_explorer.ipynb) | Visualization with HoloViews |
 | [14](examples/tutorial/14_capstone_autonomous_landing.ipynb) | Capstone: autonomous landing |
 
@@ -211,8 +210,8 @@ New users should start with notebooks 01-04, then jump to the domain-specific no
 | NumPy / SciPy | Numerical arrays, scientific computing, interpolation, optimization, and linear algebra. | TAL preserves trajectory meaning around numerical computations: batch axes, sequence axes, core payload dimensions, param coordinates, and frame metadata. |
 | pytransform3d | Transparent 3D transform utilities, representation conversions, transform graphs, and visualization/debugging. | TAL combines spatial transforms with trajectory and batch semantics, so spatial quantities can live inside ordered, labeled `AnalysisObject` data. |
 | SpatialMath for Python | Robotics spatial-math classes such as SO(3), SE(3), quaternions, poses, and twists. | TAL focuses on analyzing collections of spatial quantities over ordered samples, runs, scenarios, and parameter grids. |
-| rigid-body-motion | Estimating and transforming rigid-body motion across coordinate systems and reference frames, with xarray support and ROS `tf2`-style frame handling. | TAL overlaps most closely here, but has a broader semantic trajectory-analysis model: explicit batch/sequence/core roles, param-coordinate alignment, ragged trajectories, events/windows, catalogs, and a general `AnalysisObject` abstraction beyond rigid-body motion alone. |
-| Vaex | Lazy, out-of-core DataFrames for large tabular datasets. | TAL focuses on structured trajectory-shaped arrays rather than flat tables; Vaex is more relevant as inspiration for large log browsing or catalog-scale preprocessing. |
+| rigid-body-motion | Estimating and transforming rigid-body motion across coordinate systems and reference frames, with xarray support and ROS `tf2`-style frame handling. | TAL overlaps most closely here, but has a broader semantic trajectory-analysis model: explicit batch/sequence/core roles, param-coordinate alignment, ragged trajectories, events/windows, and a general `AnalysisObject` abstraction beyond rigid-body motion alone. |
+| Vaex | Lazy, out-of-core DataFrames for large tabular datasets. | TAL focuses on structured trajectory-shaped arrays rather than flat tables; Vaex is more relevant as inspiration for large log browsing or preprocessing. |
 | GTSAM | Factor graphs, SLAM, smoothing, and estimation. | GTSAM solves estimation problems; TAL is for representing, inspecting, comparing, transforming, and visualizing trajectories before or after estimation. |
 
 TAL is especially close in spirit to `rigid-body-motion`: both care about frame-aware motion data and both recognize the value of xarray-style labeled arrays. TAL's differentiator is that it treats trajectory structure itself as the central abstraction. In TAL, rigid-body motion is one important use case within a broader model for ordered, batched, structured, and optionally frame-aware analysis data.
@@ -332,7 +331,6 @@ Experimental:
 - advanced frame graph workflows
 - ROS/log ingestion
 - visualization explorer
-- catalog extraction APIs
 - public packaging and release process
 
 ## Design Principles
@@ -365,7 +363,7 @@ python -m sphinx -b html docs docs/_build/html
 - stabilize the v0.1 public API
 - improve docs and executable examples
 - harden spatial and frame semantics
-- expand I/O examples and catalog workflows
+- expand I/O examples and log-ingestion workflows
 - improve Dask, Zarr, and lazy-array workflows
 - expand robotics and aerospace examples
 - add benchmark datasets or representative example logs

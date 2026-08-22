@@ -107,7 +107,6 @@ nitpick_ignore_regex = [
     ("py:class", r"'Frame'"),
     ("py:class", r"\{\"quat\""),
     ("py:class", r"\"matrix\"\}"),
-    ("py:class", r"CatalogBackendOption"),
     ("py:class", r"callable"),
     ("py:class", r"default=True"),
     ("py:class", r"DimLike"),

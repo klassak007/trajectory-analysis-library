@@ -10,7 +10,6 @@ from unittest.mock import patch
 import numpy as np
 import xarray as xr
 
-from tal.catalog import Catalog
 from tal.astro import AstroBackend, AstroIERSOptions, AstroOptions, AstroTimeOptions, TopocentricDirection
 from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject, GroupByOptions, SequenceConcatOptions, concat_sequence
@@ -1210,7 +1209,7 @@ def example_io_roundtrip_surface() -> None:
         AOZarrWriteOptions,
         CsvExportOptions,
         CsvIngestOptions,
-        read_csv_logs_catalog,
+        read_csv_logs,
         write_csv_logs,
     )
 
@@ -1235,47 +1234,22 @@ def example_io_roundtrip_surface() -> None:
         exported = write_csv_logs(ao, str(root / "logs"), opts=CsvExportOptions(float_format="%.1f"))
         log_path = root / "run.csv"
         log_path.write_text("time,value\n0.0,1.0\n1.0,2.0\n", encoding="utf-8")
-        catalog = read_csv_logs_catalog(str(log_path), opts=CsvIngestOptions(time_col="time"))
+        ingested = read_csv_logs(str(log_path), opts=CsvIngestOptions(time_col="time"))
     assert loaded_csv.unsafe_data["value"].sizes["sample"] == 2
     assert loaded_zarr.unsafe_data["value"].sizes["sample"] == 2
     assert len(exported) == 1
-    assert catalog.group_labels == ("run",)
+    assert ingested.unsafe_data.coords["trial"].values.tolist() == ["run"]
 
 
 def example_io_ros_optional_surface() -> None:
-    from tal.io import RosIngestOptions, read_ros_logs, read_ros_logs_catalog
+    from tal.io import RosIngestOptions, read_ros_logs
 
     opts = RosIngestOptions(topic="/robot/pose", message_type="geometry_msgs/msg/PoseStamped")
     try:
         ao = read_ros_logs("robot_run.mcap", opts=opts)
     except (ImportError, ValueError, FileNotFoundError):
         ao = None
-    try:
-        catalog = read_ros_logs_catalog("robot_run.mcap", opts=opts)
-    except (ImportError, ValueError, FileNotFoundError):
-        catalog = None
     assert ao is None or "translation_x" in ao.unsafe_data.data_vars
-    assert catalog is None or catalog.backend == "dataset"
-
-
-def example_catalog_extract() -> None:
-    from tal.catalog.options import CatalogExtractOptions, CatalogQueryOptions
-
-    ao = AnalysisObject.from_data(
-        xr.Dataset(
-            {"value": (("run", "sample"), np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=float))},
-            coords={"run": ["a", "b"], "sample": [0, 1], "kind": ("run", ["sim", "robot"])},
-        ),
-        sequence_dim="sample",
-        batch_dims=("run",),
-        core_dims=(),
-        validate=True,
-    )
-    catalog = Catalog(ao, backend="dataset", batch_dim="run")
-    assert catalog.group_labels == ("a", "b")
-    assert catalog.query(kind="sim", opts=CatalogQueryOptions()).group_labels == ("a",)
-    extracted = catalog.extract("value", opts=CatalogExtractOptions())
-    assert extracted.unsafe_data["value"].sizes["run"] == 2
 
 
 def example_frames_find_path() -> None:
@@ -1471,22 +1445,6 @@ def example_linalg_layout_surface() -> None:
     assert concatenated.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).unsafe_data["v"].sel(axis="y").item() == 9.0
 
 
-def example_catalog_query() -> None:
-    ao = _make_signal_ao()
-    catalog = Catalog(ao, backend="dataset", batch_dim="trial")
-    out = catalog.query(outcome="intercept")
-    assert out.group_labels == ("trial_0",)
-
-
-def example_catalog_selectors() -> None:
-    ao = _make_signal_ao()
-    catalog = Catalog(ao, backend="dataset", batch_dim="trial")
-    assert catalog.sel("trial_0").group_labels == ("trial_0",)
-    assert catalog.isel(0).group_labels == ("trial_0",)
-    assert catalog.head(1).group_labels == ("trial_0",)
-    assert catalog.tail(1).group_labels == ("trial_1",)
-
-
 def example_utils_frame_bind() -> None:
     ao = AnalysisObject.from_data(
         xr.Dataset({"value": ("sample", np.asarray([1.0], dtype=float))}, coords={"sample": [0]}),
@@ -1667,9 +1625,6 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "FRAMES-API-SURFACE": example_frames_api_surface,
     "VIZ-LINE": example_viz_line,
     "VIZ-SURFACE-ACCESSORS": example_viz_surface_accessors,
-    "CATALOG-QUERY": example_catalog_query,
-    "CATALOG-SELECTORS": example_catalog_selectors,
-    "CATALOG-EXTRACT": example_catalog_extract,
     "UTILS-FRAME-BIND": example_utils_frame_bind,
     "UTILS-FRAMES-ACCESSOR": example_utils_frames_accessor,
     "UTILS-FRAME-SCHEMA-GET": example_utils_frame_schema_get,

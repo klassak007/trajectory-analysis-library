@@ -18,8 +18,8 @@ def _ao() -> AnalysisObject:
     return AnalysisObject.from_data(ds, sequence_dim="sample")
 
 
-def test_io_core_p10a_001_analysisobject_has_direct_io_surface_without_catalog_dependency() -> None:
-    """ID: IO_CORE_P10A_001_analysisobject_has_direct_io_surface_without_catalog_dependency."""
+def test_io_core_p10a_001_analysisobject_has_direct_io_surface() -> None:
+    """ID: IO_CORE_P10A_001_analysisobject_has_direct_io_surface."""
     assert hasattr(tal.AnalysisObject, "io")
     assert hasattr(tal.AnalysisObject, "from_zarr")
     assert hasattr(tal.AnalysisObject, "from_csv")

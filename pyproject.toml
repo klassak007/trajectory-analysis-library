@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tal"
 version = "0.1.0"
-description = "Xarray-native trajectory analysis with semantic roles, alignment, spatial frames, events, catalogs, and I/O."
+description = "Xarray-native trajectory analysis with semantic roles, alignment, spatial frames, events, and I/O."
 readme = "README.md"
 authors = [
     { name = "Kyle Lassak" },

@@ -6,13 +6,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tal.catalog import Catalog
-from tal.core import AnalysisObject
 from tal.io import (
     AdapterMetadataPromotionOptions,
     CsvIngestOptions,
     read_csv_logs,
-    read_csv_logs_catalog,
 )
 
 
@@ -244,15 +241,3 @@ def test_io_hard_p10b_009_adapter_metadata_key_tal_fails_closed_with_owner_prefi
     assert message.startswith("tal.io.read_csv_logs:")
     assert "reserved for schema namespace" in message
     assert "schema.not_mapping" not in message
-
-
-def test_io_core_p10b_004_adapters_support_ao_direct_and_catalog_bridge_paths(tmp_path: Path) -> None:
-    """ID: IO_CORE_P10B_004_adapters_support_ao_direct_and_catalog_bridge_paths."""
-    path = tmp_path / "bridge.csv"
-    _write_csv(path, [{"time": 0.0, "value": 1.0}])
-
-    ao = read_csv_logs([str(path)], opts=CsvIngestOptions(time_col="time"))
-    catalog = read_csv_logs_catalog([str(path)], opts=CsvIngestOptions(time_col="time"))
-
-    assert isinstance(ao, AnalysisObject)
-    assert isinstance(catalog, Catalog)

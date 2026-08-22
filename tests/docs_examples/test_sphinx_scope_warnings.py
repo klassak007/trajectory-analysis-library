@@ -16,7 +16,6 @@ _SCOPED_WARNING_TOKENS = (
     "tal.frames.topology.find_path",
     "tal.frames.snapshot.snapshot_from_seeds",
     "tal.viz.surface.line",
-    "tal.catalog.catalog.catalog.query",
     "tal.utils.frame_ops.frame_bind",
     "tal.utils.frame_schema.get_frames",
     "tal.utils.topology_operation_families.operation_intent_support_for_operation_family",

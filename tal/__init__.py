@@ -3,7 +3,6 @@ from . import io
 from . import spatial
 from . import geo
 from . import astro
-from . import catalog
 from . import viz
 from . import ufuncs
 from .core import AnalysisObject, SchemaError
@@ -23,7 +22,6 @@ __all__ = [
     "frames",
     "io",
     "viz",
-    "catalog",
     "set_roles",
     "get_frames",
     "set_frames",

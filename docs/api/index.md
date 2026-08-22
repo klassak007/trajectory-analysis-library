@@ -26,7 +26,6 @@ reducers
 schema
 ufuncs
 numba
-catalog
 astro
 frames
 io

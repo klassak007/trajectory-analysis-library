@@ -33,20 +33,6 @@ def test_arch_io_p10a_002_ao_direct_io_finalization_reuses_core_schema_owners() 
     assert "finalize_loaded_dataset(" in zarr_text
 
 
-def test_arch_io_p10a_003_no_catalog_import_dependency_required_for_ao_direct_io() -> None:
-    """ID: ARCH_IO_P10A_003_no_catalog_import_dependency_required_for_ao_direct_io."""
-    ao_direct_paths = (
-        Path("tal/io/csv_io.py"),
-        Path("tal/io/zarr_io.py"),
-        Path("tal/io/finalize.py"),
-        Path("tal/io/surface.py"),
-    )
-    for path in ao_direct_paths:
-        text = path.read_text(encoding="utf-8")
-        assert "tal.catalog" not in text
-        assert "Catalog" not in text
-
-
 def test_arch_io_p10a_004_analysisobject_io_surface_installation_is_wired_from_top_level_package_init() -> None:
     """ID: ARCH_IO_P10A_004_analysisobject_io_surface_installation_is_wired_from_top_level_package_init."""
     top_text = Path("tal/__init__.py").read_text(encoding="utf-8")
@@ -85,8 +71,8 @@ def test_io_hard_p10a_003_no_schema_bypass_writes_on_ao_direct_io_paths() -> Non
         assert not _has_direct_tal_schema_write(text)
 
 
-def test_io_doc_p10a_001_ao_direct_io_is_canonical_and_catalog_is_optional_documented() -> None:
-    """ID: IO_DOC_P10A_001_ao_direct_io_is_canonical_and_catalog_is_optional_documented."""
+def test_io_doc_p10a_001_ao_direct_io_is_canonical_documented() -> None:
+    """ID: IO_DOC_P10A_001_ao_direct_io_is_canonical_documented."""
     text = Path("docs/api/io.md").read_text(encoding="utf-8").lower()
     assert "ao-direct" in text
     assert "ao.io.to_zarr" in text
@@ -107,12 +93,11 @@ def test_io_doc_p10a_003_subclass_preserving_loader_and_sidecar_validation_seman
     assert "csv sidecar metadata" in text
 
 
-def test_io_doc_p10b_001_csv_ros_adapter_policies_and_bridge_behavior_documented() -> None:
-    """ID: IO_DOC_P10B_001_csv_ros_adapter_policies_and_bridge_behavior_documented."""
+def test_io_doc_p10b_001_csv_ros_adapter_policies_documented() -> None:
+    """ID: IO_DOC_P10B_001_csv_ros_adapter_policies_documented."""
     text = Path("docs/api/io.md").read_text(encoding="utf-8").lower()
     assert "read_csv_logs" in text
     assert "read_ros_logs" in text
-    assert "read_csv_logs_catalog" in text
     assert "timestamp" in text
 
 
@@ -166,18 +151,6 @@ def test_arch_io_p10b_002_adapters_reuse_core_schema_finalization_boundaries() -
     assert "finalize_loaded_dataset(" in adapter_finalize_text
     assert "finalize_adapter_dataset(" in csv_logs_text
     assert "finalize_adapter_dataset(" in ros_logs_text
-
-
-def test_arch_io_p10b_003_catalog_bridge_is_optional_and_not_a_required_adapter_dependency() -> None:
-    """ID: ARCH_IO_P10B_003_catalog_bridge_is_optional_and_not_a_required_adapter_dependency."""
-    csv_text = Path("tal/io/csv_logs.py").read_text(encoding="utf-8")
-    ros_text = Path("tal/io/ros_logs.py").read_text(encoding="utf-8")
-    assert "def read_csv_logs_catalog(" in csv_text
-    assert "def read_ros_logs_catalog(" in ros_text
-    assert "from tal.catalog import Catalog" in csv_text
-    assert "from tal.catalog import Catalog" in ros_text
-    assert "Catalog(" not in csv_text.split("def read_csv_logs_catalog(", maxsplit=1)[0]
-    assert "Catalog(" not in ros_text.split("def read_ros_logs_catalog(", maxsplit=1)[0]
 
 
 def test_arch_io_p10b_shared_path_and_label_policy_owners_are_centralized() -> None:

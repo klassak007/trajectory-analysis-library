@@ -21,7 +21,6 @@ USER_API_PAGES = (
     "frames.md",
     "io.md",
     "viz.md",
-    "catalog.md",
     "ufuncs.md",
     "numba.md",
     "types/index.md",
