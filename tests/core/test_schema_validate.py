@@ -1,10 +1,13 @@
+from collections.abc import Callable
 from copy import deepcopy
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
 from tal.core import SchemaError, merge_schema, set_roles, validate_schema
+from tal.core.schema_validate import validate_schema_structure
 
 
 def _ds_sample_axis() -> xr.Dataset:
@@ -27,6 +30,32 @@ def _valid_schema_payload() -> dict:
     }
 
 
+def _batched_validity_ds(size: object) -> xr.Dataset:
+    ds = xr.Dataset(
+        {"value": (("trial", "sample"), np.arange(6.0).reshape(2, 3))},
+        coords={
+            "trial": ["a", "b"],
+            "sample": [0, 1, 2],
+            "n_valid": ("trial", size),
+        },
+    )
+    ds.attrs["tal"] = {
+        "version": 1,
+        "core": {
+            "roles": {
+                "sequence_dim": "sample",
+                "batch_dims": ["trial"],
+                "core_dims": [],
+            },
+            "validity": {
+                "sequence_size_coord": "n_valid",
+                "layout": "left_packed",
+            },
+        },
+    }
+    return ds
+
+
 class _HostileKey:
     def __hash__(self) -> int:
         return 1
@@ -39,6 +68,18 @@ class _HostileKey:
 
     def __str__(self) -> str:
         raise RuntimeError("str exploded")
+
+
+class _MutableName(str):
+    notes: list[str]
+
+    def __new__(cls, value: str) -> "_MutableName":
+        name = super().__new__(cls, value)
+        name.notes = []
+        return name
+
+    def __str__(self) -> "_MutableName":
+        return self
 
 
 def _assert_schema_error(
@@ -375,6 +416,77 @@ def test_schema_validate_flow_016_hostile_ext_namespace_key_raises_schema_error(
     with pytest.raises(SchemaError) as err:
         validate_schema(ds)
     _assert_schema_error(err, code="schema.ext.namespace.invalid", path="tal.ext.<_HostileKey>")
+
+
+def test_schema_validate_flow_017_validity_values_precede_extension_envelope() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_017_validity_values_precede_extension_envelope."""
+    ds = _batched_validity_ds([2, 4])
+    ds.attrs["tal"]["ext"] = {1: {}}
+
+    with pytest.raises(SchemaError) as err:
+        validate_schema(ds)
+
+    _assert_schema_error(
+        err,
+        code="schema.validity.sequence_size_coord.values.invalid",
+        path="tal.core.validity.sequence_size_coord",
+    )
+
+
+@pytest.mark.parametrize("validator", [validate_schema_structure, validate_schema])
+def test_schema_validate_flow_018_categorical_validity_dtype_raises_schema_error(
+    validator: Callable[[xr.Dataset], object],
+) -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_018_categorical_validity_dtype_raises_schema_error."""
+    ds = _batched_validity_ds(pd.Categorical([2, 3]))
+
+    with pytest.raises(SchemaError) as err:
+        validator(ds)
+
+    _assert_schema_error(
+        err,
+        code="schema.validity.sequence_size_coord.values.invalid",
+        path="tal.core.validity.sequence_size_coord",
+    )
+
+
+@pytest.mark.parametrize("validator", [validate_schema_structure, validate_schema])
+def test_schema_validate_flow_019_categorical_param_dtype_raises_schema_error(
+    validator: Callable[[xr.Dataset], object],
+) -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_019_categorical_param_dtype_raises_schema_error."""
+    ds = _ds_sample_axis().assign_coords(
+        category_time=("sample", pd.Categorical([1, 2, 3, 4]))
+    )
+    schema = _valid_schema_payload()
+    schema["core"]["param_coord"] = {"name": "category_time"}
+    ds.attrs["tal"] = schema
+
+    with pytest.raises(SchemaError) as err:
+        validator(ds)
+
+    _assert_schema_error(
+        err,
+        code="schema.param_coord.dtype.invalid",
+        path="tal.core.param_coord.name",
+    )
+
+
+def test_schema_validate_flow_020_structure_projection_does_not_expose_schema_alias() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_020_structure_projection_does_not_expose_schema_alias."""
+    ds = _batched_validity_ds([2, 3])
+    original_name = _MutableName("n_valid")
+    ds.attrs["tal"]["core"]["validity"]["sequence_size_coord"] = original_name
+    before = deepcopy(ds.attrs["tal"])
+
+    size_name = validate_schema_structure(ds)
+
+    assert size_name == "n_valid"
+    assert type(size_name) is str
+    assert size_name is not original_name
+    assert not hasattr(size_name, "notes")
+    assert original_name.notes == []
+    assert ds.attrs["tal"] == before
 
 
 def test_nolegacy_001_legacy_role_keys_rejected() -> None:

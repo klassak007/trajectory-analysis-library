@@ -26,6 +26,24 @@ class SequenceSizeValueError(ValueError):
         super().__init__(detail)
 
 
+def sequence_size_dtype(size: xr.DataArray) -> np.dtype:
+    """Return a supported real count dtype without inspecting array values."""
+    raw_dtype = size.dtype
+    try:
+        dtype = np.dtype(raw_dtype)
+    except (TypeError, ValueError) as exc:
+        raise SequenceSizeValueError(
+            "unsupported_dtype",
+            f"dtype must be a real numeric count dtype; got {type(raw_dtype).__name__!r}",
+        ) from exc
+    if dtype.kind not in _REAL_COUNT_KINDS:
+        raise SequenceSizeValueError(
+            "unsupported_dtype",
+            f"dtype must be a real numeric count dtype; got {str(dtype)!r}",
+        )
+    return dtype
+
+
 def normalize_sequence_size_values(
     size: xr.DataArray,
     *,
@@ -37,12 +55,7 @@ def normalize_sequence_size_values(
     integer or floating dtypes, are finite and integer-valued, and lie within
     the closed interval from zero through ``sequence_len``.
     """
-    dtype = np.dtype(size.dtype)
-    if dtype.kind not in _REAL_COUNT_KINDS:
-        raise SequenceSizeValueError(
-            "unsupported_dtype",
-            f"dtype must be a real numeric count dtype; got {str(dtype)!r}",
-        )
+    dtype = sequence_size_dtype(size)
     if getattr(size.data, "chunks", None) is not None:
         raise SequenceSizeValueError(
             "chunked",
@@ -83,4 +96,5 @@ __all__ = [
     "SequenceSizeValueError",
     "normalize_sequence_size_values",
     "require_valid_sequence_size_values",
+    "sequence_size_dtype",
 ]

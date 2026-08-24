@@ -98,6 +98,21 @@ def check_validity_layout(validity: Mapping[str, Any]) -> None:
     )
 
 
+def check_validity_coord_dtype(ds: xr.Dataset, *, name: str, sequence_dim: str) -> None:
+    coord = ds.coords[name]
+    try:
+        validity_values.sequence_size_dtype(coord)
+    except validity_values.SequenceSizeValueError:
+        sequence_len = int(ds.sizes.get(sequence_dim, 0))
+        fail(
+            code="schema.validity.sequence_size_coord.values.invalid",
+            path="tal.core.validity.sequence_size_coord",
+            expected=f"finite integer values in [0, {sequence_len}]",
+            actual={"coord": name, "dtype": str(coord.dtype)},
+            hint="use a real numeric sequence_size_coord with finite integer values",
+        )
+
+
 def check_validity_coord_values(
     ds: xr.Dataset,
     *,
@@ -123,16 +138,16 @@ def check_validity_coord_values(
         )
 
 
-def phase_validity(
+def phase_validity_structure(
     ds: xr.Dataset,
     *,
     core: Mapping[str, Any],
     sequence_dim: str | None,
     batch_dims: list[str],
-) -> None:
+) -> str | None:
     validity = validity_block(core)
     if validity is None:
-        return
+        return None
     if sequence_dim is None:
         fail(
             code="schema.validity.sequence_dim.missing",
@@ -153,4 +168,5 @@ def phase_validity(
         )
     check_validity_coord_dims(ds, name, batch_dims)
     check_validity_layout(validity)
-    check_validity_coord_values(ds, name=name, sequence_dim=sequence_dim)
+    check_validity_coord_dtype(ds, name=name, sequence_dim=sequence_dim)
+    return name

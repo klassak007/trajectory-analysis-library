@@ -27,7 +27,9 @@ AnalysisObject.from_csv(...)
 
 Zarr is the richest AO round-trip format. It preserves schema roles,
 parameter-coordinate metadata, validity metadata, and ordinary xarray payload
-structure.
+structure. On read, TAL structurally validates persisted metadata before materializing
+only a declared sequence-size coordinate for validity-value validation.
+Chunked payload variables remain lazy.
 
 CSV is intentionally narrower. It is a flat single-object round trip for
 representable one-dimensional row payloads, with required TAL reconstruction

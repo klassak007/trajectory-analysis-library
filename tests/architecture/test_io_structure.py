@@ -64,6 +64,31 @@ def test_arch_io_p10a_006_finalize_source_subclass_constructor_path_avoids_broad
     assert "invalid persisted schema payload" in finalize_text
 
 
+def test_arch_io_p10a_007_zarr_validity_materialization_has_single_ingress_owner() -> None:
+    """ID: ARCH_IO_P10A_007_zarr_validity_materialization_has_single_ingress_owner."""
+    zarr_text = Path("tal/io/zarr_io.py").read_text(encoding="utf-8")
+    schema_text = Path("tal/core/schema_validate/__init__.py").read_text(encoding="utf-8")
+    finalize_text = Path("tal/io/finalize.py").read_text(encoding="utf-8")
+    assert zarr_text.count("def _materialize_zarr_validity_coord(") == 1
+    assert zarr_text.count("validate_schema_structure(ds)") == 1
+    assert "size_name = validate_schema_structure(ds)" in zarr_text
+    assert "structure = validate_schema_structure(ds)" not in zarr_text
+    assert "def validate_schema_structure(" in schema_text
+    assert "def _resolve_schema_structure(" in schema_text
+    assert schema_text.count("structure = _resolve_schema_structure(ds)") == 2
+    assert "name = structure.sequence_size_coord" in schema_text
+    assert "return None if name is None else str.__str__(name)" in schema_text
+    assert "return None if name is None else str(name)" not in schema_text
+    assert "return structure.sequence_size_coord" not in schema_text
+    assert "phase_validity_structure(" in schema_text
+    assert "check_validity_coord_values(" in schema_text
+    assert "coord.variable.compute()" in zarr_text
+    assert "check_validity_coord_values" not in zarr_text
+    assert "ds.compute(" not in zarr_text
+    assert "ds.load(" not in zarr_text
+    assert "_materialize_zarr_validity_coord(" not in finalize_text
+
+
 def test_io_hard_p10a_003_no_schema_bypass_writes_on_ao_direct_io_paths() -> None:
     """ID: IO_HARD_P10A_003_no_schema_bypass_writes_on_ao_direct_io_paths."""
     for path in sorted(Path("tal/io").glob("*.py")):
@@ -77,6 +102,8 @@ def test_io_doc_p10a_001_ao_direct_io_is_canonical_documented() -> None:
     assert "ao-direct" in text
     assert "ao.io.to_zarr" in text
     assert "ao.io.to_csv" in text
+    assert "structurally validates persisted metadata before materializing" in text
+    assert "chunked payload variables remain lazy" in text
 
 
 def test_io_doc_p10a_002_analysisobject_io_top_level_installation_guarantee_documented() -> None:
