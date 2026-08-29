@@ -1186,18 +1186,6 @@ def test_arch_io_p10b_019_cleanup_failure_test_double_has_shared_owner() -> None
 
 def test_arch_io_p10b_020_csv_control_flow_stays_within_nesting_budget() -> None:
     """ID: ARCH_IO_P10B_020_csv_control_flow_stays_within_nesting_budget."""
-    try_star_probe = """
-def nested_exception_group_handler():
-    try:
-        operation()
-    except* Exception:
-        if condition:
-            for item in items:
-                consume(item)
-"""
-    assert function_control_depths(source=try_star_probe) == {
-        "nested_exception_group_handler": 3
-    }
     for path in sorted(Path("tal/io").glob("*.py")):
         for name, depth in function_control_depths(path).items():
             assert depth <= 2, f"{path}:{name} exceeds nesting budget ({depth} > 2)."

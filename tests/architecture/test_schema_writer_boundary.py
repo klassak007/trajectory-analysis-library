@@ -1,6 +1,8 @@
+import ast
 from pathlib import Path
 
 import pytest
+import tal.core
 
 from tests.architecture._schema_write import (
     tal_attr_write_lines,
@@ -11,7 +13,6 @@ from tests.architecture._schema_write import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOT = REPO_ROOT / "tal"
 APPROVED_WRITERS = {
-    (SCAN_ROOT / "core" / "schema.py").resolve(),
     (SCAN_ROOT / "core" / "schema_validate" / "finalize.py").resolve(),
 }
 IGNORED_PATH_PARTS = {"tests"}
@@ -195,6 +196,24 @@ def test_arch_schemawrite_001_only_approved_modules_write_tal_attrs() -> None:
         ),
         ("copied = ds.attrs.copy()\nout.attrs = copied", [2]),
         ("copied = {**ds.attrs}\nout.attrs = copied", [2]),
+        (
+            "copied = {key: value for key, value in ds.attrs.items()}\n"
+            "out.attrs = copied",
+            [2],
+        ),
+        (
+            "copied = dict((key, value) for key, value in ds.attrs.items())\n"
+            "out.attrs = copied",
+            [2],
+        ),
+        (
+            "[alias.__setitem__('tal', schema) for alias in (ds.attrs,)]",
+            [1],
+        ),
+        (
+            "for alias in (ds.attrs,):\n    alias['tal'] = schema",
+            [2],
+        ),
         ("out.attrs = ds.attrs", [1]),
         ("attrs = ds.attrs\nattrs.__ior__({'tal': schema})", [2]),
         ("attrs = ds.attrs\nattrs.__delitem__('tal')", [2]),
@@ -223,6 +242,28 @@ def test_arch_schemawrite_001_only_approved_modules_write_tal_attrs() -> None:
             [4],
         ),
         (
+            "mapping = {}\nfor item in items:\n"
+            "    mapping = ds.attrs\n    break\n    mapping = {}\n"
+            "out.attrs = mapping",
+            [6],
+        ),
+        (
+            "mapping = {}\nfor item in items:\n"
+            "    mapping = ds.attrs\n    continue\n    mapping = {}\n"
+            "out.attrs = mapping",
+            [6],
+        ),
+        (
+            "alias = {}\ntry:\n    alias = ds.attrs\n    operation()\n"
+            "    alias = {}\nexcept Exception:\n    out.attrs = alias",
+            [7],
+        ),
+        (
+            "alias = {}\ntry:\n    operation(alias := ds.attrs)\n"
+            "except Exception:\n    out.attrs = alias",
+            [5],
+        ),
+        (
             "def helper():\n    alias['tal'] = schema\n"
             "alias = ds.attrs\nhelper()",
             [2],
@@ -238,6 +279,29 @@ def test_arch_schemawrite_001_only_approved_modules_write_tal_attrs() -> None:
             "    alias = ds.attrs\n    helper()",
             [5],
         ),
+        ("out = xr.Dataset(attrs=dict(ds.attrs))", [1]),
+        ("out = xr.Dataset(attrs=ds.attrs)", [1]),
+        ("out = xr.Dataset(data_vars, coords, ds.attrs)", [1]),
+        ("out = xr.DataArray(values, attrs=ds.attrs.copy())", [1]),
+        ("out = xr.DataArray(values, coords, dims, name, ds.attrs)", [1]),
+        ("factory = xr.Dataset\nout = factory(data_vars, coords, ds.attrs)", [2]),
+        (
+            "from xarray import Dataset as factory\n"
+            "out = factory(data_vars, coords, ds.attrs)",
+            [2],
+        ),
+        (
+            "def build(factory=xr.Dataset):\n"
+            "    return factory(data_vars, coords, ds.attrs)",
+            [2],
+        ),
+        (
+            "def build(alias=ds.attrs):\n    out.attrs = alias",
+            [2],
+        ),
+        ("out = target.assign_attrs(**ds.attrs)", [1]),
+        ("target.attrs.update(**ds.attrs)", [1]),
+        ("copied = dict(**ds.attrs)\nout.attrs = copied", [2]),
     ],
 )
 def test_arch_schemawrite_002_detector_flags_indirect_patterns(
@@ -306,6 +370,13 @@ def test_arch_schemawrite_003_detector_ignores_read_only_alias() -> None:
         "attrs = ds.attrs\n"
         "[attrs.update({'tal': schema}) for attrs in values]\n"
     )
+    source_constructor = "out = xr.Dataset(attrs={'note': value})\n"
+    source_positional_constructor = "out = xr.Dataset(data_vars, coords, {'note': value})\n"
+    source_unpack = "out = target.assign_attrs(**{'note': value})\n"
+    source_unrelated_attrs_keyword = "inspect_metadata(attrs=ds.attrs)\n"
+    source_shadowed_xarray = (
+        "xr = custom\nout = xr.Dataset(data_vars, coords, ds.attrs)\n"
+    )
     assert tal_write_lines_from_source(source_tal) == []
     assert tal_write_lines_from_source(source_attrs) == []
     assert tal_write_lines_from_source(source_shadow) == []
@@ -324,6 +395,11 @@ def test_arch_schemawrite_003_detector_ignores_read_only_alias() -> None:
     assert tal_write_lines_from_source(source_class_import_shadow) == []
     assert tal_write_lines_from_source(source_shallow_schema_copy) == []
     assert tal_write_lines_from_source(source_comprehension_shadow) == []
+    assert tal_write_lines_from_source(source_constructor) == []
+    assert tal_write_lines_from_source(source_positional_constructor) == []
+    assert tal_write_lines_from_source(source_unpack) == []
+    assert tal_write_lines_from_source(source_unrelated_attrs_keyword) == []
+    assert tal_write_lines_from_source(source_shadowed_xarray) == []
 
 
 def test_arch_schemawrite_004_detector_flags_attrs_alias_writes() -> None:
@@ -344,3 +420,38 @@ def test_arch_schemawrite_005_new_cleanup_owner_modules_remain_schema_write_free
     for path in paths:
         assert path.exists(), path
         assert tal_attr_write_lines(path) == [], path
+
+
+def test_arch_schemawrite_006_dataset_attr_transfer_is_internal_and_centralized() -> None:
+    """ID: ARCH_SCHEMAWRITE_006_dataset_attr_transfer_is_internal_and_centralized."""
+    assert not hasattr(tal.core, "copy_dataset_attrs")
+    definitions = []
+    for path in _iter_python_files():
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        for node in module.body:
+            if getattr(node, "name", None) == "transfer_dataset_attrs":
+                definitions.append(path.relative_to(REPO_ROOT).as_posix())
+    assert definitions == ["tal/core/orchestration/finalize.py"]
+
+
+def test_arch_schemawrite_007_private_schema_assignment_has_one_owner() -> None:
+    """ID: ARCH_SCHEMAWRITE_007_private_schema_assignment_has_one_owner."""
+    schema_path = SCAN_ROOT / "core" / "schema.py"
+    finalize_path = SCAN_ROOT / "core" / "schema_validate" / "finalize.py"
+    assert tal_attr_write_lines(schema_path) == []
+
+    lines = tal_attr_write_lines(finalize_path)
+    module = ast.parse(finalize_path.read_text(encoding="utf-8"))
+    assert lines
+    owner_names: list[str] = []
+    for line in lines:
+        owners = [
+            node.name
+            for node in module.body
+            if isinstance(node, ast.FunctionDef)
+            and node.lineno <= line <= node.end_lineno
+        ]
+        assert len(owners) == 1
+        owner_names.extend(owners)
+    assert len(set(owner_names)) == 1
+    assert owner_names[0].startswith("_")

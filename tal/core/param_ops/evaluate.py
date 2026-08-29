@@ -26,7 +26,7 @@ def _apply_map_dataset(
             raise TypeError(f"param at/resample: non-numeric sequence variable {name!r} is not supported.")
         out_vars[str(name)] = apply_param_map(var, param_map=param_map, sequence_dim=sequence_dim)
     base_coords = {cname: coord for cname, coord in ds.coords.items() if sequence_dim not in coord.dims}
-    return xr.Dataset(data_vars=out_vars, coords=base_coords, attrs=dict(ds.attrs))
+    return xr.Dataset(data_vars=out_vars, coords=base_coords)
 
 
 def evaluate_param(

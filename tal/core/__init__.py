@@ -42,7 +42,6 @@ from .param_ops import (
     synchronize_param,
 )
 from .schema import (
-    copy_dataset_attrs,
     merge_schema,
     set_param_coord,
     set_roles,
@@ -82,7 +81,6 @@ __all__ = [
     "concat_core",
     "concat_sequence",
     "compose_components",
-    "copy_dataset_attrs",
     "decompose_core",
     "define_components",
     "extract_components",

@@ -17,8 +17,8 @@ from tal.core.orchestration.topology import (
     resolve_nary_topology,
 )
 from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
+from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
-from tal.core.schema import copy_dataset_attrs
 from tal.utils.frame_schema import set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
 
@@ -303,7 +303,7 @@ def _apply_pose_to_position(
         owner=owner,
     )
     out_ds = output.to_dataset(name=resolved.specs.target_var)
-    out_ds = copy_dataset_attrs(
+    out_ds = transfer_dataset_attrs(
         resolved.specs.target_ds,
         out_ds,
         validate=False,

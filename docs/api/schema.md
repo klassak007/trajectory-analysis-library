@@ -53,15 +53,11 @@ set_param_coord(ds, *, name, validate=True)
 set_validity(ds, *, sequence_size_coord, layout="left_packed", validate=True)
 merge_schema(ds, patch, *, validate=True)
 validate_schema(ds)
-copy_dataset_attrs(source, target, *, validate=True)
 ```
 
-All writer APIs are atomic candidate-update operations. On failure they raise
-`SchemaError` and do not partially mutate the caller dataset.
-
-`copy_dataset_attrs(...)` is the schema-safe transfer owner for kernels that
-construct a fresh target dataset. It replaces ordinary target attrs and copies
-the source `tal` payload through the same canonical writer path.
+All writer APIs are atomic candidate-update operations and do not partially
+mutate the caller dataset. Boundary type violations raise `TypeError`; schema
+validation failures raise `SchemaError`.
 
 ## Role Semantics
 
@@ -122,7 +118,6 @@ payload directly.
    tal.core.set_validity
    tal.core.merge_schema
    tal.core.validate_schema
-   tal.core.copy_dataset_attrs
    tal.utils.frame_schema.get_frames
    tal.utils.frame_schema.set_frames
 ```

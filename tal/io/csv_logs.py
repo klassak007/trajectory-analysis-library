@@ -216,11 +216,6 @@ def _coerce_numeric_value_column(
     return numeric.to_numpy(dtype=float, copy=False)
 
 
-def _preserve_csv_time_token(value: str) -> str:
-    """Keep timestamp text raw until TAL classifies it."""
-    return value
-
-
 def _read_csv_frame(path: str, *, time_col: str, owner: str) -> pd.DataFrame:
     """Delegate complete record parsing to pandas under the public owner."""
     try:
@@ -228,7 +223,7 @@ def _read_csv_frame(path: str, *, time_col: str, owner: str) -> pd.DataFrame:
             warnings.simplefilter("error", pd.errors.ParserWarning)
             return pd.read_csv(
                 path,
-                converters={time_col: _preserve_csv_time_token},
+                converters={time_col: str},
                 index_col=False,
                 on_bad_lines="error",
             )

@@ -328,7 +328,6 @@ def ecef_to_enu(
         core_dim=out_core_dim,
         target_dims=_target_dims(ctx.data, old_core_dim=core_dim, new_core_dim=out_core_dim),
         var_name=ctx.var_name,
-        attrs_source=ctx.ds,
     )
     ds = _finalize_core_schema(ctx, ds, core_dim=out_core_dim, validate=validate, owner=owner)
     ds = set_position_rep(ds, rep="cart", validate=False, owner=owner)
@@ -385,7 +384,6 @@ def enu_to_ecef(
         core_dim=out_core_dim,
         target_dims=_target_dims(ctx.data, old_core_dim=core_dim, new_core_dim=out_core_dim),
         var_name=ctx.var_name,
-        attrs_source=ctx.ds,
     )
     ds = _finalize_core_schema(ctx, ds, core_dim=out_core_dim, validate=validate, owner=owner)
     ds = set_position_rep(ds, rep="cart", validate=False, owner=owner)

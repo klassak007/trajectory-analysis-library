@@ -16,8 +16,8 @@ from tal.core.orchestration.topology import (
     resolve_binary_topology,
 )
 from tal.core.orchestration.runtime_checks import require_exact_labels
+from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
-from tal.core.schema import copy_dataset_attrs
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,7 @@ def _rewrap_aligned_component_dataset(
     var_name: str,
 ) -> xr.Dataset:
     out = aligned.to_dataset(name=var_name)
-    return copy_dataset_attrs(source_ds, out, validate=False)
+    return transfer_dataset_attrs(source_ds, out, validate=False)
 
 
 def align_paired_component_payloads(

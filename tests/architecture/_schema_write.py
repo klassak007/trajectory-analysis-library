@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from enum import IntFlag, auto
 from pathlib import Path
 
@@ -12,9 +13,27 @@ class _Origin(IntFlag):
     TAL_ROOT = auto()
     TAL_COPY = auto()
     TAL_MAPPING = auto()
+    XARRAY_MODULE = auto()
+    XARRAY_DATASET = auto()
+    XARRAY_DATA_ARRAY = auto()
+    XARRAY_VARIABLE = auto()
+    XARRAY_INDEX_VARIABLE = auto()
 
 
 _FlowState = dict[str, _Origin]
+
+_XARRAY_CONSTRUCTORS = {
+    "Dataset": _Origin.XARRAY_DATASET,
+    "DataArray": _Origin.XARRAY_DATA_ARRAY,
+    "Variable": _Origin.XARRAY_VARIABLE,
+    "IndexVariable": _Origin.XARRAY_INDEX_VARIABLE,
+}
+_XARRAY_ATTRS_POSITIONS = {
+    _Origin.XARRAY_DATASET: 2,
+    _Origin.XARRAY_DATA_ARRAY: 4,
+    _Origin.XARRAY_VARIABLE: 2,
+    _Origin.XARRAY_INDEX_VARIABLE: 2,
+}
 
 
 class _LexicalChildScopeCollector(ast.NodeVisitor):
@@ -205,10 +224,17 @@ class _TalWriteDetector(ast.NodeVisitor):
 
     def __init__(self) -> None:
         self.lines: set[int] = set()
-        self._origin_scopes: list[_FlowState] = [{"attrs": _Origin.ATTRS_ROOT}]
-        self._potential_scopes: list[_FlowState] = [{"attrs": _Origin.ATTRS_ROOT}]
+        builtins = {
+            "attrs": _Origin.ATTRS_ROOT,
+            "xr": _Origin.XARRAY_MODULE,
+            "xarray": _Origin.XARRAY_MODULE,
+        }
+        self._origin_scopes: list[_FlowState] = [dict(builtins)]
+        self._potential_scopes: list[_FlowState] = [dict(builtins)]
         self._scope_kinds = ["normal"]
         self._scope_locals: list[set[str]] = [set()]
+        self._loop_break_states: list[list[_FlowState]] = []
+        self._loop_continue_states: list[list[_FlowState]] = []
 
     @property
     def origins(self) -> _FlowState:
@@ -253,6 +279,39 @@ class _TalWriteDetector(ast.NodeVisitor):
             self.visit(statement)
         return self._snapshot_state()
 
+    def _visit_block_with_entry_states(
+        self,
+        state: _FlowState,
+        block: list[ast.stmt],
+    ) -> tuple[_FlowState, list[_FlowState]]:
+        self._restore_state(state)
+        entries: list[_FlowState] = []
+        for statement in block:
+            entries.append(self._snapshot_state())
+            self.visit(statement)
+        return self._snapshot_state(), entries
+
+    def _solve_loop(
+        self,
+        base: _FlowState,
+        step: Callable[[_FlowState], tuple[_FlowState, _FlowState]],
+    ) -> tuple[_FlowState, _FlowState, list[_FlowState]]:
+        entry = base
+        self._loop_break_states.append([])
+        self._loop_continue_states.append([])
+        try:
+            while True:
+                exit_state, body = step(entry)
+                joined = self._join_states(
+                    [base, body, *self._loop_continue_states[-1]]
+                )
+                if joined == entry:
+                    return exit_state, body, self._loop_break_states[-1]
+                entry = joined
+        finally:
+            self._loop_break_states.pop()
+            self._loop_continue_states.pop()
+
     def _clear_names(self, names: set[str]) -> None:
         for name in names:
             self.origins.pop(name, None)
@@ -291,6 +350,26 @@ class _TalWriteDetector(ast.NodeVisitor):
             copied |= _Origin.TAL_MAPPING
         return copied
 
+    def _default_argument_origins(self, args: ast.arguments) -> _FlowState:
+        positional = [*args.posonlyargs, *args.args]
+        trailing = positional[len(positional) - len(args.defaults) :]
+        bindings = {
+            arg.arg: self._expr_origins(default)
+            for arg, default in zip(trailing, args.defaults, strict=True)
+        }
+        bindings.update(
+            {
+                arg.arg: self._expr_origins(default)
+                for arg, default in zip(
+                    args.kwonlyargs,
+                    args.kw_defaults,
+                    strict=True,
+                )
+                if default is not None
+            }
+        )
+        return bindings
+
     def _dict_origins(self, expr: ast.Dict) -> _Origin:
         origin = _Origin.NONE
         for key, value in zip(expr.keys, expr.values, strict=True):
@@ -300,12 +379,35 @@ class _TalWriteDetector(ast.NodeVisitor):
                 origin |= self._mapping_copy_origins(self._expr_origins(value))
         return origin
 
+    def _mapping_iterable_origins(self, expr: ast.AST) -> _Origin:
+        origin = self._expr_origins(expr)
+        if not isinstance(expr, ast.Call) or not isinstance(expr.func, ast.Attribute):
+            return origin
+        if expr.func.attr not in {"items", "keys", "values", "__iter__"}:
+            return origin
+        return origin | self._expr_origins(expr.func.value)
+
+    def _comprehension_origins(
+        self,
+        node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+    ) -> _Origin:
+        sources = _Origin.NONE
+        for generator in node.generators:
+            sources |= self._mapping_iterable_origins(generator.iter)
+        values = (node.key, node.value) if isinstance(node, ast.DictComp) else (node.elt,)
+        for value in values:
+            sources |= self._expr_origins(value)
+        return self._mapping_copy_origins(sources)
+
     def _call_origins(self, expr: ast.Call) -> _Origin:
-        origin = (
-            _Origin.TAL_MAPPING
-            if any(keyword.arg == "tal" for keyword in expr.keywords)
-            else _Origin.NONE
-        )
+        origin = _Origin.NONE
+        for keyword in expr.keywords:
+            if keyword.arg == "tal":
+                origin |= _Origin.TAL_MAPPING
+            elif keyword.arg is None:
+                origin |= self._mapping_copy_origins(
+                    self._expr_origins(keyword.value)
+                )
         if isinstance(expr.func, ast.Name) and expr.func.id == "dict":
             for argument in expr.args:
                 origin |= self._mapping_copy_origins(self._expr_origins(argument))
@@ -329,7 +431,12 @@ class _TalWriteDetector(ast.NodeVisitor):
         if isinstance(expr, ast.Name):
             return self.origins.get(expr.id, _Origin.NONE)
         if isinstance(expr, ast.Attribute):
-            return _Origin.ATTRS_ROOT if expr.attr == "attrs" else _Origin.NONE
+            if expr.attr == "attrs":
+                return _Origin.ATTRS_ROOT
+            receiver = self._expr_origins(expr.value)
+            if receiver & _Origin.XARRAY_MODULE:
+                return _XARRAY_CONSTRUCTORS.get(expr.attr, _Origin.NONE)
+            return _Origin.NONE
         if isinstance(expr, ast.NamedExpr):
             return self._expr_origins(expr.value)
         if isinstance(expr, ast.Subscript):
@@ -344,6 +451,8 @@ class _TalWriteDetector(ast.NodeVisitor):
             return _Origin.NONE
         if isinstance(expr, ast.Dict):
             return self._dict_origins(expr)
+        if isinstance(expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            return self._comprehension_origins(expr)
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.BitOr):
             sources = self._expr_origins(expr.left) | self._expr_origins(expr.right)
             return self._mapping_copy_origins(sources)
@@ -400,7 +509,31 @@ class _TalWriteDetector(ast.NodeVisitor):
     def _call_supplies_tal(self, call: ast.Call) -> bool:
         if any(keyword.arg == "tal" for keyword in call.keywords):
             return True
-        return any(self._expr_has_tal_mapping(arg) for arg in call.args)
+        values = [*call.args]
+        values.extend(
+            keyword.value for keyword in call.keywords if keyword.arg is None
+        )
+        return any(self._expr_has_tal_mapping(value) for value in values)
+
+    def _call_transfers_tal_through_attrs(self, call: ast.Call) -> bool:
+        constructor = self._expr_origins(call.func)
+        positions = [
+            position
+            for origin, position in _XARRAY_ATTRS_POSITIONS.items()
+            if constructor & origin
+        ]
+        if not positions:
+            return False
+        if any(
+            keyword.arg == "attrs" and self._expr_has_tal_mapping(keyword.value)
+            for keyword in call.keywords
+        ):
+            return True
+        return any(
+            len(call.args) > position
+            and self._expr_has_tal_mapping(call.args[position])
+            for position in positions
+        )
 
     def _key_call_targets_tal(self, call: ast.Call) -> bool:
         if call.args and _is_tal_literal(call.args[0]):
@@ -522,6 +655,17 @@ class _TalWriteDetector(ast.NodeVisitor):
         self._mark_local_tal_target(target)
         self._clear_names(_target_names(target))
 
+    def _bind_iteration_target(self, target: ast.AST, iterable: ast.AST) -> None:
+        self._bind_ordinary_target(target)
+        if not isinstance(iterable, (ast.List, ast.Tuple, ast.Set)):
+            return
+        origins: _FlowState = {}
+        for element in iterable.elts:
+            for name, origin in self._assignment_bindings(target, element):
+                origins[name] = origins.get(name, _Origin.NONE) | origin
+        for name, origin in origins.items():
+            self._set_name_origin(name, origin)
+
     def _assignment_bindings_for_targets(
         self, targets: list[ast.AST], value: ast.AST
     ) -> list[tuple[str, _Origin]]:
@@ -603,7 +747,11 @@ class _TalWriteDetector(ast.NodeVisitor):
             self._clear_names(_target_names(target))
 
     def visit_Call(self, node: ast.Call) -> None:
-        if self._attrs_call_writes_tal(node) or self._tal_root_mutating_call(node):
+        if (
+            self._attrs_call_writes_tal(node)
+            or self._tal_root_mutating_call(node)
+            or self._call_transfers_tal_through_attrs(node)
+        ):
             self.lines.add(node.lineno)
         changed = self._local_call_changes_tal(node)
         if changed is not None:
@@ -643,18 +791,32 @@ class _TalWriteDetector(ast.NodeVisitor):
             self._restore_state(self._join_states(states))
 
     def visit_Import(self, node: ast.Import) -> None:
-        self._clear_names(
-            {alias.asname or alias.name.partition(".")[0] for alias in node.names}
-        )
+        for alias in node.names:
+            bound = alias.asname or alias.name.partition(".")[0]
+            imports_xarray = alias.name == "xarray" or (
+                alias.asname is None and alias.name.startswith("xarray.")
+            )
+            origin = (
+                _Origin.XARRAY_MODULE
+                if imports_xarray
+                else _Origin.NONE
+            )
+            self._set_name_origin(bound, origin)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self._clear_names(
-            {
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name != "*"
-            }
+        is_xarray = node.module == "xarray" or bool(
+            node.module and node.module.startswith("xarray.")
         )
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            bound = alias.asname or alias.name
+            origin = (
+                _XARRAY_CONSTRUCTORS.get(alias.name, _Origin.NONE)
+                if is_xarray
+                else _Origin.NONE
+            )
+            self._set_name_origin(bound, origin)
 
     def _visit_comprehension(self, node: ast.AST, values: list[ast.AST]) -> None:
         first, *remaining = node.generators
@@ -665,10 +827,12 @@ class _TalWriteDetector(ast.NodeVisitor):
         self._push_scope(kind="comprehension", local_names=local_names)
         self._clear_names(local_names)
         self._clear_potential_names(local_names)
+        self._bind_iteration_target(first.target, first.iter)
         for condition in first.ifs:
             self.visit(condition)
         for generator in remaining:
             self.visit(generator.iter)
+            self._bind_iteration_target(generator.target, generator.iter)
             for condition in generator.ifs:
                 self.visit(condition)
         for value in values:
@@ -709,17 +873,18 @@ class _TalWriteDetector(ast.NodeVisitor):
     def visit_For(self, node: ast.For) -> None:
         self.visit(node.iter)
         base = self._snapshot_state()
-        entry = base
-        while True:
+
+        def step(entry: _FlowState) -> tuple[_FlowState, _FlowState]:
             self._restore_state(entry)
-            self._bind_ordinary_target(node.target)
+            self._bind_iteration_target(node.target, node.iter)
             body = self._visit_block_from(self._snapshot_state(), node.body)
-            joined = self._join_states([base, body])
-            if joined == entry:
-                break
-            entry = joined
-        normal_exit = self._visit_block_from(entry, node.orelse)
-        self._restore_state(self._join_states([entry, body, normal_exit]))
+            return entry, body
+
+        exit_state, body, break_states = self._solve_loop(base, step)
+        normal_exit = self._visit_block_from(exit_state, node.orelse)
+        self._restore_state(
+            self._join_states([exit_state, body, normal_exit, *break_states])
+        )
 
     visit_AsyncFor = visit_For
 
@@ -735,22 +900,30 @@ class _TalWriteDetector(ast.NodeVisitor):
 
     def visit_While(self, node: ast.While) -> None:
         base = self._snapshot_state()
-        entry = base
-        while True:
+
+        def step(entry: _FlowState) -> tuple[_FlowState, _FlowState]:
             tested = self._visit_expression_from(entry, node.test)
-            body = self._visit_block_from(tested, node.body)
-            joined = self._join_states([base, body])
-            if joined == entry:
-                break
-            entry = joined
+            return tested, self._visit_block_from(tested, node.body)
+
+        tested, body, break_states = self._solve_loop(base, step)
         normal_exit = self._visit_block_from(tested, node.orelse)
-        self._restore_state(self._join_states([tested, body, normal_exit]))
+        self._restore_state(
+            self._join_states([tested, body, normal_exit, *break_states])
+        )
+
+    def visit_Break(self, node: ast.Break) -> None:
+        if self._loop_break_states:
+            self._loop_break_states[-1].append(self._snapshot_state())
+
+    def visit_Continue(self, node: ast.Continue) -> None:
+        if self._loop_continue_states:
+            self._loop_continue_states[-1].append(self._snapshot_state())
 
     def visit_Try(self, node: ast.Try) -> None:
         base = self._snapshot_state()
-        body = self._visit_block_from(base, node.body)
+        body, exception_entries = self._visit_block_with_entry_states(base, node.body)
         success = self._visit_block_from(body, node.orelse)
-        handler_base = self._join_states([base, body])
+        handler_base = self._join_states([body, *exception_entries])
         states = [success]
         for handler in node.handlers:
             self._restore_state(handler_base)
@@ -777,6 +950,7 @@ class _TalWriteDetector(ast.NodeVisitor):
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         self._visit_function_signature(node)
+        default_origins = self._default_argument_origins(node.args)
         inherited = None
         if self._scope_kinds[-1] == "class":
             inherited = self._origin_scopes[-2]
@@ -784,6 +958,8 @@ class _TalWriteDetector(ast.NodeVisitor):
         local_names = _function_local_names(node) | {node.name}
         self._clear_names(local_names)
         self._clear_potential_names(local_names)
+        for name, origin in default_origins.items():
+            self._set_name_origin(name, origin)
         for statement in node.body:
             self.visit(statement)
         self._visit_child_scopes_from_potential(node.body)
@@ -810,6 +986,7 @@ class _TalWriteDetector(ast.NodeVisitor):
         for default in (*node.args.defaults, *node.args.kw_defaults):
             if default is not None:
                 self.visit(default)
+        default_origins = self._default_argument_origins(node.args)
         inherited = None
         if self._scope_kinds[-1] == "class":
             inherited = self._origin_scopes[-2]
@@ -817,6 +994,8 @@ class _TalWriteDetector(ast.NodeVisitor):
         argument_names = _argument_names(node.args)
         self._clear_names(argument_names)
         self._clear_potential_names(argument_names)
+        for name, origin in default_origins.items():
+            self._set_name_origin(name, origin)
         self.visit(node.body)
         self._pop_scope()
 

@@ -146,7 +146,7 @@ def _build_base_output_dataset(context: ParamRuntimeContext, *, var_name: str, v
         for name, coord in context.ds.coords.items()
         if context.sequence_dim not in coord.dims
     }
-    return xr.Dataset(data_vars={var_name: values}, coords=coords, attrs=dict(context.ds.attrs))
+    return xr.Dataset(data_vars={var_name: values}, coords=coords)
 
 
 def _wrap_lon(lon: xr.DataArray, *, mode: str) -> xr.DataArray:

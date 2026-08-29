@@ -182,6 +182,7 @@ def finalize_with_schema(
     resolved_spec = spec
     if spec.sequence_dim is None:
         resolved_spec = replace(spec, param_name=None, size_name=None)
+        candidate = clear_core_schema_blocks(candidate, validate=False)
         candidate = stamp_core_schema(candidate, spec=resolved_spec, validate=False)
     else:
         candidate = restore_optional_coord_from_sources(candidate, name=spec.param_name, sources=optional_sources)

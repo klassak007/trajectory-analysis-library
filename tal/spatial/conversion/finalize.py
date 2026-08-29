@@ -4,7 +4,8 @@ from typing import Callable
 
 import xarray as xr
 
-from tal.core.schema import copy_dataset_attrs, set_roles
+from tal.core.orchestration.finalize import transfer_dataset_attrs
+from tal.core.schema import set_roles
 
 RepWriter = Callable[..., xr.Dataset]
 
@@ -87,7 +88,7 @@ def conversion_dataset_from_array(
     source_ds: xr.Dataset,
 ) -> xr.Dataset:
     out = converted.to_dataset(name=var_name)
-    return copy_dataset_attrs(source_ds, out, validate=False)
+    return transfer_dataset_attrs(source_ds, out, validate=False)
 
 
 def finalize_conversion_dataset(

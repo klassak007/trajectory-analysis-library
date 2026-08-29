@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.architecture._budget import function_parameter_counts
+
 
 def _event_ops_files() -> list[Path]:
     return sorted(Path("tal/core/event_ops").glob("*.py"))
@@ -669,9 +671,8 @@ def test_event_arch_055_scalar_operand_broadcast_has_single_event_owner() -> Non
 
 def test_event_arch_052_bounded_event_numba_helper_parameter_budget() -> None:
     """ID: EVENT_ARCH_052_bounded_event_numba_helper_parameter_budget."""
-    module = ast.parse(Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8"))
-    for node in ast.walk(module):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        params = len(node.args.args) + len(node.args.kwonlyargs)
-        assert params <= 10, f"numba_backends.{node.name} exceeds parameter budget ({params} > 10)"
+    path = Path("tal/core/event_ops/numba_backends.py")
+    for name, count in function_parameter_counts(path).items():
+        assert count <= 10, (
+            f"numba_backends.{name} exceeds parameter budget ({count} > 10)"
+        )

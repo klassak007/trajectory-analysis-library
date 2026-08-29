@@ -7,6 +7,22 @@ from typing import Any
 import xarray as xr
 
 
+def _replace_dataset_attrs_with_tal(
+    ds: xr.Dataset,
+    *,
+    ordinary_attrs: Mapping[Any, Any],
+    tal: Mapping[str, Any] | None,
+    canonicalize: bool = False,
+) -> xr.Dataset:
+    """Replace dataset attrs while isolating the optional TAL payload."""
+    attrs = {name: value for name, value in ordinary_attrs.items() if name != "tal"}
+    if tal is not None:
+        attrs["tal"] = canonicalize_tal(tal) if canonicalize else deepcopy(dict(tal))
+    out = ds.copy(deep=False)
+    out.attrs = attrs
+    return out
+
+
 def canonicalize_tal(tal: Mapping[str, Any]) -> dict[str, Any]:
     out = deepcopy(dict(tal))
     out["version"] = int(out["version"])
@@ -30,8 +46,9 @@ def canonicalize_tal(tal: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def finalize_validated_schema(ds: xr.Dataset, tal: Mapping[str, Any]) -> xr.Dataset:
-    out = ds.copy(deep=False)
-    attrs = dict(out.attrs)
-    attrs["tal"] = canonicalize_tal(tal)
-    out.attrs = attrs
-    return out
+    return _replace_dataset_attrs_with_tal(
+        ds,
+        ordinary_attrs=ds.attrs,
+        tal=tal,
+        canonicalize=True,
+    )

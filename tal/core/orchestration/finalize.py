@@ -8,11 +8,32 @@ from typing import TYPE_CHECKING
 import xarray as xr
 
 from ..ao_internal import finalize_structural, from_unvalidated_like
+from ..schema import _transfer_dataset_attrs_for_finalize
 from .topology import restore_dataset_batch_topology
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
     from ..param_ops.batch_topology import BatchFlattenPlan
+
+
+def transfer_dataset_attrs(
+    source: xr.Dataset,
+    target: xr.Dataset,
+    *,
+    validate: bool = False,
+) -> xr.Dataset:
+    """Transfer source attrs at an internal dataset-finalization boundary.
+
+    Ordinary attrs replace the target mapping using xarray's shallow value
+    semantics. The TAL payload is independently copied by the canonical schema
+    implementation, and optional validation occurs only after the candidate is
+    complete. Neither input dataset is mutated.
+    """
+    return _transfer_dataset_attrs_for_finalize(
+        source,
+        target,
+        validate=validate,
+    )
 
 
 def finalize_like(
@@ -179,4 +200,5 @@ __all__ = [
     "finalize_many_like",
     "restore_and_finalize",
     "rewrap_unvalidated_like",
+    "transfer_dataset_attrs",
 ]

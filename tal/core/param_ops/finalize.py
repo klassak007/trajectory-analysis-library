@@ -4,6 +4,7 @@ import numpy as np
 import xarray as xr
 
 from ..ao_internal import finalize_structural
+from ..orchestration.finalize import transfer_dataset_attrs
 from ..validity_finalize import assign_sequence_size_from_valid_mask
 from .types import ParamRuntimeContext
 
@@ -51,7 +52,7 @@ def finalize_param_output(
     validate: bool,
     trajectory: bool,
 ) -> "AnalysisObject":
-    ds_out = ds.copy(deep=False)
+    ds_out = transfer_dataset_attrs(context.ds, ds, validate=False)
     if query is not None and query_dim in ds_out.dims and not trajectory:
         ds_out = ds_out.unstack(query_dim)
     if trajectory and query_dim in ds_out.dims and query_dim != context.sequence_dim:

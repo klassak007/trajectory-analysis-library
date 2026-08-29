@@ -10,7 +10,6 @@ import xarray as xr
 from .dataset_utils import dataset_to_dataarray, ensure_dataset
 from .schema import UNSET, UnsetType
 from .schema import _is_bootstrap_schema
-from .schema import copy_dataset_attrs as _copy_dataset_attrs
 from .schema import merge_schema as _merge_schema
 from .schema import repair_schema_after_structure as _repair_schema_after_structure
 from .schema import set_param_coord as _set_param_coord
@@ -162,8 +161,7 @@ class AnalysisObject:
         need direct in-place mutation should use ``unsafe_data`` explicitly.
         """
         self._assert_no_multiindex(self._data, owner="AnalysisObject.data")
-        out = self._isolate_coord_buffers(self._data.copy(deep=True))
-        return _copy_dataset_attrs(out, out, validate=False)
+        return self._isolate_coord_buffers(self._data.copy(deep=True))
 
     @property
     def data(self) -> xr.Dataset:

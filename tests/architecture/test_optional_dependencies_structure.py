@@ -6,6 +6,10 @@ from pathlib import Path
 import tomllib
 
 from tal.core.param_engine.map_build import build_param_bounds_map, build_param_map
+from tests.architecture._budget import (
+    function_control_depths,
+    function_parameter_counts,
+)
 
 
 def _assert_no_direct_numba_import(text: str) -> None:
@@ -61,25 +65,6 @@ _NUMBA_CLEANED_NESTING_FUNCTIONS = (
     ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_squad_block_impl"),
     ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_pose_block_impl"),
 )
-
-
-def _param_count(node: ast.FunctionDef) -> int:
-    return len(node.args.posonlyargs) + len(node.args.args) + len(node.args.kwonlyargs)
-
-
-def _max_nesting(node: ast.AST, depth: int = 0) -> int:
-    nested_node = isinstance(
-        node,
-        (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.AsyncFor, ast.AsyncWith, ast.Match),
-    )
-    next_depth = depth + (1 if nested_node else 0)
-    child_depths = [_max_nesting(child, next_depth) for child in ast.iter_child_nodes(node)]
-    return max([next_depth, *child_depths])
-
-
-def _function_index(path: Path) -> dict[str, ast.FunctionDef]:
-    module = ast.parse(path.read_text(encoding="utf-8"))
-    return {node.name: node for node in ast.walk(module) if isinstance(node, ast.FunctionDef)}
 
 
 def _contract_114_section(target: str) -> str:
@@ -466,8 +451,7 @@ def test_numba_arch_024_numba_sidecar_helper_signature_budget_closeout() -> None
     """ID: NUMBA_ARCH_024_numba_sidecar_helper_signature_budget_closeout."""
     failures = []
     for path in _NUMBA_IMPL_PATHS:
-        for name, node in _function_index(path).items():
-            count = _param_count(node)
+        for name, count in function_parameter_counts(path).items():
             if count > 10:
                 failures.append(f"{path.as_posix()}:{name} has {count} parameters")
     assert failures == []
@@ -478,8 +462,7 @@ def test_numba_arch_025_cleaned_numba_kernel_helpers_respect_nesting_budget() ->
     failures = []
     for path_text, name in _NUMBA_CLEANED_NESTING_FUNCTIONS:
         path = Path(path_text)
-        node = _function_index(path)[name]
-        depth = _max_nesting(node)
+        depth = function_control_depths(path)[name]
         if depth > 2:
             failures.append(f"{path.as_posix()}:{name} nesting={depth}")
     assert failures == []

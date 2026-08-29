@@ -6,7 +6,7 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
-from tal.core.schema import copy_dataset_attrs, merge_schema
+from tal.core.schema import merge_schema
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.spatial import Position
 from tal.spatial.conversion.finalize import allocate_free_dim_name, dataset_dim_names
@@ -167,8 +167,7 @@ def _assemble(components, *, labels, core_dim: str, old_core_dim: str, var_name:
     dim = xr.IndexVariable(core_dim, list(labels))
     arr = xr.concat(list(components), dim=dim).transpose(*_target_dims(ctx.data, old_core_dim=old_core_dim, new_core_dim=core_dim))
     arr.name = var_name
-    out = arr.to_dataset(name=var_name)
-    return copy_dataset_attrs(ctx.ds, out, validate=False)
+    return arr.to_dataset(name=var_name)
 
 
 def _to_geodetic(src: _Source, *, dst: str, validate: bool, owner: str):

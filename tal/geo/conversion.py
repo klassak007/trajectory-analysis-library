@@ -7,7 +7,8 @@ import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
-from tal.core.schema import copy_dataset_attrs, merge_schema
+from tal.core.orchestration.finalize import transfer_dataset_attrs
+from tal.core.schema import merge_schema
 from tal.core.orchestration.context import DatasetContext, DatasetContextOptions, resolve_dataset_context
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
@@ -101,13 +102,11 @@ def _assemble(
     core_dim: str,
     target_dims: tuple[str, ...],
     var_name: str,
-    attrs_source: xr.Dataset,
 ) -> xr.Dataset:
     dim = xr.IndexVariable(core_dim, list(labels))
     arr = xr.concat(list(components), dim=dim).transpose(*target_dims)
     arr.name = var_name
-    out = arr.to_dataset(name=var_name)
-    return copy_dataset_attrs(attrs_source, out, validate=False)
+    return arr.to_dataset(name=var_name)
 
 
 def _target_dims(data: xr.DataArray, *, old_core_dim: str, new_core_dim: str) -> tuple[str, ...]:
@@ -126,9 +125,10 @@ def _schema_spec(ctx: DatasetContext, *, core_dim: str) -> CoreSchemaFinalizeSpe
 
 def _finalize_core_schema(ctx: DatasetContext, ds: xr.Dataset, *, core_dim: str, validate: bool, owner: str) -> xr.Dataset:
     source = AnalysisObject._from_validated(ctx.ds)
+    candidate = transfer_dataset_attrs(ctx.ds, ds, validate=False)
     finalized = finalize_with_schema(
         source,
-        ds,
+        candidate,
         spec=_schema_spec(ctx, core_dim=core_dim),
         validate=validate,
         owner=owner,
@@ -217,7 +217,6 @@ def to_ecef(position: "GeodeticPosition", *, opts: GeodeticOptions | None = None
         core_dim=out_core_dim,
         target_dims=_target_dims(ctx.data, old_core_dim=core_dim, new_core_dim=out_core_dim),
         var_name=ctx.var_name,
-        attrs_source=ctx.ds,
     )
     ds = _finalize_core_schema(ctx, ds, core_dim=out_core_dim, validate=validate, owner=owner)
     ds = set_position_rep(ds, rep="cart", validate=False, owner=owner)
@@ -316,7 +315,6 @@ def from_ecef(value: object, *, opts: GeodeticOptions | None = None, validate: b
         core_dim=out_core_dim,
         target_dims=_target_dims(ctx.data, old_core_dim=core_dim, new_core_dim=out_core_dim),
         var_name=ctx.var_name,
-        attrs_source=ctx.ds,
     )
     ds = _finalize_core_schema(ctx, ds, core_dim=out_core_dim, validate=validate, owner=owner)
     ds = merge_schema(ds, {"ext": {"geo": None}}, validate=False)

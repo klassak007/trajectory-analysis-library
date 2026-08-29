@@ -10,6 +10,7 @@ from .schema_errors import schema_error
 from .schema_validate.common import ALLOWED_LAYOUTS
 from .schema_validate import SCHEMA_VERSION
 from .schema_validate import validate_schema as _validate_schema
+from .schema_validate.finalize import _replace_dataset_attrs_with_tal
 
 
 class UnsetType:
@@ -38,9 +39,9 @@ def _require_dataset(ds: Any, *, owner: str) -> xr.Dataset:
     raise TypeError(f"{owner} expects xr.Dataset, got {type(ds).__name__}.")
 
 
-def _copy_tal(ds: xr.Dataset) -> dict[str, Any]:
+def _tal_mapping(ds: xr.Dataset) -> Mapping[str, Any] | None:
     if "tal" not in ds.attrs:
-        return {}
+        return None
     tal = ds.attrs["tal"]
     if not isinstance(tal, Mapping):
         raise schema_error(
@@ -50,15 +51,20 @@ def _copy_tal(ds: xr.Dataset) -> dict[str, Any]:
             actual=type(tal).__name__,
             hint="set ds.attrs['tal'] to a mapping payload",
         )
-    return deepcopy(dict(tal))
+    return tal
+
+
+def _copy_tal(ds: xr.Dataset) -> dict[str, Any]:
+    tal = _tal_mapping(ds)
+    return {} if tal is None else deepcopy(dict(tal))
 
 
 def _with_schema(ds: xr.Dataset, tal_schema: Mapping[str, Any]) -> xr.Dataset:
-    out = ds.copy(deep=False)
-    attrs = dict(out.attrs)
-    attrs["tal"] = deepcopy(dict(tal_schema))
-    out.attrs = attrs
-    return out
+    return _replace_dataset_attrs_with_tal(
+        ds,
+        ordinary_attrs=ds.attrs,
+        tal=tal_schema,
+    )
 
 
 def _apply_writer(
@@ -73,70 +79,22 @@ def _apply_writer(
     return _validate_schema(candidate)
 
 
-def copy_dataset_attrs(
+def _transfer_dataset_attrs_for_finalize(
     source: xr.Dataset,
     target: xr.Dataset,
     *,
-    validate: bool = True,
+    validate: bool,
 ) -> xr.Dataset:
-    """Copy dataset attrs while routing the TAL schema through its writer.
-
-    Parameters
-    ----------
-    source : xr.Dataset
-        Dataset whose complete attrs mapping is copied.
-    target : xr.Dataset
-        Dataset that receives the copied attrs without payload duplication.
-    validate : bool, optional
-        Whether to validate the resulting TAL schema.
-
-    Returns
-    -------
-    xr.Dataset
-        A shallow target copy carrying the source's ordinary attrs and an
-        isolated copy of its TAL schema.
-
-    Raises
-    ------
-    TypeError
-        If either input is not an ``xarray.Dataset``.
-    ValueError
-        If the source TAL payload or resulting schema is invalid. TAL raises
-        its ``tal.core.SchemaError`` subtype for these failures.
-
-    Notes
-    -----
-    This owner is intended for kernels that construct a fresh dataset while
-    preserving source metadata. It replaces the target attrs rather than
-    merging ordinary attrs. The input datasets are not mutated.
-
-    Examples
-    --------
-    >>> import xarray as xr
-    >>> from tal.core import copy_dataset_attrs, set_roles
-    >>> source = xr.Dataset(
-    ...     {"value": ("sample", [1.0])},
-    ...     attrs={"note": "source"},
-    ... )
-    >>> source = set_roles(source, sequence_dim="sample", core_dims=())
-    >>> target = xr.Dataset({"result": ("sample", [2.0])})
-    >>> out = copy_dataset_attrs(source, target)
-    >>> (out.attrs["note"], out.attrs["tal"]["core"]["roles"]["sequence_dim"])
-    ('source', 'sample')
-    """
-    source_ds = _require_dataset(source, owner="copy_dataset_attrs")
-    target_ds = _require_dataset(target, owner="copy_dataset_attrs")
-    has_schema = "tal" in source_ds.attrs
-    tal_schema = _copy_tal(source_ds) if has_schema else None
-    out = target_ds.copy(deep=False)
-    out.attrs = {
-        name: value for name, value in source_ds.attrs.items() if name != "tal"
-    }
-    if tal_schema is not None:
-        return _apply_writer(out, tal_schema, validate=validate)
-    if validate:
-        return _validate_schema(out)
-    return out
+    """Implement the schema-owned half of finalization attribute transfer."""
+    source_ds = _require_dataset(source, owner="transfer_dataset_attrs")
+    target_ds = _require_dataset(target, owner="transfer_dataset_attrs")
+    tal_schema = _tal_mapping(source_ds)
+    out = _replace_dataset_attrs_with_tal(
+        target_ds,
+        ordinary_attrs=source_ds.attrs,
+        tal=tal_schema,
+    )
+    return _validate_schema(out) if validate else out
 
 
 def _is_bootstrap_schema(tal_schema: Mapping[str, Any]) -> bool:

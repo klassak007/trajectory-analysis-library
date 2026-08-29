@@ -4,7 +4,11 @@ import ast
 import re
 from pathlib import Path
 
-from tests.architecture._budget import function_loc
+from tests.architecture._budget import (
+    function_control_depths,
+    function_loc,
+    function_parameter_counts,
+)
 
 
 def _function_node(path: str, name: str) -> ast.FunctionDef:
@@ -13,16 +17,6 @@ def _function_node(path: str, name: str) -> ast.FunctionDef:
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return node
     raise AssertionError(f"function {name!r} not found in {path}")
-
-
-def _max_nesting(node: ast.AST, depth: int = 0) -> int:
-    nested = []
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.Match, ast.AsyncFor)):
-            nested.append(_max_nesting(child, depth + 1))
-            continue
-        nested.append(_max_nesting(child, depth))
-    return max([depth, *nested]) if nested else depth
 
 
 def test_arch_agents_006_hotspot_function_length_budget_guard() -> None:
@@ -44,8 +38,9 @@ def test_arch_agents_006_hotspot_function_length_budget_guard() -> None:
 
 def test_arch_agents_007_hotspot_param_count_budget_guard() -> None:
     """ID: ARCH_AGENTS_007_hotspot_param_count_budget_guard."""
-    node = _function_node("tal/core/param_engine/numeric_rows.py", "_apply_linear_value")
-    params = len(node.args.args) + len(node.args.kwonlyargs)
+    params = function_parameter_counts(
+        "tal/core/param_engine/numeric_rows.py"
+    )["_apply_linear_value"]
     assert params <= 10, f"numeric_rows._apply_linear_value exceeds parameter budget ({params} > 10)"
 
 
@@ -57,7 +52,7 @@ def test_arch_agents_008_non_deferred_nesting_hotspot_guard() -> None:
         ("tal/core/combine_ops/merge.py", "_merge_override_left_biased_fill_holes"),
     ]
     for path, name in checks:
-        depth = _max_nesting(_function_node(path, name))
+        depth = function_control_depths(path)[name]
         assert depth <= 2, f"{path}:{name} exceeds nesting guard ({depth} > 2)"
 
 
@@ -69,8 +64,34 @@ def test_arch_agents_009_non_deferred_nesting_reopened_hotspots_guard() -> None:
         ("tal/core/combine_ops/metadata.py", "resolve_core_dims"),
     ]
     for path, name in checks:
-        depth = _max_nesting(_function_node(path, name))
+        depth = function_control_depths(path)[name]
         assert depth <= 2, f"{path}:{name} exceeds nesting guard ({depth} > 2)"
+
+
+def test_arch_agents_011_shared_nesting_owner_counts_exception_groups() -> None:
+    """ID: ARCH_AGENTS_011_shared_nesting_owner_counts_exception_groups."""
+    source = """
+def nested_exception_group_handler():
+    try:
+        operation()
+    except* Exception:
+        if condition:
+            for item in items:
+                consume(item)
+"""
+    assert function_control_depths(source=source) == {
+        "nested_exception_group_handler": 3
+    }
+    duplicates = []
+    for path in Path("tests/architecture").glob("*.py"):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_max_nesting"
+            for node in ast.walk(module)
+        ):
+            duplicates.append(path.as_posix())
+    assert duplicates == []
 
 
 def test_arch_agents_010_unique_numeric_regression_id_prefix_guard() -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -10,6 +9,7 @@ from tal.core.reducer_ops.dims import resolve_reduce_dims
 from tal.core.reducer_ops.types import DimLike, WeightInput
 from tal.core.reducer_ops.validity import apply_structural_mask, reduce_missing_on_valid_prefix, resolve_structural_valid_mask
 from tal.core.reducer_ops.weights import coerce_aligned_weights, validate_weight_values
+from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.orchestration.schema_finalize import (
     CoreSchemaFinalizeSpec,
     finalize_with_schema,
@@ -20,7 +20,6 @@ from tal.core.orchestration.runtime_checks import (
     require_var_contains_dims,
     select_single_numeric_var,
 )
-from tal.core.schema import merge_schema
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.utils.xarray_namespace import unique_temp_dim
 
@@ -157,15 +156,11 @@ def _finalize_rotation_reduce(
     reduced: xr.DataArray,
     source: xr.DataArray,
     reduce_dims: tuple[str, ...],
-    mask: xr.DataArray | None,
-    skipna: bool,
     owner: str,
     validate: bool,
 ) -> "Rotation":
-    if not skipna:
-        poison = reduce_missing_on_valid_prefix(source, reduce_dims=reduce_dims, mask=mask)
-        reduced = reduced.where(~poison)
-    candidate = _build_rotation_reduce_dataset(ds, var_name=var_name, reduced=reduced)
+    candidate = _build_rotation_reduce_dataset(var_name=var_name, reduced=reduced)
+    candidate = transfer_dataset_attrs(ds, candidate, validate=False)
     spec = _resolve_rotation_reduce_spec(ds, reduced=reduced, reduce_dims=reduce_dims)
     return finalize_with_schema(
         rotation,
@@ -177,35 +172,31 @@ def _finalize_rotation_reduce(
     )
 
 
-def _copy_non_tal_attrs(source: xr.Dataset, target: xr.Dataset) -> xr.Dataset:
-    attrs = {name: value for name, value in source.attrs.items() if name != "tal"}
-    if not attrs:
-        return target
-    return target.assign_attrs(attrs)
-
-
-def _source_ext_patch(ds: xr.Dataset) -> Mapping[str, object] | None:
-    tal = ds.attrs.get("tal")
-    if not isinstance(tal, Mapping):
-        return None
-    ext = tal.get("ext")
-    if not isinstance(ext, Mapping):
-        return None
-    return {"ext": dict(ext)}
+def _apply_rotation_reduce_missing_policy(
+    reduced: xr.DataArray,
+    source: xr.DataArray,
+    *,
+    reduce_dims: tuple[str, ...],
+    mask: xr.DataArray | None,
+    skipna: bool,
+) -> xr.DataArray:
+    if skipna:
+        return reduced
+    poison = reduce_missing_on_valid_prefix(
+        source,
+        reduce_dims=reduce_dims,
+        mask=mask,
+    )
+    return reduced.where(~poison)
 
 
 def _build_rotation_reduce_dataset(
-    source_ds: xr.Dataset,
     *,
     var_name: str,
     reduced: xr.DataArray,
 ) -> xr.Dataset:
     reduced_arr = reduced if reduced.name == var_name else reduced.rename(var_name)
-    candidate = _copy_non_tal_attrs(source_ds, reduced_arr.to_dataset(name=var_name))
-    ext_patch = _source_ext_patch(source_ds)
-    if ext_patch is None:
-        return candidate
-    return merge_schema(candidate, ext_patch, validate=False)
+    return reduced_arr.to_dataset(name=var_name)
 
 
 def _resolve_rotation_reduce_spec(
@@ -249,6 +240,13 @@ def _reduce_one_dim(
         owner=owner,
     )
     reduced = _execute_quat_reduce(masked, prepared_weight, dim=dim, quat_dim=quat_dim)
+    reduced = _apply_rotation_reduce_missing_policy(
+        reduced,
+        source,
+        reduce_dims=(dim,),
+        mask=mask,
+        skipna=skipna,
+    )
     return _finalize_rotation_reduce(
         rotation,
         ds,
@@ -256,8 +254,6 @@ def _reduce_one_dim(
         reduced=reduced,
         source=source,
         reduce_dims=(dim,),
-        mask=mask,
-        skipna=skipna,
         owner=owner,
         validate=validate,
     )
@@ -289,6 +285,13 @@ def _reduce_multi_dim(
         owner=owner,
     )
     reduced = _execute_quat_reduce(stacked_masked, stacked_weight, dim=reduce_axis, quat_dim=quat_dim)
+    reduced = _apply_rotation_reduce_missing_policy(
+        reduced,
+        source,
+        reduce_dims=reduce_dims,
+        mask=mask,
+        skipna=skipna,
+    )
     return _finalize_rotation_reduce(
         rotation,
         ds,
@@ -296,8 +299,6 @@ def _reduce_multi_dim(
         reduced=reduced,
         source=source,
         reduce_dims=reduce_dims,
-        mask=mask,
-        skipna=skipna,
         owner=owner,
         validate=validate,
     )
