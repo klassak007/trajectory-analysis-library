@@ -18,6 +18,8 @@ def test_user_guide_registry_is_resolved() -> None:
 
 @pytest.mark.parametrize("example_id", tuple(sorted(iter_user_guide_example_ids())))
 def test_user_guide_example_executes(example_id: str) -> None:
+    if example_id == "UG-ASTRO-DIRECTION":
+        pytest.importorskip("astropy")
     USER_GUIDE_EXECUTABLE_EXAMPLES[example_id]()
 
 

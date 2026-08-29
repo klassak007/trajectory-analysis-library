@@ -73,6 +73,72 @@ def _apply_writer(
     return _validate_schema(candidate)
 
 
+def copy_dataset_attrs(
+    source: xr.Dataset,
+    target: xr.Dataset,
+    *,
+    validate: bool = True,
+) -> xr.Dataset:
+    """Copy dataset attrs while routing the TAL schema through its writer.
+
+    Parameters
+    ----------
+    source : xr.Dataset
+        Dataset whose complete attrs mapping is copied.
+    target : xr.Dataset
+        Dataset that receives the copied attrs without payload duplication.
+    validate : bool, optional
+        Whether to validate the resulting TAL schema.
+
+    Returns
+    -------
+    xr.Dataset
+        A shallow target copy carrying the source's ordinary attrs and an
+        isolated copy of its TAL schema.
+
+    Raises
+    ------
+    TypeError
+        If either input is not an ``xarray.Dataset``.
+    ValueError
+        If the source TAL payload or resulting schema is invalid. TAL raises
+        its ``tal.core.SchemaError`` subtype for these failures.
+
+    Notes
+    -----
+    This owner is intended for kernels that construct a fresh dataset while
+    preserving source metadata. It replaces the target attrs rather than
+    merging ordinary attrs. The input datasets are not mutated.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> from tal.core import copy_dataset_attrs, set_roles
+    >>> source = xr.Dataset(
+    ...     {"value": ("sample", [1.0])},
+    ...     attrs={"note": "source"},
+    ... )
+    >>> source = set_roles(source, sequence_dim="sample", core_dims=())
+    >>> target = xr.Dataset({"result": ("sample", [2.0])})
+    >>> out = copy_dataset_attrs(source, target)
+    >>> (out.attrs["note"], out.attrs["tal"]["core"]["roles"]["sequence_dim"])
+    ('source', 'sample')
+    """
+    source_ds = _require_dataset(source, owner="copy_dataset_attrs")
+    target_ds = _require_dataset(target, owner="copy_dataset_attrs")
+    has_schema = "tal" in source_ds.attrs
+    tal_schema = _copy_tal(source_ds) if has_schema else None
+    out = target_ds.copy(deep=False)
+    out.attrs = {
+        name: value for name, value in source_ds.attrs.items() if name != "tal"
+    }
+    if tal_schema is not None:
+        return _apply_writer(out, tal_schema, validate=validate)
+    if validate:
+        return _validate_schema(out)
+    return out
+
+
 def _is_bootstrap_schema(tal_schema: Mapping[str, Any]) -> bool:
     core = tal_schema.get("core")
     if not isinstance(core, Mapping) or core:

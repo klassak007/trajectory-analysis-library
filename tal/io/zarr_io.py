@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import xarray as xr
 
-from tal.core.schema_validate import validate_schema_structure
+from tal.core.schema_validate import validate_schema, validate_schema_structure
 
+from .adapter_cleanup import suppress_cleanup_during_active_error
 from .finalize import finalize_loaded_dataset
 from .options import AOZarrReadOptions, AOZarrWriteOptions, coerce_zarr_read_options, coerce_zarr_write_options
 
@@ -28,23 +30,78 @@ def _zarr_read_kwargs(opts: AOZarrReadOptions) -> dict[str, Any]:
     return out
 
 
-def _materialize_zarr_validity_coord(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
+def _materialize_zarr_validity_coord(
+    ds: xr.Dataset,
+    *,
+    owner: str,
+    payload_label: str,
+) -> xr.Dataset:
     try:
         size_name = validate_schema_structure(ds)
     except ValueError as exc:
-        raise ValueError(f"{owner}: invalid persisted schema payload.") from exc
+        raise ValueError(f"{owner}: invalid {payload_label} schema payload.") from exc
     if size_name is None or size_name not in ds.coords:
         return ds
-    coord = ds.coords[size_name]
-    if getattr(coord.data, "chunks", None) is None:
+    variable = ds.coords[size_name].variable
+    if variable._in_memory:
         return ds
     try:
-        loaded = coord.variable.compute()
+        loaded = variable.compute()
     except Exception as exc:  # pragma: no cover - backend read failure envelope.
         raise ValueError(
-            f"{owner}: failed reading persisted sequence_size_coord {size_name!r}."
+            f"{owner}: failed reading {payload_label} sequence_size_coord {size_name!r}."
         ) from exc
     return ds.assign_coords({size_name: loaded})
+
+
+def _validate_zarr_write_dataset(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
+    prepared = _materialize_zarr_validity_coord(
+        ds,
+        owner=owner,
+        payload_label="AnalysisObject",
+    )
+    try:
+        return validate_schema(prepared)
+    except ValueError as exc:
+        raise ValueError(f"{owner}: invalid AnalysisObject schema payload.") from exc
+
+
+def _transfer_zarr_close_ownership(
+    ao: "AnalysisObject",
+    *,
+    source: xr.Dataset,
+) -> "AnalysisObject":
+    target = ao.unsafe_data
+    if target is source:
+        return ao
+    target_close = getattr(target, "_close", None)
+    if target_close is None:
+        target.set_close(source.close)
+        return ao
+    target.set_close(_compose_zarr_close(target_close, source.close))
+    return ao
+
+
+def _compose_zarr_close(
+    primary: Callable[[], None],
+    cleanup: Callable[[], None],
+) -> Callable[[], None]:
+    """Compose target and backend ownership with idempotent cleanup precedence."""
+    closed = False
+
+    def close() -> None:
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        try:
+            primary()
+        except BaseException:
+            suppress_cleanup_during_active_error(cleanup)
+            raise
+        cleanup()
+
+    return close
 
 
 def write_analysis_object_zarr(
@@ -57,7 +114,11 @@ def write_analysis_object_zarr(
     options = coerce_zarr_write_options(opts, owner=owner)
     if not isinstance(store, str) or not store:
         raise TypeError(f"{owner}: store must be a non-empty string path.")
-    return ao.unsafe_data.to_zarr(store, **_zarr_write_kwargs(options))
+    ds = _validate_zarr_write_dataset(ao.unsafe_data, owner=owner)
+    try:
+        return ds.to_zarr(store, **_zarr_write_kwargs(options))
+    except Exception as exc:  # pragma: no cover - backend-specific failure envelope.
+        raise ValueError(f"{owner}: failed writing zarr store {store!r}.") from exc
 
 
 def read_analysis_object_zarr(
@@ -75,8 +136,17 @@ def read_analysis_object_zarr(
         ds = xr.open_zarr(store, **_zarr_read_kwargs(options))
     except Exception as exc:  # pragma: no cover - backend-specific failure envelope.
         raise ValueError(f"{owner}: failed reading zarr store {store!r}.") from exc
-    ds = _materialize_zarr_validity_coord(ds, owner=owner)
-    return finalize_loaded_dataset(cls, ds, validate=validate, owner=owner)
+    try:
+        prepared = _materialize_zarr_validity_coord(
+            ds,
+            owner=owner,
+            payload_label="persisted",
+        )
+        loaded = finalize_loaded_dataset(cls, prepared, validate=validate, owner=owner)
+        return _transfer_zarr_close_ownership(loaded, source=ds)
+    except BaseException:
+        suppress_cleanup_during_active_error(ds.close)
+        raise
 
 
 __all__ = ["read_analysis_object_zarr", "write_analysis_object_zarr"]

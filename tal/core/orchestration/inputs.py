@@ -7,8 +7,57 @@ from collections.abc import Sequence
 import numpy as np
 import xarray as xr
 
+from ..schema_errors import SchemaError, schema_error
 from .alignment_intent import read_alignment_intent
 from .broadcast_intent import read_broadcast_intent
+
+
+def _coerce_external_analysis_object(
+    value: xr.Dataset | xr.DataArray,
+    *,
+    owner: str,
+    item: str,
+) -> "AnalysisObject":
+    from ..analysis_object import AnalysisObject
+
+    try:
+        return AnalysisObject(value)
+    except SchemaError as exc:
+        context = _external_input_context(owner=owner, item=item)
+        raise schema_error(
+            code=exc.code,
+            path=exc.path,
+            expected=exc.expected,
+            actual=exc.actual,
+            hint=f"{context}. {exc.hint}",
+        ) from exc
+    except Exception as exc:
+        context = _external_input_context(owner=owner, item=item)
+        raise ValueError(f"{context}.") from exc
+
+
+def _external_input_context(*, owner: str, item: str) -> str:
+    if item == "input":
+        return f"{owner}: invalid xarray AnalysisObject input"
+    return f"{owner}: invalid {item} xarray AnalysisObject input"
+
+
+def _coerce_analysis_object_item(
+    value: object,
+    *,
+    owner: str,
+    item: str,
+) -> "AnalysisObject":
+    from ..analysis_object import AnalysisObject
+
+    if isinstance(value, AnalysisObject):
+        _ = read_broadcast_intent(value, owner=owner, label=item)
+        _ = read_alignment_intent(value, owner=owner, label=item)
+        return value
+    if isinstance(value, (xr.Dataset, xr.DataArray)):
+        return _coerce_external_analysis_object(value, owner=owner, item=item)
+    expected = "AnalysisObject, xr.Dataset, or xr.DataArray"
+    raise TypeError(f"{owner}: invalid {item}; expected {expected}; got {type(value).__name__}.")
 
 
 def coerce_analysis_object_input(
@@ -40,6 +89,8 @@ def coerce_analysis_object_input(
     TypeError
         If ``value`` is not an ``AnalysisObject``, ``xarray.Dataset``, or
         ``xarray.DataArray``.
+    ValueError
+        If an xarray layout cannot be represented as an ``AnalysisObject``.
 
     Notes
     -----
@@ -59,19 +110,16 @@ def coerce_analysis_object_input(
     """
     from ..analysis_object import AnalysisObject
 
-    if isinstance(value, AnalysisObject):
-        label = "input" if index is None else f"operand {index}"
-        _ = read_broadcast_intent(value, owner=owner, label=label)
-        _ = read_alignment_intent(value, owner=owner, label=label)
-        return value
-    if isinstance(value, (xr.Dataset, xr.DataArray)):
-        return AnalysisObject(value)
     expected = "AnalysisObject, xr.Dataset, or xr.DataArray"
-    if index is None:
-        raise TypeError(f"{owner}: expected {expected}; got {type(value).__name__}.")
-    raise TypeError(
-        f"{owner}: invalid input at index {index}; expected {expected}; got {type(value).__name__}."
-    )
+    if not isinstance(value, (AnalysisObject, xr.Dataset, xr.DataArray)):
+        if index is None:
+            raise TypeError(f"{owner}: expected {expected}; got {type(value).__name__}.")
+        raise TypeError(
+            f"{owner}: invalid input at index {index}; expected {expected}; "
+            f"got {type(value).__name__}."
+        )
+    item = "input" if index is None else f"operand {index}"
+    return _coerce_analysis_object_item(value, owner=owner, item=item)
 
 
 def normalize_analysis_object_inputs(
@@ -167,10 +215,10 @@ def coerce_operand(
     """
     if allow_scalar and np.isscalar(value):
         return None if return_scalar_none else value
+    item = role if label is None else f"{label} {role}"
     try:
-        return coerce_analysis_object_input(value, owner=owner)
+        return _coerce_analysis_object_item(value, owner=owner, item=item)
     except TypeError as exc:
-        item = role if label is None else f"{label} {role}"
         expected = "AnalysisObject, xr.Dataset, or xr.DataArray"
         if allow_scalar:
             expected = f"{expected}, or scalar"

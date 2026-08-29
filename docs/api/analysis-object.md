@@ -79,7 +79,7 @@ need to inspect the exact backing store or schema consumed by operations.
 | `ao.combine` | Schema-aware concat, merge, align, and core assembly operations. |
 | `ao.components` | Component registry definition, extraction, patching, and composition. |
 | `ao.frames` | Frame ID metadata and runtime graph bridge operations. |
-| `ao.io` | AO-direct persistence to Zarr and CSV. |
+| `ao.io` | Canonical AO-direct persistence to Zarr. |
 | `ao.viz` | Optional plotting and explorer helpers. |
 
 ## Structural Operations
@@ -147,10 +147,10 @@ Use these when semantics are discovered after construction. Prefer
 
 ```python
 AnalysisObject.from_zarr(...)
-AnalysisObject.from_csv(...)
 ```
 
-Class loaders restore AO-direct persisted formats. See {doc}`io`.
+Zarr is the AO-direct persistence format. CSV is available only through the
+lossy log adapters described in {doc}`io`.
 
 ## Operator Overloads
 

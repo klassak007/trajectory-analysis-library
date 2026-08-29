@@ -11,6 +11,7 @@ from tal.utils.xarray_namespace import dataarray_namespace_names, dataset_namesp
 
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from ..param_ops.types import ParamEvalOptions
+from ..schema import copy_dataset_attrs
 from .boundary import EventBoundaryPayload, extract_event_boundaries
 from .boundary_select import select_event_boundaries
 from .evaluate import evaluate_mask
@@ -377,9 +378,7 @@ def _attach_metadata_and_size(
 
 
 def _with_source_schema_attrs(ds: xr.Dataset, *, source: "AnalysisObject") -> xr.Dataset:
-    out = ds.copy(deep=False)
-    out.attrs = dict(source.unsafe_data.attrs)
-    return out
+    return copy_dataset_attrs(source.unsafe_data, ds, validate=False)
 
 
 def _anchor_table(

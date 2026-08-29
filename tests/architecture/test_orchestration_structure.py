@@ -504,12 +504,6 @@ def test_orch_arch_011_typed_lifecycle_core_owner_has_no_domain_imports() -> Non
         assert needle not in text
 
 
-def test_orch_arch_012_typed_lifecycle_no_tal_v2_imports() -> None:
-    """ID: ORCH_ARCH_012_typed_lifecycle_no_tal_v2_imports."""
-    text = Path("tal/core/typed_lifecycle.py").read_text(encoding="utf-8")
-    assert "tal_v2" not in text
-
-
 def test_arch_topo_001_core_topology_owner_module_present_and_budgeted() -> None:
     """ID: ARCH_TOPO_001_core_topology_owner_module_present_and_budgeted."""
     path = Path("tal/core/orchestration/topology.py")

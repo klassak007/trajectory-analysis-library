@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
-MetadataChannel = Literal["sidecar_json"]
 PromotionScalarTarget = Literal["attrs", "batch_coord", "none"]
 PromotionNonScalarTarget = Literal["none", "attrs"]
 TimeMonotonicOrder = Literal["nondecreasing", "strict"]
 InvalidTimePolicy = Literal["fail", "drop"]
 RosTimestampSource = Literal["auto", "header", "receive"]
+ZarrWriteMode = Literal["w", "w-"]
 
 
 @dataclass(frozen=True)
 class AOZarrWriteOptions:
-    mode: str | None = None
+    mode: ZarrWriteMode | None = None
     consolidated: bool | None = None
 
 
@@ -21,19 +21,6 @@ class AOZarrWriteOptions:
 class AOZarrReadOptions:
     consolidated: bool | None = None
     chunks: object | None = None
-
-
-@dataclass(frozen=True)
-class AOCsvWriteOptions:
-    metadata_channel: MetadataChannel = "sidecar_json"
-    metadata_path: str | None = None
-    float_format: str | None = None
-
-
-@dataclass(frozen=True)
-class AOCsvReadOptions:
-    metadata_channel: MetadataChannel = "sidecar_json"
-    metadata_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -50,7 +37,8 @@ class CsvIngestOptions:
     -----
     ``time_col`` identifies the input column used as the AO parameter
     coordinate. ``value_columns`` can restrict which numeric columns become AO
-    data variables.
+    data variables. Ingestion constructs a new AO from the selected columns; it
+    is not an inverse of CSV log export.
 
     Examples
     --------
@@ -60,7 +48,7 @@ class CsvIngestOptions:
     >>> with tempfile.TemporaryDirectory() as tmpdir:
     ...     path = Path(tmpdir) / "run.csv"
     ...     _ = path.write_text("time,value\\n0.0,1.0\\n1.0,2.0\\n", encoding="utf-8")
-    ...     ao = read_csv_logs(path, opts=CsvIngestOptions(time_col="time"))
+    ...     ao = read_csv_logs(str(path), opts=CsvIngestOptions(time_col="time"))
     >>> ao.unsafe_data.sizes["sample"]
     2
     """
@@ -88,8 +76,10 @@ class CsvExportOptions:
 
     Notes
     -----
-    ``sequence_size_coord`` controls which validity coordinate is exported for
-    ragged left-packed sequences.
+    ``sequence_size_coord`` selects the validity coordinate whose values
+    determine the exported row count for each ragged left-packed sequence. The
+    validity coordinate itself is not exported. Export is a lossy tabular
+    projection and does not preserve arbitrary xarray or TAL metadata.
 
     Examples
     --------
@@ -98,9 +88,19 @@ class CsvExportOptions:
     >>> import xarray as xr
     >>> from tal.core import AnalysisObject
     >>> from tal.io import CsvExportOptions, write_csv_logs
-    >>> ao = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
+    >>> ds = xr.Dataset(
+    ...     {"value": (("trial", "sample"), [[1.0]])},
+    ...     coords={"trial": ["run"], "sample": [0]},
+    ... )
+    >>> ao = AnalysisObject.from_data(
+    ...     ds,
+    ...     sequence_dim="sample",
+    ...     batch_dims=("trial",),
+    ...     core_dims=(),
+    ...     validate=True,
+    ... )
     >>> with tempfile.TemporaryDirectory() as tmpdir:
-    ...     write_csv_logs(ao, tmpdir, opts=CsvExportOptions(float_format="%.1f"))
+    ...     _ = write_csv_logs(ao, tmpdir, opts=CsvExportOptions(float_format="%.1f"))
     ...     exported = sorted(Path(tmpdir).glob("*.csv"))
     >>> bool(exported)
     True
@@ -117,7 +117,8 @@ class RosIngestOptions:
     Notes
     -----
     These options describe topic and timestamp handling for ROS-style adapters.
-    Readers consume the options at the ingestion boundary.
+    The selected timestamp source is normalized exactly to signed int64 Unix
+    nanoseconds at the ingestion boundary.
 
     Examples
     --------
@@ -143,18 +144,46 @@ class RosIngestOptions:
     )
 
 
-def _coerce_metadata_channel(channel: str, *, owner: str) -> MetadataChannel:
-    if channel != "sidecar_json":
-        raise ValueError(f"{owner}: metadata_channel must be 'sidecar_json'; got {channel!r}.")
-    return channel
-
-
-def _coerce_optional_path(path: str | None, *, owner: str, field_name: str) -> str | None:
-    if path is None:
+def _coerce_float_format(value: str | None, *, owner: str) -> str | None:
+    if value is None:
         return None
-    if not isinstance(path, str) or not path:
-        raise ValueError(f"{owner}: {field_name} must be a non-empty string when provided.")
-    return path
+    if type(value) is not str:
+        raise TypeError(f"{owner}: float_format must be a built-in string or None.")
+    return value
+
+
+def _coerce_bool(value: object, *, owner: str, field_name: str) -> bool:
+    if type(value) is not bool:
+        value_type = type(value)
+        type_name = value_type.__name__
+        if value_type.__module__ != "builtins":
+            type_name = f"{value_type.__module__}.{type_name}"
+        raise TypeError(f"{owner}: {field_name} must be bool (built-in); got {type_name}.")
+    return value is True
+
+
+def _coerce_optional_bool(
+    value: object,
+    *,
+    owner: str,
+    field_name: str,
+) -> bool | None:
+    if value is None:
+        return None
+    return _coerce_bool(value, owner=owner, field_name=field_name)
+
+
+def _coerce_zarr_write_mode(value: object, *, owner: str) -> ZarrWriteMode | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}: mode must be a string or None.")
+    if value not in {"w", "w-"}:
+        raise ValueError(
+            f"{owner}: mode must be 'w', 'w-', or None; got {value!r}. "
+            "Incremental Zarr mutation is not supported by AO-direct persistence."
+        )
+    return cast(ZarrWriteMode, value)
 
 
 def _coerce_non_empty_name(value: str, *, owner: str, field_name: str) -> str:
@@ -167,6 +196,34 @@ def _coerce_optional_name(value: str | None, *, owner: str, field_name: str) -> 
     if value is None:
         return None
     return _coerce_non_empty_name(value, owner=owner, field_name=field_name)
+
+
+def _coerce_adapter_layout_names(
+    *,
+    batch_dim: str,
+    sequence_dim: str,
+    sequence_size_coord: str,
+    param_coord: str,
+    owner: str,
+) -> tuple[str, str, str, str]:
+    raw_names = (
+        ("batch_dim", batch_dim),
+        ("sequence_dim", sequence_dim),
+        ("sequence_size_coord", sequence_size_coord),
+        ("param_coord", param_coord),
+    )
+    names = tuple(
+        (field_name, _coerce_non_empty_name(value, owner=owner, field_name=field_name))
+        for field_name, value in raw_names
+    )
+    owners: dict[str, str] = {}
+    for field_name, name in names:
+        if name in owners:
+            raise ValueError(
+                f"{owner}: {owners[name]} and {field_name} must be distinct; both are {name!r}."
+            )
+        owners[name] = field_name
+    return names[0][1], names[1][1], names[2][1], names[3][1]
 
 
 def _coerce_name_tuple(
@@ -201,40 +258,78 @@ def _first_duplicate(names: list[str]) -> str | None:
     return None
 
 
-def _coerce_scalar_target(value: str, *, owner: str) -> PromotionScalarTarget:
-    if value not in {"attrs", "batch_coord", "none"}:
-        raise ValueError(
-            f"{owner}: scalar_target must be one of 'attrs', 'batch_coord', or 'none'; got {value!r}."
-        )
+def _coerce_choice(
+    value: object,
+    *,
+    choices: tuple[str, ...],
+    owner: str,
+    field_name: str,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}: {field_name} must be a string; got {type(value).__name__}.")
+    if value not in choices:
+        raise ValueError(f"{owner}: {field_name} must be one of {choices!r}; got {value!r}.")
     return value
 
 
-def _coerce_nonscalar_target(value: str, *, owner: str) -> PromotionNonScalarTarget:
-    if value not in {"none", "attrs"}:
-        raise ValueError(f"{owner}: nonscalar_target must be 'none' or 'attrs'; got {value!r}.")
-    return value
+def _coerce_scalar_target(value: object, *, owner: str) -> PromotionScalarTarget:
+    return cast(
+        PromotionScalarTarget,
+        _coerce_choice(
+            value,
+            choices=("attrs", "batch_coord", "none"),
+            owner=owner,
+            field_name="scalar_target",
+        ),
+    )
 
 
-def _coerce_monotonic_order(value: str, *, owner: str) -> TimeMonotonicOrder:
-    if value not in {"nondecreasing", "strict"}:
-        raise ValueError(
-            f"{owner}: monotonic_order must be one of 'nondecreasing' or 'strict'; got {value!r}."
-        )
-    return value
+def _coerce_nonscalar_target(value: object, *, owner: str) -> PromotionNonScalarTarget:
+    return cast(
+        PromotionNonScalarTarget,
+        _coerce_choice(
+            value,
+            choices=("none", "attrs"),
+            owner=owner,
+            field_name="nonscalar_target",
+        ),
+    )
 
 
-def _coerce_invalid_time(value: str, *, owner: str) -> InvalidTimePolicy:
-    if value not in {"fail", "drop"}:
-        raise ValueError(f"{owner}: invalid_time must be 'fail' or 'drop'; got {value!r}.")
-    return value
+def _coerce_monotonic_order(value: object, *, owner: str) -> TimeMonotonicOrder:
+    return cast(
+        TimeMonotonicOrder,
+        _coerce_choice(
+            value,
+            choices=("nondecreasing", "strict"),
+            owner=owner,
+            field_name="monotonic_order",
+        ),
+    )
 
 
-def _coerce_ros_timestamp_source(value: str, *, owner: str) -> RosTimestampSource:
-    if value not in {"auto", "header", "receive"}:
-        raise ValueError(
-            f"{owner}: timestamp_source must be one of 'auto', 'header', or 'receive'; got {value!r}."
-        )
-    return value
+def _coerce_invalid_time(value: object, *, owner: str) -> InvalidTimePolicy:
+    return cast(
+        InvalidTimePolicy,
+        _coerce_choice(
+            value,
+            choices=("fail", "drop"),
+            owner=owner,
+            field_name="invalid_time",
+        ),
+    )
+
+
+def _coerce_ros_timestamp_source(value: object, *, owner: str) -> RosTimestampSource:
+    return cast(
+        RosTimestampSource,
+        _coerce_choice(
+            value,
+            choices=("auto", "header", "receive"),
+            owner=owner,
+            field_name="timestamp_source",
+        ),
+    )
 
 
 def coerce_zarr_write_options(
@@ -246,7 +341,14 @@ def coerce_zarr_write_options(
         return AOZarrWriteOptions()
     if not isinstance(opts, AOZarrWriteOptions):
         raise TypeError(f"{owner}: opts must be AOZarrWriteOptions or None.")
-    return opts
+    return AOZarrWriteOptions(
+        mode=_coerce_zarr_write_mode(opts.mode, owner=owner),
+        consolidated=_coerce_optional_bool(
+            opts.consolidated,
+            owner=owner,
+            field_name="consolidated",
+        ),
+    )
 
 
 def coerce_zarr_read_options(
@@ -258,37 +360,13 @@ def coerce_zarr_read_options(
         return AOZarrReadOptions()
     if not isinstance(opts, AOZarrReadOptions):
         raise TypeError(f"{owner}: opts must be AOZarrReadOptions or None.")
-    return opts
-
-
-def coerce_csv_write_options(
-    opts: AOCsvWriteOptions | None,
-    *,
-    owner: str,
-) -> AOCsvWriteOptions:
-    if opts is None:
-        return AOCsvWriteOptions()
-    if not isinstance(opts, AOCsvWriteOptions):
-        raise TypeError(f"{owner}: opts must be AOCsvWriteOptions or None.")
-    return AOCsvWriteOptions(
-        metadata_channel=_coerce_metadata_channel(opts.metadata_channel, owner=owner),
-        metadata_path=_coerce_optional_path(opts.metadata_path, owner=owner, field_name="metadata_path"),
-        float_format=opts.float_format,
-    )
-
-
-def coerce_csv_read_options(
-    opts: AOCsvReadOptions | None,
-    *,
-    owner: str,
-) -> AOCsvReadOptions:
-    if opts is None:
-        return AOCsvReadOptions()
-    if not isinstance(opts, AOCsvReadOptions):
-        raise TypeError(f"{owner}: opts must be AOCsvReadOptions or None.")
-    return AOCsvReadOptions(
-        metadata_channel=_coerce_metadata_channel(opts.metadata_channel, owner=owner),
-        metadata_path=_coerce_optional_path(opts.metadata_path, owner=owner, field_name="metadata_path"),
+    return AOZarrReadOptions(
+        consolidated=_coerce_optional_bool(
+            opts.consolidated,
+            owner=owner,
+            field_name="consolidated",
+        ),
+        chunks=opts.chunks,
     )
 
 
@@ -316,22 +394,33 @@ def coerce_csv_ingest_options(
         return CsvIngestOptions()
     if not isinstance(opts, CsvIngestOptions):
         raise TypeError(f"{owner}: opts must be CsvIngestOptions or None.")
+    batch_dim, sequence_dim, size_name, param_name = _coerce_adapter_layout_names(
+        batch_dim=opts.batch_dim,
+        sequence_dim=opts.sequence_dim,
+        sequence_size_coord=opts.sequence_size_coord,
+        param_coord=opts.param_coord,
+        owner=owner,
+    )
     return CsvIngestOptions(
         time_col=_coerce_optional_name(opts.time_col, owner=owner, field_name="time_col"),
-        allow_time_infer=bool(opts.allow_time_infer),
-        sort_time=bool(opts.sort_time),
+        allow_time_infer=_coerce_bool(
+            opts.allow_time_infer, owner=owner, field_name="allow_time_infer"
+        ),
+        sort_time=_coerce_bool(opts.sort_time, owner=owner, field_name="sort_time"),
         monotonic_order=_coerce_monotonic_order(opts.monotonic_order, owner=owner),
-        allow_nonmonotonic_normalize=bool(opts.allow_nonmonotonic_normalize),
+        allow_nonmonotonic_normalize=_coerce_bool(
+            opts.allow_nonmonotonic_normalize,
+            owner=owner,
+            field_name="allow_nonmonotonic_normalize",
+        ),
         invalid_time=_coerce_invalid_time(opts.invalid_time, owner=owner),
         value_columns=_coerce_name_tuple(opts.value_columns, owner=owner, field_name="value_columns"),
         metadata_columns=_coerce_name_tuple(opts.metadata_columns, owner=owner, field_name="metadata_columns")
         or (),
-        batch_dim=_coerce_non_empty_name(opts.batch_dim, owner=owner, field_name="batch_dim"),
-        sequence_dim=_coerce_non_empty_name(opts.sequence_dim, owner=owner, field_name="sequence_dim"),
-        sequence_size_coord=_coerce_non_empty_name(
-            opts.sequence_size_coord, owner=owner, field_name="sequence_size_coord"
-        ),
-        param_coord=_coerce_non_empty_name(opts.param_coord, owner=owner, field_name="param_coord"),
+        batch_dim=batch_dim,
+        sequence_dim=sequence_dim,
+        sequence_size_coord=size_name,
+        param_coord=param_name,
         metadata_promotion=coerce_adapter_metadata_promotion_options(
             opts.metadata_promotion, owner=owner
         ),
@@ -352,7 +441,10 @@ def coerce_csv_export_options(
         owner=owner,
         field_name="sequence_size_coord",
     )
-    return CsvExportOptions(float_format=opts.float_format, sequence_size_coord=size_name)
+    return CsvExportOptions(
+        float_format=_coerce_float_format(opts.float_format, owner=owner),
+        sequence_size_coord=size_name,
+    )
 
 
 def coerce_ros_ingest_options(
@@ -364,20 +456,29 @@ def coerce_ros_ingest_options(
         return RosIngestOptions()
     if not isinstance(opts, RosIngestOptions):
         raise TypeError(f"{owner}: opts must be RosIngestOptions or None.")
+    batch_dim, sequence_dim, size_name, param_name = _coerce_adapter_layout_names(
+        batch_dim=opts.batch_dim,
+        sequence_dim=opts.sequence_dim,
+        sequence_size_coord=opts.sequence_size_coord,
+        param_coord=opts.param_coord,
+        owner=owner,
+    )
     return RosIngestOptions(
         topic=_coerce_optional_name(opts.topic, owner=owner, field_name="topic"),
         message_type=_coerce_optional_name(opts.message_type, owner=owner, field_name="message_type"),
         timestamp_source=_coerce_ros_timestamp_source(opts.timestamp_source, owner=owner),
-        sort_time=bool(opts.sort_time),
+        sort_time=_coerce_bool(opts.sort_time, owner=owner, field_name="sort_time"),
         monotonic_order=_coerce_monotonic_order(opts.monotonic_order, owner=owner),
-        allow_nonmonotonic_normalize=bool(opts.allow_nonmonotonic_normalize),
-        invalid_time=_coerce_invalid_time(opts.invalid_time, owner=owner),
-        batch_dim=_coerce_non_empty_name(opts.batch_dim, owner=owner, field_name="batch_dim"),
-        sequence_dim=_coerce_non_empty_name(opts.sequence_dim, owner=owner, field_name="sequence_dim"),
-        sequence_size_coord=_coerce_non_empty_name(
-            opts.sequence_size_coord, owner=owner, field_name="sequence_size_coord"
+        allow_nonmonotonic_normalize=_coerce_bool(
+            opts.allow_nonmonotonic_normalize,
+            owner=owner,
+            field_name="allow_nonmonotonic_normalize",
         ),
-        param_coord=_coerce_non_empty_name(opts.param_coord, owner=owner, field_name="param_coord"),
+        invalid_time=_coerce_invalid_time(opts.invalid_time, owner=owner),
+        batch_dim=batch_dim,
+        sequence_dim=sequence_dim,
+        sequence_size_coord=size_name,
+        param_coord=param_name,
         metadata_promotion=coerce_adapter_metadata_promotion_options(
             opts.metadata_promotion, owner=owner
         ),
@@ -385,8 +486,6 @@ def coerce_ros_ingest_options(
 
 
 __all__ = [
-    "AOCsvReadOptions",
-    "AOCsvWriteOptions",
     "AdapterMetadataPromotionOptions",
     "AOZarrReadOptions",
     "AOZarrWriteOptions",
@@ -398,11 +497,10 @@ __all__ = [
     "RosIngestOptions",
     "RosTimestampSource",
     "TimeMonotonicOrder",
+    "ZarrWriteMode",
     "coerce_adapter_metadata_promotion_options",
-    "coerce_csv_read_options",
     "coerce_csv_export_options",
     "coerce_csv_ingest_options",
-    "coerce_csv_write_options",
     "coerce_ros_ingest_options",
     "coerce_zarr_read_options",
     "coerce_zarr_write_options",

@@ -63,14 +63,14 @@ def test_geo_core_g2_001_position_geo_accessor_to_lla_roundtrips_ecef(monkeypatc
     np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
 
 
-def test_position_geo_is_lazily_installed_from_geo_package() -> None:
-    """ID: ARCH_GEO_G2_001_position_geo_property_uses_lazy_import."""
+def test_geo_core_g2_010_position_geo_property_is_installed() -> None:
+    """ID: GEO_CORE_G2_010_position_geo_property_is_installed."""
     assert isinstance(Position.geo, property)
     assert isinstance(Position(_position_dataset()).geo._position, Position)
 
 
-def test_position_geo_accessor_methods_are_thin_delegators(monkeypatch) -> None:
-    """ID: ARCH_GEO_G2_002_geo_accessors_are_thin_delegators."""
+def test_geo_core_g2_011_position_geo_accessor_delegates(monkeypatch) -> None:
+    """ID: GEO_CORE_G2_011_position_geo_accessor_delegates."""
     calls: list[tuple[str, object]] = []
 
     def fake_to_lla(position, *, opts=None, validate=True):

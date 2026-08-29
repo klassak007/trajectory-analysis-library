@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 from tests.architecture._budget import file_loc, function_lengths
-
-
-def _has_direct_tal_schema_write(text: str) -> bool:
-    return bool(re.search(r"attrs\[['\"]tal['\"]\]\s*=", text))
+from tests.architecture._schema_write import has_tal_schema_write
 
 
 def test_arch_viz_001_viz_owner_modules_present_and_budgeted() -> None:
@@ -56,7 +52,7 @@ def test_arch_viz_004_no_schema_bypass_writes_and_no_core_to_viz_import() -> Non
     """ID: ARCH_VIZ_004_no_schema_bypass_writes_and_no_core_to_viz_import."""
     for path in sorted(Path("tal/viz").glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        assert not _has_direct_tal_schema_write(text)
+        assert not has_tal_schema_write(text)
     for path in sorted(Path("tal/core").rglob("*.py")):
         text = path.read_text(encoding="utf-8")
         assert "tal.viz" not in text

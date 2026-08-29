@@ -94,8 +94,110 @@ def function_loc(
 def function_lengths(path: str | Path) -> dict[str, int]:
     text = _normalize_source(path=path)
     module = ast.parse(text)
-    out: dict[str, int] = {}
-    for node in ast.walk(module):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            out[node.name] = function_loc(node, source=text)
-    return out
+    return {
+        name: function_loc(node, source=text)
+        for name, node in _qualified_function_nodes(module).items()
+    }
+
+
+class _QualifiedFunctionVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.nodes: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        self._scope: list[str] = []
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        key = ".".join((*self._scope, node.name))
+        if key in self.nodes:
+            key = f"{key}@{node.lineno}"
+        self.nodes[key] = node
+        self._scope.append(node.name)
+        self.generic_visit(node)
+        self._scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._scope.append(node.name)
+        self.generic_visit(node)
+        self._scope.pop()
+
+
+def _qualified_function_nodes(
+    module: ast.Module,
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    visitor = _QualifiedFunctionVisitor()
+    visitor.visit(module)
+    return visitor.nodes
+
+
+def function_parameter_counts(
+    path: str | Path | None = None,
+    *,
+    source: str | None = None,
+) -> dict[str, int]:
+    """Return declared parameter counts under qualified function names."""
+    module = ast.parse(_normalize_source(path=path, source=source))
+    return {
+        name: (
+            len(node.args.posonlyargs)
+            + len(node.args.args)
+            + len(node.args.kwonlyargs)
+            + int(node.args.vararg is not None)
+            + int(node.args.kwarg is not None)
+        )
+        for name, node in _qualified_function_nodes(module).items()
+    }
+
+
+_CONTROL_NODES = (
+    ast.For,
+    ast.AsyncFor,
+    ast.If,
+    ast.Match,
+    ast.match_case,
+    ast.Try,
+    ast.TryStar,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+)
+
+
+def _control_depth(node: ast.AST, *, depth: int, root: ast.AST) -> int:
+    maximum = depth
+    for child in ast.iter_child_nodes(node):
+        if child is not root and isinstance(
+            child,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+        ):
+            continue
+        child_depth = depth + 1 if isinstance(child, _CONTROL_NODES) else depth
+        is_elif = (
+            isinstance(node, ast.If)
+            and isinstance(child, ast.If)
+            and node.orelse == [child]
+        )
+        if is_elif:
+            child_depth = depth
+        maximum = max(
+            maximum,
+            _control_depth(child, depth=child_depth, root=root),
+        )
+    return maximum
+
+
+def function_control_depths(
+    path: str | Path | None = None,
+    *,
+    source: str | None = None,
+) -> dict[str, int]:
+    """Return maximum nested control-flow depth for each function."""
+    module = ast.parse(_normalize_source(path=path, source=source))
+    return {
+        name: _control_depth(node, depth=0, root=node)
+        for name, node in _qualified_function_nodes(module).items()
+    }

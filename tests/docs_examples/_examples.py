@@ -1203,8 +1203,6 @@ def example_io_read_csv_logs() -> None:
 
 def example_io_roundtrip_surface() -> None:
     from tal.io import (
-        AOCsvReadOptions,
-        AOCsvWriteOptions,
         AOZarrReadOptions,
         AOZarrWriteOptions,
         CsvExportOptions,
@@ -1226,17 +1224,22 @@ def example_io_roundtrip_surface() -> None:
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        csv_root = ao.io.to_csv(str(root / "trajectory"), opts=AOCsvWriteOptions())
-        loaded_csv = AnalysisObject.from_csv(csv_root, opts=AOCsvReadOptions())
         store = root / "trajectory.zarr"
-        _ = loaded_csv.io.to_zarr(str(store), opts=AOZarrWriteOptions(mode="w"))
-        loaded_zarr = AnalysisObject.from_zarr(str(store), opts=AOZarrReadOptions())
+        _ = ao.io.to_zarr(str(store), opts=AOZarrWriteOptions(mode="w"))
+        loaded_zarr = AnalysisObject.from_zarr(
+            str(store),
+            opts=AOZarrReadOptions(chunks={}),
+        )
+        try:
+            assert getattr(loaded_zarr.unsafe_data["value"].data, "chunks", None) is not None
+            loaded_values = loaded_zarr.unsafe_data["value"].compute().values.tolist()
+        finally:
+            loaded_zarr.unsafe_data.close()
         exported = write_csv_logs(ao, str(root / "logs"), opts=CsvExportOptions(float_format="%.1f"))
         log_path = root / "run.csv"
         log_path.write_text("time,value\n0.0,1.0\n1.0,2.0\n", encoding="utf-8")
         ingested = read_csv_logs(str(log_path), opts=CsvIngestOptions(time_col="time"))
-    assert loaded_csv.unsafe_data["value"].sizes["sample"] == 2
-    assert loaded_zarr.unsafe_data["value"].sizes["sample"] == 2
+    assert loaded_values == [[1.0, 2.0]]
     assert len(exported) == 1
     assert ingested.unsafe_data.coords["trial"].values.tolist() == ["run"]
 

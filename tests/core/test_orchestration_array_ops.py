@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tal.core import AnalysisObject
+from tal.core import AnalysisObject, SchemaError
 from tal.core.param_ops import batch_topology as batch_topology_ops
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.context import (
@@ -21,7 +21,7 @@ from tal.core.orchestration.alignment_intent import (
 from tal.core.orchestration.broadcast_intent import (
     read_broadcast_intent,
 )
-from tal.core.orchestration.inputs import coerce_operand
+from tal.core.orchestration.inputs import coerce_operand, normalize_analysis_object_inputs
 from tal.core.orchestration.topology import (
     ResolvedTopologyPlan,
     SEMANTIC_EXACT_POLICY,
@@ -321,6 +321,35 @@ def test_orch_array_005_resolve_dataset_context_matches_array_plan_operand_conte
     assert left_ctx.sequence_size_coord == plan.operands[0].sequence_size_coord
 
 
+def test_orch_array_008_dataset_context_always_validates_schema_values() -> None:
+    """ID: ORCH_ARRAY_008_dataset_context_always_validates_schema_values."""
+    ds = xr.Dataset(
+        {"value": (("trial", "sample"), [[1.0, 2.0]])},
+        coords={
+            "trial": ["run"],
+            "sample": [0, 1],
+            "sequence_size": ("trial", [np.nan]),
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+        sequence_size_coord="sequence_size",
+        validate=False,
+    )
+    with pytest.raises(SchemaError, match="schema.validity.sequence_size_coord.values.invalid"):
+        resolve_dataset_context(
+            ao,
+            owner="orch.array",
+            options=DatasetContextOptions(
+                require_roles=True,
+                require_sequence_dim=True,
+            ),
+        )
+
+
 def test_orch_array_006_finalize_array_result_without_sequence_preserves_core_only_roles() -> None:
     """ID: ORCH_ARRAY_006_finalize_array_result_without_sequence_preserves_core_only_roles."""
     ds = xr.Dataset({"x": ("sample", np.asarray([1.0, 2.0], dtype=float))}, coords={"sample": [0, 1]})
@@ -355,6 +384,97 @@ def test_orch_array_007_coerce_operand_scalar_policy_is_deterministic() -> None:
     out_scalar = coerce_operand(3.0, owner="orch.array", allow_scalar=True, return_scalar_none=True)
     assert isinstance(out_ao, AnalysisObject)
     assert out_scalar is None
+
+
+def test_orch_array_009_variadic_external_schema_error_preserves_index_and_type() -> None:
+    """ID: ORCH_ARRAY_009_variadic_external_schema_error_preserves_index_and_type."""
+    malformed = xr.Dataset({"value": ("sample", [1.0])}, attrs={"tal": "invalid"})
+
+    with pytest.raises(SchemaError) as error:
+        normalize_analysis_object_inputs(
+            [xr.Dataset({"value": ("sample", [0.0])}), malformed],
+            owner="orch.array.normalize",
+        )
+
+    assert error.value.code == "schema.not_mapping"
+    assert error.value.path == "tal"
+    assert "orch.array.normalize" in str(error.value)
+    assert "operand 1" in str(error.value)
+    assert isinstance(error.value.__cause__, SchemaError)
+    assert error.value.__cause__.code == error.value.code
+    assert error.value.__cause__.path == error.value.path
+
+
+def test_orch_array_010_external_schema_error_preserves_operand_label_and_role() -> None:
+    """ID: ORCH_ARRAY_010_external_schema_error_preserves_operand_label_and_role."""
+    malformed = xr.Dataset({"value": ("sample", [1.0])}, attrs={"tal": "invalid"})
+
+    with pytest.raises(SchemaError) as error:
+        coerce_operand(
+            malformed,
+            owner="orch.array.binary",
+            label="left",
+            role="matrix",
+        )
+
+    assert error.value.code == "schema.not_mapping"
+    assert error.value.path == "tal"
+    assert "orch.array.binary" in str(error.value)
+    assert "left matrix" in str(error.value)
+    assert isinstance(error.value.__cause__, SchemaError)
+    assert error.value.__cause__.code == error.value.code
+    assert error.value.__cause__.path == error.value.path
+
+
+def test_orch_array_011_external_layout_errors_preserve_boundary_context() -> None:
+    """ID: ORCH_ARRAY_011_external_layout_errors_preserve_boundary_context."""
+    unsupported = xr.Dataset(
+        {"value": (("trial", "sample"), [[1.0]])},
+        coords={"trial": ["run"], "sample": [0]},
+    ).stack(stacked=("trial", "sample"))
+
+    with pytest.raises(ValueError, match="orch.array.normalize.*operand 0") as variadic_error:
+        normalize_analysis_object_inputs([unsupported], owner="orch.array.normalize")
+    assert isinstance(variadic_error.value.__cause__, ValueError)
+
+    with pytest.raises(ValueError, match="orch.array.binary.*right matrix") as operand_error:
+        coerce_operand(
+            unsupported,
+            owner="orch.array.binary",
+            label="right",
+            role="matrix",
+        )
+    assert isinstance(operand_error.value.__cause__, ValueError)
+
+
+def test_orch_array_012_external_backend_copy_errors_preserve_boundary_context() -> None:
+    """ID: ORCH_ARRAY_012_external_backend_copy_errors_preserve_boundary_context."""
+    from xarray.backends import BackendArray
+    from xarray.core import indexing
+
+    class CopyFailingBackend(BackendArray):
+        shape = (1,)
+        dtype = np.dtype(float)
+
+        def __getitem__(self, key: object) -> np.ndarray:
+            _ = key
+            return np.asarray([1.0])
+
+        def __deepcopy__(self, memo: object) -> object:
+            _ = memo
+            raise RuntimeError("backend copy exploded")
+
+    def external() -> xr.Dataset:
+        data = indexing.LazilyIndexedArray(CopyFailingBackend())
+        return xr.Dataset({"value": xr.Variable(("sample",), data)})
+
+    with pytest.raises(ValueError, match="orch.array.normalize.*operand 0") as variadic:
+        normalize_analysis_object_inputs([external()], owner="orch.array.normalize")
+    assert isinstance(variadic.value.__cause__, RuntimeError)
+
+    with pytest.raises(ValueError, match="orch.array.binary.*right matrix") as labeled:
+        coerce_operand(external(), owner="orch.array.binary", label="right", role="matrix")
+    assert isinstance(labeled.value.__cause__, RuntimeError)
 
 
 def test_topo_core_001_shared_topology_model_roundtrip_extraction() -> None:

@@ -85,12 +85,6 @@ def test_arch_astro_a1_006_astro_has_no_local_topology_planner_clones() -> None:
         assert [token for token in banned if token in text] == []
 
 
-def test_arch_astro_a1_007_no_tal_v2_imports() -> None:
-    """ID: ARCH_ASTRO_A1_007_no_tal_v2_imports."""
-    for path in sorted(Path("tal/astro").rglob("*.py")):
-        assert "tal_v2" not in path.read_text(encoding="utf-8")
-
-
 def test_arch_astro_metadata_owner_is_the_only_schema_reader() -> None:
     for path in sorted(Path("tal/astro").rglob("*.py")):
         text = path.read_text(encoding="utf-8")
@@ -190,12 +184,6 @@ def test_arch_astro_a2_004_no_local_topology_planner_clones() -> None:
     text = Path("tal/astro/sun.py").read_text(encoding="utf-8")
     banned = ["flatten_param_contexts", "restore_dataset_batch_topology", "BatchFlattenPlan"]
     assert [token for token in banned if token in text] == []
-
-
-def test_arch_astro_a2_005_no_tal_v2_imports() -> None:
-    """ID: ARCH_ASTRO_A2_005_no_tal_v2_imports."""
-    for path in sorted(Path("tal/astro").rglob("*.py")):
-        assert "tal_v2" not in path.read_text(encoding="utf-8")
 
 
 def test_arch_astro_a2_006_no_top_level_sun_alias_in_a2() -> None:

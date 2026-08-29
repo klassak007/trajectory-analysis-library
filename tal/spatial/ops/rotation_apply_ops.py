@@ -18,6 +18,7 @@ from tal.core.orchestration.topology import (
 )
 from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
+from tal.core.schema import copy_dataset_attrs
 from tal.utils.frame_schema import set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
 
@@ -257,7 +258,7 @@ def _apply_to_vector_target(
         owner=owner,
     )
     out_ds = rotated.to_dataset(name=target_var)
-    out_ds.attrs = dict(target_ds.attrs)
+    out_ds = copy_dataset_attrs(target_ds, out_ds, validate=False)
     parent, child = resolve_apply_output_frames(rotation.unsafe_data, target_ds, owner=owner)
     out_ds = set_frames(out_ds, parent=parent, child=child, validate=False)
     return wrap_like(target, out_ds, validate=validate)

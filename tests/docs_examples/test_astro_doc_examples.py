@@ -11,4 +11,6 @@ ASTRO_EXAMPLE_IDS = tuple(sorted(example_id for example_id in required_example_i
 
 @pytest.mark.parametrize("example_id", ASTRO_EXAMPLE_IDS)
 def test_astro_doc_example_executes(example_id: str) -> None:
+    if example_id == "ASTRO-SUN-DIRECTION":
+        pytest.importorskip("astropy")
     EXECUTABLE_EXAMPLES[example_id]()

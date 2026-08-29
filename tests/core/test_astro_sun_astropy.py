@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import fields
+from importlib.util import find_spec
 from typing import get_type_hints
 
 import dask.array as da
@@ -17,6 +18,12 @@ from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject
 from tal.core.schema_read import read_param_coord_name, read_roles
 from tal.geo import GeodeticPosition
+
+
+requires_astropy = pytest.mark.skipif(
+    find_spec("astropy") is None,
+    reason="Astropy backend tests require the optional tal[astro] extra.",
+)
 
 
 def _iers() -> AstroIERSOptions:
@@ -71,6 +78,7 @@ def _sun(location: object, *, time: object | None = "2024-06-01T12:00:00", sourc
     return direction_to_sun(location, time=time if source is None else None, opts=opts)
 
 
+@requires_astropy
 def test_astro_core_a2_001_direction_to_sun_scalar_location_scalar_time_astropy() -> None:
     """ID: ASTRO_CORE_A2_001_direction_to_sun_scalar_location_scalar_time_astropy."""
     out = _sun(GeodeticPosition.from_lla(_scalar_lla()))
@@ -78,6 +86,7 @@ def test_astro_core_a2_001_direction_to_sun_scalar_location_scalar_time_astropy(
     assert out.unsafe_data["direction"].dims == ("enu",)
 
 
+@requires_astropy
 def test_astro_core_a2_002_direction_to_sun_sequence_time_coord_astropy() -> None:
     """ID: ASTRO_CORE_A2_002_direction_to_sun_sequence_time_coord_astropy."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla()), source="time")
@@ -85,6 +94,7 @@ def test_astro_core_a2_002_direction_to_sun_sequence_time_coord_astropy() -> Non
     assert out.unsafe_data["altitude_deg"].dims == ("sample",)
 
 
+@requires_astropy
 def test_astro_core_a2_003_direction_to_sun_preserves_batch_topology() -> None:
     """ID: ASTRO_CORE_A2_003_direction_to_sun_preserves_batch_topology."""
     out = _sun(GeodeticPosition.from_lla(_batched_lla()), source="utc")
@@ -96,6 +106,7 @@ def test_astro_core_a2_003_direction_to_sun_preserves_batch_topology() -> None:
     assert out.unsafe_data["direction"].dims == ("sample", "trial", "enu")
 
 
+@requires_astropy
 def test_astro_core_a2_004_direction_to_sun_outputs_unit_enu_vector() -> None:
     """ID: ASTRO_CORE_A2_004_direction_to_sun_outputs_unit_enu_vector."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla()), source="time")
@@ -103,6 +114,7 @@ def test_astro_core_a2_004_direction_to_sun_outputs_unit_enu_vector() -> None:
     np.testing.assert_allclose(norm, 1.0, atol=1e-12)
 
 
+@requires_astropy
 def test_astro_core_a2_005_altitude_azimuth_match_direction_vector() -> None:
     """ID: ASTRO_CORE_A2_005_altitude_azimuth_match_direction_vector."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla()), source="time")
@@ -124,6 +136,7 @@ def test_astro_core_a2_006_iers_options_are_applied_and_restored() -> None:
     assert iers.conf.iers_degraded_accuracy == old_degraded_accuracy
 
 
+@requires_astropy
 def test_astro_core_a2_007_output_metadata_records_astropy_backend() -> None:
     """ID: ASTRO_CORE_A2_007_output_metadata_records_astropy_backend."""
     out = _sun(GeodeticPosition.from_lla(_scalar_lla()))
@@ -141,6 +154,7 @@ def test_astro_core_a2_008_sun_direction_options_shape_includes_spice_field() ->
     assert get_type_hints(SunDirectionOptions)["spice"] == SpiceSunOptions | None
 
 
+@requires_astropy
 def test_astro_core_a2_009_datetime64_param_time_source_astropy() -> None:
     """ID: ASTRO_CORE_A2_009_datetime64_param_time_source_astropy."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla(datetime_param=True)), source="time")

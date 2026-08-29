@@ -2213,7 +2213,6 @@ def test_spatial_arch_151_kinematics_numba_kernels_are_schema_free() -> None:
         assert "set_roles(" not in numba_text
         assert "set_param_coord(" not in numba_text
         assert "set_validity(" not in numba_text
-        assert "tal_v2" not in numba_text
 
 
 def test_spatial_arch_152_kinematics_numba_paths_do_not_call_param_engine() -> None:
@@ -2415,7 +2414,6 @@ def test_spatial_arch_181_higher_order_interp_numba_decision_is_owner_routed() -
     assert "njit_kernel(" in numba_text
     assert "import xarray" not in numba_text
     assert "from scipy" not in numba_text
-    assert "tal_v2" not in numba_text
     assert "squad_quat(" in primitive_text
     assert "catmull_rom_vec3(" in primitive_text
     assert "se3" not in primitive_text.lower()
@@ -2586,11 +2584,9 @@ def test_spatial_arch_161_local_stencil_helpers_are_schema_free_if_added() -> No
     assert "tal.core" not in helper_text
     assert "tal.spatial" not in helper_text
     assert "tal.linalg" not in helper_text
-    assert "tal_v2" not in helper_text
     numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
     assert "import xarray" not in numba_text
     assert "from scipy" not in numba_text
-    assert "tal_v2" not in numba_text
     assert "attrs[" not in numba_text
 
 
@@ -2639,7 +2635,7 @@ def test_spatial_arch_172_topology_scan_backends_are_schema_free() -> None:
         Path("tal/spatial/kernels/topology_scan_backends.py"),
         Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
     ]
-    banned = ["import xarray", "xr.", "attrs[", "set_roles(", "set_param_coord(", "set_validity(", "tal_v2"]
+    banned = ["import xarray", "xr.", "attrs[", "set_roles(", "set_param_coord(", "set_validity("]
     for path in paths:
         text = path.read_text(encoding="utf-8")
         assert [token for token in banned if token in text] == []

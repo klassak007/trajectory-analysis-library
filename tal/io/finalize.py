@@ -42,9 +42,18 @@ def resolve_finalize_source_for_cls(
         base = coerce_analysis_object_input(ds, owner=owner)
     except Exception as exc:
         raise ValueError(f"{owner}: invalid persisted schema payload.") from exc
+    return base
+
+
+def _construct_loaded_cls(
+    cls: type["AnalysisObject"],
+    finalized: "AnalysisObject",
+) -> "AnalysisObject":
+    from tal.core.analysis_object import AnalysisObject
+
     if cls is AnalysisObject:
-        return base
-    return cls(base.unsafe_data)
+        return finalized
+    return cls(finalized.unsafe_data)
 
 
 def finalize_loaded_dataset(
@@ -54,16 +63,17 @@ def finalize_loaded_dataset(
     validate: bool,
     owner: str,
 ) -> "AnalysisObject":
-    source_ao = resolve_finalize_source_for_cls(cls, ds, owner=owner)
-    spec = _resolve_finalize_spec(source_ao, owner=owner)
-    return finalize_with_schema(
-        source_ao,
-        source_ao.unsafe_data,
+    base_ao = resolve_finalize_source_for_cls(cls, ds, owner=owner)
+    spec = _resolve_finalize_spec(base_ao, owner=owner)
+    finalized = finalize_with_schema(
+        base_ao,
+        base_ao.unsafe_data,
         spec=spec,
         validate=validate,
         owner=owner,
-        optional_sources=_optional_sources(source_ao.unsafe_data),
+        optional_sources=_optional_sources(base_ao.unsafe_data),
     )
+    return _construct_loaded_cls(cls, finalized)
 
 
 __all__ = ["finalize_loaded_dataset", "resolve_finalize_source_for_cls"]

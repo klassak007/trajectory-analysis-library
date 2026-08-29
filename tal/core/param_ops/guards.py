@@ -73,13 +73,13 @@ def validate_query_dim_name(
 
 
 def mark_reserved_coord(da: xr.DataArray, *, name: str) -> xr.DataArray:
-    out = da.copy(deep=False)
-    attrs = dict(out.attrs)
-    attrs[_RESERVED_OWNER_KEY] = _RESERVED_OWNER_VALUE
-    attrs[_RESERVED_NAME_KEY] = str(name)
-    attrs[_RESERVED_TOKEN_KEY] = _RESERVED_TOKEN_VALUE
-    out.attrs = attrs
-    return out
+    return da.assign_attrs(
+        {
+            _RESERVED_OWNER_KEY: _RESERVED_OWNER_VALUE,
+            _RESERVED_NAME_KEY: str(name),
+            _RESERVED_TOKEN_KEY: _RESERVED_TOKEN_VALUE,
+        }
+    )
 
 
 def _reserved_coord_is_owned(ds: xr.Dataset, *, name: str) -> bool:

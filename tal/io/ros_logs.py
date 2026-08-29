@@ -1,36 +1,41 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
 import numpy as np
 import xarray as xr
 
-from .adapter_finalize import finalize_adapter_dataset
-from .adapter_metadata import aggregate_batch_metadata, promote_adapter_metadata
-from .adapter_paths import resolve_ingest_inputs
-from .csv_logs import _is_monotonic
-from .options import RosIngestOptions, coerce_ros_ingest_options
-
-_ROS_COLUMNS = (
-    "translation_x",
-    "translation_y",
-    "translation_z",
-    "quaternion_x",
-    "quaternion_y",
-    "quaternion_z",
-    "quaternion_w",
+from .adapter_finalize import _finalize_owned_adapter_dataset
+from .adapter_metadata import (
+    aggregate_batch_metadata,
+    promote_adapter_metadata,
+    require_generated_metadata_preflight,
 )
+from .adapter_paths import ResolvedIngestInput, resolve_ingest_inputs
+from .adapter_spool import AdapterArraySpool, fill_spooled_adapter_row, spool_adapter_arrays
+from .adapter_temp import owned_temporary_directory
+from .adapter_time import is_monotonic
+from .options import RosIngestOptions, coerce_ros_ingest_options
+from .ros_metadata import RosFrameMetadata, normalize_ros_text
+from .ros_payload import ROS_COLUMNS as _ROS_COLUMNS
+from .ros_payload import extract_frame_values as _extract_frame_values
+from .ros_payload import extract_pose_values as _extract_pose_values
+from .ros_reader import RosMessage as _RosMessage
+from .ros_reader import iter_ros_messages, owned_ros_message_stream
+from .ros_time import normalize_paired_ros_time_ns, normalize_receive_time_ns
 
-
-@dataclass(frozen=True)
-class _RosMessage:
-    topic: str
-    msgtype: str
-    msg: object
-    receive_ns: int | None
+_MISSING_ROS_TIME_FIELD = object()
+_ROS_GENERATED_METADATA_NAMES = (
+    "ros_topic",
+    "ros_msgtype",
+    "ros_timestamp_epoch",
+    "ros_timestamp_unit",
+    "ros_parent_frame",
+    "ros_child_frame",
+    "io_source_paths",
+)
+_ROS_SCALAR_GENERATED_METADATA_NAMES = _ROS_GENERATED_METADATA_NAMES[:-1]
 
 
 @dataclass(frozen=True)
@@ -42,174 +47,218 @@ class _RosRecord:
     metadata: dict[str, object]
 
 
-def _iter_ros_messages(path: str, *, owner: str) -> list[_RosMessage]:
+@dataclass(frozen=True)
+class _RosSpoolRecord:
+    label: str
+    resolved_path: str
+    metadata: dict[str, object]
+    arrays: AdapterArraySpool
+
+
+@dataclass(frozen=True)
+class _CollectedRosSamples:
+    topic: str | None
+    msgtype: str | None
+    times: list[np.int64]
+    columns: dict[str, list[float]]
+    parent_frames: RosFrameMetadata
+    child_frames: RosFrameMetadata
+
+
+def _load_any_reader_class(*, owner: str) -> type:
     try:
         from rosbags.highlevel import AnyReader  # type: ignore
     except Exception as exc:  # pragma: no cover - optional dependency envelope.
         raise ImportError(
             f"{owner}: read_ros_logs requires optional dependency 'rosbags'."
         ) from exc
-    out: list[_RosMessage] = []
-    with AnyReader([Path(path)]) as reader:
-        for conn, timestamp_ns, rawdata in reader.messages():
-            msg = reader.deserialize(rawdata, conn.msgtype)
-            out.append(
-                _RosMessage(
-                    topic=str(conn.topic),
-                    msgtype=str(conn.msgtype),
-                    msg=msg,
-                    receive_ns=int(timestamp_ns),
-                )
-            )
-    return out
+    return AnyReader
 
 
-def _select_topic(messages: Sequence[_RosMessage], *, opts: RosIngestOptions, owner: str, path: str) -> tuple[str, tuple[_RosMessage, ...]]:
-    topics = sorted({message.topic for message in messages})
-    if opts.topic is not None:
-        selected = tuple(message for message in messages if message.topic == opts.topic)
-        if not selected:
-            raise ValueError(f"{owner}: topic {opts.topic!r} was not found in {path!r}.")
-        return opts.topic, selected
-    if len(topics) != 1:
-        raise ValueError(
-            f"{owner}: topic ambiguity in {path!r}; candidates={tuple(topics)!r}. "
-            "Provide topic explicitly."
-        )
-    topic = topics[0]
-    return topic, tuple(message for message in messages if message.topic == topic)
+def _iter_ros_messages(
+    path: str,
+    *,
+    opts: RosIngestOptions,
+    owner: str,
+) -> Iterable[_RosMessage]:
+    yield from iter_ros_messages(
+        path,
+        opts=opts,
+        owner=owner,
+        reader_loader=_load_any_reader_class,
+    )
 
 
-def _select_msgtype(messages: Sequence[_RosMessage], *, opts: RosIngestOptions, owner: str, path: str) -> str:
-    msgtypes = sorted({message.msgtype for message in messages})
-    if opts.message_type is not None:
-        if opts.message_type not in msgtypes:
+def _require_ros_layout_names(opts: RosIngestOptions, *, owner: str) -> None:
+    """Reject semantic names owned by the fixed ROS pose payload."""
+    layout_names = (
+        ("batch_dim", opts.batch_dim),
+        ("sequence_dim", opts.sequence_dim),
+        ("sequence_size_coord", opts.sequence_size_coord),
+        ("param_coord", opts.param_coord),
+    )
+    for field_name, name in layout_names:
+        if name in _ROS_COLUMNS:
             raise ValueError(
-                f"{owner}: message_type {opts.message_type!r} was not found in {path!r}; "
-                f"available={tuple(msgtypes)!r}."
+                f"{owner}: {field_name} {name!r} collides with a ROS payload field."
             )
-        return opts.message_type
-    if len(msgtypes) != 1:
-        raise ValueError(
-            f"{owner}: message-type ambiguity in {path!r}; candidates={tuple(msgtypes)!r}. "
-            "Provide message_type explicitly."
-        )
-    return msgtypes[0]
 
 
-def _header_stamp_seconds(msg: object) -> float | None:
+def _require_ros_metadata_preflight(opts: RosIngestOptions, *, owner: str) -> None:
+    occupied = (
+        opts.batch_dim,
+        opts.sequence_dim,
+        opts.sequence_size_coord,
+        opts.param_coord,
+        *_ROS_COLUMNS,
+    )
+    require_generated_metadata_preflight(
+        options=opts.metadata_promotion,
+        generated_names=_ROS_GENERATED_METADATA_NAMES,
+        scalar_generated_names=_ROS_SCALAR_GENERATED_METADATA_NAMES,
+        user_metadata_names=(),
+        occupied_names=occupied,
+        owner=owner,
+    )
+
+
+def _ros_time_field(stamp: object, primary: str, legacy: str) -> object | None:
+    value = getattr(stamp, primary, _MISSING_ROS_TIME_FIELD)
+    if value is _MISSING_ROS_TIME_FIELD:
+        return getattr(stamp, legacy, None)
+    return value
+
+
+def _header_stamp_ns(msg: object) -> np.int64 | None:
     header = getattr(msg, "header", None)
     stamp = getattr(header, "stamp", None)
     if stamp is None:
         return None
-    sec = getattr(stamp, "sec", getattr(stamp, "secs", None))
-    nsec = getattr(stamp, "nanosec", getattr(stamp, "nsecs", None))
+    sec = _ros_time_field(stamp, "sec", "secs")
+    nsec = _ros_time_field(stamp, "nanosec", "nsecs")
     if sec is None or nsec is None:
         return None
-    sec_i = int(sec)
-    nsec_i = int(nsec)
-    if sec_i == 0 and nsec_i == 0:
+    normalized = normalize_paired_ros_time_ns(sec, nsec)
+    if normalized == 0:
         return None
-    return float(sec_i) + float(nsec_i) * 1e-9
+    return normalized
 
 
-def _timestamp_seconds(
+def _timestamp_ns(
     msg: object,
     *,
-    receive_ns: int | None,
+    receive_ns: object | None,
     source: str,
-) -> float:
-    header_seconds = _header_stamp_seconds(msg)
-    receive_seconds = None if receive_ns is None else float(receive_ns) * 1e-9
-    if source == "header":
-        return float("nan") if header_seconds is None else header_seconds
+) -> np.int64 | None:
     if source == "receive":
-        return float("nan") if receive_seconds is None else receive_seconds
-    if header_seconds is not None:
-        return header_seconds
-    return float("nan") if receive_seconds is None else receive_seconds
+        return None if receive_ns is None else normalize_receive_time_ns(receive_ns)
+    header_ns = _header_stamp_ns(msg)
+    if source == "header":
+        return header_ns
+    if header_ns is not None:
+        return header_ns
+    return None if receive_ns is None else normalize_receive_time_ns(receive_ns)
 
 
-def _extract_pose_values(msg: object, *, msgtype: str, owner: str) -> tuple[tuple[float, float, float], tuple[float, float, float, float], str | None, str | None]:
-    if msgtype.endswith("PoseStamped"):
-        pos = msg.pose.position
-        ori = msg.pose.orientation
-        parent = getattr(getattr(msg, "header", None), "frame_id", None)
-        return (float(pos.x), float(pos.y), float(pos.z)), (float(ori.x), float(ori.y), float(ori.z), float(ori.w)), parent, None
-    if msgtype.endswith("Odometry"):
-        pos = msg.pose.pose.position
-        ori = msg.pose.pose.orientation
-        parent = getattr(getattr(msg, "header", None), "frame_id", None)
-        child = getattr(msg, "child_frame_id", None)
-        return (float(pos.x), float(pos.y), float(pos.z)), (float(ori.x), float(ori.y), float(ori.z), float(ori.w)), parent, child
-    if msgtype.endswith("TransformStamped"):
-        trans = msg.transform.translation
-        rot = msg.transform.rotation
-        parent = getattr(getattr(msg, "header", None), "frame_id", None)
-        child = getattr(msg, "child_frame_id", None)
-        return (float(trans.x), float(trans.y), float(trans.z)), (float(rot.x), float(rot.y), float(rot.z), float(rot.w)), parent, child
-    raise ValueError(f"{owner}: unsupported ROS message type {msgtype!r}.")
-
-
-def _apply_ros_monotonic_policy(
-    times: np.ndarray,
-    values: dict[str, np.ndarray],
+def _resolve_ros_timestamp(
+    message: _RosMessage,
     *,
     opts: RosIngestOptions,
     owner: str,
     path: str,
-) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+) -> np.int64 | None:
+    try:
+        return _timestamp_ns(
+            message.msg,
+            receive_ns=message.receive_ns,
+            source=opts.timestamp_source,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"{owner}: malformed ROS timestamp payload in {path!r}."
+        ) from exc
+
+
+def _resolve_ros_sample_order(
+    times: np.ndarray,
+    *,
+    opts: RosIngestOptions,
+    owner: str,
+    path: str,
+) -> np.ndarray:
+    order = np.arange(times.size)
     if opts.sort_time:
         order = np.argsort(times, kind="stable")
-        times = times[order]
-        values = {name: arr[order] for name, arr in values.items()}
-    if _is_monotonic(times, order=opts.monotonic_order):
-        return times, values
+    ordered_times = times[order]
+    if is_monotonic(ordered_times, order=opts.monotonic_order):
+        return order
     if not opts.allow_nonmonotonic_normalize:
         raise ValueError(
             f"{owner}: ROS timestamps in {path!r} violate monotonic_order={opts.monotonic_order!r}."
         )
     order = np.argsort(times, kind="stable")
-    times_sorted = times[order]
-    values_sorted = {name: arr[order] for name, arr in values.items()}
-    if not _is_monotonic(times_sorted, order=opts.monotonic_order):
+    if not is_monotonic(times[order], order=opts.monotonic_order):
         raise ValueError(
             f"{owner}: ROS timestamp normalization could not satisfy "
             f"monotonic_order={opts.monotonic_order!r} in {path!r}."
         )
-    return times_sorted, values_sorted
+    return order
 
 
-def _collect_ros_record(path_info: Any, *, opts: RosIngestOptions, owner: str) -> _RosRecord:
-    messages = _iter_ros_messages(str(path_info.path), owner=owner)
-    if not messages:
-        raise ValueError(f"{owner}: no messages were found in {path_info.path!r}.")
-    topic, topic_messages = _select_topic(messages, opts=opts, owner=owner, path=str(path_info.path))
-    msgtype = _select_msgtype(topic_messages, opts=opts, owner=owner, path=str(path_info.path))
-    filtered = [message for message in topic_messages if message.msgtype == msgtype]
-    times, columns, parent_values, child_values = _collect_ros_samples(
-        filtered,
-        opts=opts,
-        owner=owner,
-        path=str(path_info.path),
-    )
-    if not times:
-        raise ValueError(f"{owner}: no valid ROS messages remained after filtering for {path_info.path!r}.")
-    time_arr = np.asarray(times, dtype=float)
-    value_arrays = {name: np.asarray(values, dtype=float) for name, values in columns.items()}
-    time_arr, value_arrays = _apply_ros_monotonic_policy(
-        time_arr,
-        value_arrays,
-        opts=opts,
-        owner=owner,
-        path=str(path_info.path),
-    )
-    metadata = {
-        "ros_topic": topic,
-        "ros_msgtype": msgtype,
-        "ros_parent_frame": parent_values[0] if parent_values and all(parent_values[0] == v for v in parent_values[1:]) else parent_values,
-        "ros_child_frame": child_values[0] if child_values and all(child_values[0] == v for v in child_values[1:]) else child_values,
+def _collect_ros_samples_from_reader(
+    path: str,
+    *,
+    opts: RosIngestOptions,
+    owner: str,
+) -> _CollectedRosSamples:
+    with owned_ros_message_stream(
+        _iter_ros_messages(path, opts=opts, owner=owner)
+    ) as messages:
+        return _collect_ros_samples(
+            messages,
+            opts=opts,
+            owner=owner,
+            path=path,
+        )
+
+
+def _collect_ros_record(
+    path_info: ResolvedIngestInput,
+    *,
+    opts: RosIngestOptions,
+    owner: str,
+) -> _RosRecord:
+    path = str(path_info.resolved_path)
+    samples = _collect_ros_samples_from_reader(path, opts=opts, owner=owner)
+    if samples.topic is None or samples.msgtype is None:
+        raise ValueError(f"{owner}: no messages were found in {path!r}.")
+    if not samples.times:
+        raise ValueError(f"{owner}: no valid ROS messages remained after filtering for {path!r}.")
+    time_arr = np.asarray(samples.times, dtype=np.int64)
+    value_arrays = {
+        name: np.asarray(values, dtype=float)
+        for name, values in samples.columns.items()
     }
+    order = _resolve_ros_sample_order(
+        time_arr,
+        opts=opts,
+        owner=owner,
+        path=path,
+    )
+    time_arr = time_arr[order]
+    value_arrays = {name: values[order] for name, values in value_arrays.items()}
+    parent_present, parent_value = samples.parent_frames.collapse(order)
+    child_present, child_value = samples.child_frames.collapse(order)
+    metadata = {
+        "ros_topic": samples.topic,
+        "ros_msgtype": samples.msgtype,
+        "ros_timestamp_epoch": "unix",
+        "ros_timestamp_unit": "ns",
+    }
+    if parent_present:
+        metadata["ros_parent_frame"] = parent_value
+    if child_present:
+        metadata["ros_child_frame"] = child_value
     return _RosRecord(
         label=path_info.label,
         resolved_path=path_info.resolved_path,
@@ -219,62 +268,172 @@ def _collect_ros_record(path_info: Any, *, opts: RosIngestOptions, owner: str) -
     )
 
 
-def _collect_ros_samples(
-    messages: Sequence[_RosMessage],
+def _append_pose_columns(
+    columns: dict[str, list[float]],
+    translation: tuple[float, float, float],
+    quaternion: tuple[float, float, float, float],
+) -> None:
+    for name, value in zip(_ROS_COLUMNS[:3], translation, strict=True):
+        columns[name].append(value)
+    for name, value in zip(_ROS_COLUMNS[3:], quaternion, strict=True):
+        columns[name].append(value)
+
+
+def _append_frame_metadata(
+    frames: RosFrameMetadata,
+    value: object,
+    *,
+    field: str,
+    owner: str,
+    path: str,
+) -> None:
+    frames.append(
+        None
+        if value is None
+        else normalize_ros_text(value, field=field, owner=owner, path=path)
+    )
+
+
+def _append_ros_sample(
+    message: _RosMessage,
     *,
     opts: RosIngestOptions,
     owner: str,
     path: str,
-) -> tuple[list[float], dict[str, list[float]], list[str | None], list[str | None]]:
-    times: list[float] = []
+    times: list[np.int64],
+    columns: dict[str, list[float]],
+    parent_frames: RosFrameMetadata,
+    child_frames: RosFrameMetadata,
+    collect_frames: bool,
+) -> None:
+    timestamp = _resolve_ros_timestamp(message, opts=opts, owner=owner, path=path)
+    if timestamp is None and opts.invalid_time == "fail":
+        raise ValueError(f"{owner}: missing ROS timestamp encountered in {path!r}.")
+    if timestamp is None:
+        return
+    translation, quaternion = _extract_pose_values(
+        message.msg,
+        family=message.family,
+        msgtype=message.msgtype,
+        owner=owner,
+    )
+    times.append(timestamp)
+    _append_pose_columns(columns, translation, quaternion)
+    if not collect_frames:
+        return
+    parent, child = _extract_frame_values(
+        message.msg,
+        family=message.family,
+        msgtype=message.msgtype,
+        owner=owner,
+    )
+    _append_frame_metadata(
+        parent_frames,
+        parent,
+        field="parent frame",
+        owner=owner,
+        path=path,
+    )
+    _append_frame_metadata(
+        child_frames,
+        child,
+        field="child frame",
+        owner=owner,
+        path=path,
+    )
+
+
+def _collect_ros_samples(
+    messages: Iterable[_RosMessage],
+    *,
+    opts: RosIngestOptions,
+    owner: str,
+    path: str,
+) -> _CollectedRosSamples:
+    topic: str | None = None
+    msgtype: str | None = None
+    times: list[np.int64] = []
     columns = {name: [] for name in _ROS_COLUMNS}
-    parent_values: list[str | None] = []
-    child_values: list[str | None] = []
+    collect_frames = (
+        opts.metadata_promotion.scalar_target != "none"
+        or opts.metadata_promotion.nonscalar_target != "none"
+    )
+    retain_frames = opts.metadata_promotion.nonscalar_target != "none"
+    parent_frames = RosFrameMetadata(retain_nonscalar=retain_frames)
+    child_frames = RosFrameMetadata(retain_nonscalar=retain_frames)
     for message in messages:
-        translation, quaternion, parent, child = _extract_pose_values(
-            message.msg,
-            msgtype=message.msgtype,
+        topic = message.topic
+        msgtype = message.msgtype
+        _append_ros_sample(
+            message,
+            opts=opts,
+            owner=owner,
+            path=path,
+            times=times,
+            columns=columns,
+            parent_frames=parent_frames,
+            child_frames=child_frames,
+            collect_frames=collect_frames,
+        )
+    return _CollectedRosSamples(
+        topic=topic,
+        msgtype=msgtype,
+        times=times,
+        columns=columns,
+        parent_frames=parent_frames,
+        child_frames=child_frames,
+    )
+
+
+def _spool_ros_records(
+    path_infos: Sequence[ResolvedIngestInput],
+    *,
+    spool_dir: str,
+    opts: RosIngestOptions,
+    owner: str,
+) -> tuple[_RosSpoolRecord, ...]:
+    plans: list[_RosSpoolRecord] = []
+    for row, path_info in enumerate(path_infos):
+        record = _collect_ros_record(path_info, opts=opts, owner=owner)
+        arrays = spool_adapter_arrays(
+            spool_dir,
+            row=row,
+            time_values=record.times,
+            field_values=tuple(record.values[name] for name in _ROS_COLUMNS),
             owner=owner,
         )
-        timestamp = _timestamp_seconds(
-            message.msg,
-            receive_ns=message.receive_ns,
-            source=opts.timestamp_source,
+        plans.append(
+            _RosSpoolRecord(
+                label=record.label,
+                resolved_path=record.resolved_path,
+                metadata=record.metadata,
+                arrays=arrays,
+            )
         )
-        if not np.isfinite(timestamp):
-            if opts.invalid_time == "fail":
-                raise ValueError(f"{owner}: invalid/non-finite ROS timestamp encountered in {path!r}.")
-            continue
-        times.append(float(timestamp))
-        columns["translation_x"].append(float(translation[0]))
-        columns["translation_y"].append(float(translation[1]))
-        columns["translation_z"].append(float(translation[2]))
-        columns["quaternion_x"].append(float(quaternion[0]))
-        columns["quaternion_y"].append(float(quaternion[1]))
-        columns["quaternion_z"].append(float(quaternion[2]))
-        columns["quaternion_w"].append(float(quaternion[3]))
-        parent_values.append(None if parent is None else str(parent))
-        child_values.append(None if child is None else str(child))
-    return times, columns, parent_values, child_values
+        del record
+    return tuple(plans)
 
 
-def _records_to_dataset(
-    records: Sequence[_RosRecord],
+def _spooled_ros_records_to_dataset(
+    records: Sequence[_RosSpoolRecord],
     *,
     opts: RosIngestOptions,
     owner: str,
 ) -> xr.Dataset:
     batch = len(records)
-    width = max(record.times.size for record in records)
+    width = max(record.arrays.size for record in records)
     labels = [record.label for record in records]
-    sizes = np.asarray([record.times.size for record in records], dtype=np.int64)
-    time_grid = np.full((batch, width), np.nan, dtype=float)
+    sizes = np.asarray([record.arrays.size for record in records], dtype=np.int64)
+    time_grid = np.full((batch, width), np.iinfo(np.int64).min, dtype=np.int64)
     values = {name: np.full((batch, width), np.nan, dtype=float) for name in _ROS_COLUMNS}
     for row, record in enumerate(records):
-        size = int(record.times.size)
-        time_grid[row, :size] = record.times
-        for name in _ROS_COLUMNS:
-            values[name][row, :size] = record.values[name]
+        fill_spooled_adapter_row(
+            record.arrays,
+            row=row,
+            time_target=time_grid,
+            field_targets=tuple(values[name] for name in _ROS_COLUMNS),
+            owner=owner,
+        )
     ds = xr.Dataset(
         data_vars={
             name: ((opts.batch_dim, opts.sequence_dim), values[name])
@@ -287,6 +446,7 @@ def _records_to_dataset(
             opts.sequence_size_coord: (opts.batch_dim, sizes),
         },
     )
+    ds.coords[opts.param_coord].attrs = {"units": "ns", "epoch": "unix"}
     metadata = aggregate_batch_metadata([record.metadata for record in records])
     metadata["io_source_paths"] = [record.resolved_path for record in records]
     return promote_adapter_metadata(
@@ -309,7 +469,7 @@ def read_ros_logs(
     Parameters
     ----------
     inputs : str | Sequence[str] | Mapping[str, str]
-        Input paths/mapping consumed by ingestion.
+        ROS 1 file or ROS 2 bag-directory paths consumed by ingestion.
     opts : RosIngestOptions | None, optional
         When ``None``, operation-specific defaults are resolved by internal option coercion. ``RosIngestOptions`` key fields: ``topic`` (default None), ``message_type`` (default None), ``timestamp_source`` (default 'auto'), ``sort_time`` (default True).
     validate : bool, optional
@@ -329,7 +489,9 @@ def read_ros_logs(
 
     Notes
     -----
-    Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+    ROS header and receive timestamps are normalized exactly to signed int64
+    Unix nanoseconds. Normalized records are temporarily spooled so final
+    padded grids do not coexist with every source record in memory.
 
     Examples
     --------
@@ -344,10 +506,26 @@ def read_ros_logs(
     """
     owner = "tal.io.read_ros_logs"
     options = coerce_ros_ingest_options(opts, owner=owner)
-    path_infos = resolve_ingest_inputs(inputs, owner=owner)
-    records = [_collect_ros_record(path_info, opts=options, owner=owner) for path_info in path_infos]
-    ds = _records_to_dataset(records, opts=options, owner=owner)
-    return finalize_adapter_dataset(
+    _require_ros_layout_names(options, owner=owner)
+    _require_ros_metadata_preflight(options, owner=owner)
+    path_infos = resolve_ingest_inputs(
+        inputs,
+        owner=owner,
+        allow_directories=True,
+    )
+    with owned_temporary_directory(
+        prefix="tal-ros-ingest-",
+        owner=owner,
+        purpose="ROS ingest spool directory",
+    ) as spool_dir:
+        records = _spool_ros_records(
+            path_infos,
+            spool_dir=spool_dir,
+            opts=options,
+            owner=owner,
+        )
+        ds = _spooled_ros_records_to_dataset(records, opts=options, owner=owner)
+    return _finalize_owned_adapter_dataset(
         ds,
         batch_dim=options.batch_dim,
         sequence_dim=options.sequence_dim,

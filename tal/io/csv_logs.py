@@ -3,21 +3,26 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+import warnings
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_context
-from tal.core.orchestration.inputs import coerce_analysis_object_input
-
-from .adapter_finalize import finalize_adapter_dataset
+from .adapter_finalize import _finalize_owned_adapter_dataset
 from .adapter_metadata import (
     aggregate_batch_metadata,
-    collect_csv_scalar_metadata,
     promote_adapter_metadata,
+    require_generated_metadata_preflight,
 )
-from .adapter_paths import normalize_export_label_path, resolve_ingest_inputs
+from .adapter_paths import resolve_ingest_inputs
+from .adapter_spool import AdapterArraySpool, fill_spooled_adapter_row, spool_adapter_arrays
+from .adapter_temp import owned_temporary_directory
+from .adapter_time import is_monotonic
+from .csv_export import coerce_csv_export_source, execute_csv_export
+from .csv_metadata import collect_csv_scalar_metadata
+from .csv_time import normalize_csv_time_tokens
+from .csv_validation import require_valid_csv_header
 from .options import (
     CsvExportOptions,
     CsvIngestOptions,
@@ -25,13 +30,14 @@ from .options import (
     coerce_csv_ingest_options,
 )
 
-_TIME_INFER_CANDIDATES = {"time", "timestamp", "t", "time_s", "time_sec"}
+_TIME_INFER_CANDIDATES = ("time", "timestamp", "t", "time_s", "time_sec")
+_CSV_GENERATED_METADATA_NAMES = ("io_time_source", "io_source_paths")
+_CSV_SCALAR_GENERATED_METADATA_NAMES = ("io_time_source",)
 
 
 @dataclass(frozen=True)
 class _CsvRecord:
     label: str
-    source_path: str
     resolved_path: str
     time_col: str
     time_values: np.ndarray
@@ -40,18 +46,62 @@ class _CsvRecord:
     metadata: dict[str, object]
 
 
-def _is_monotonic(values: np.ndarray, *, order: str) -> bool:
-    if values.size <= 1:
-        return True
-    diffs = np.diff(values)
-    if order == "strict":
-        return bool(np.all(diffs > 0))
-    return bool(np.all(diffs >= 0))
+@dataclass(frozen=True)
+class _CsvSpoolRecord:
+    label: str
+    resolved_path: str
+    time_col: str
+    time_dtype: str
+    integer_time_bounds: tuple[int, int] | None
+    metadata: dict[str, object]
+    arrays: AdapterArraySpool
 
 
-def _resolve_time_column(frame: pd.DataFrame, *, opts: CsvIngestOptions, owner: str, path: str) -> str:
+def _require_csv_ingest_preflight(
+    opts: CsvIngestOptions,
+    *,
+    value_columns: Sequence[str],
+    owner: str,
+) -> None:
+    if opts.value_columns is not None and not value_columns:
+        raise ValueError(f"{owner}: value_columns must contain at least one name when provided.")
+    layout_names = {
+        opts.batch_dim,
+        opts.sequence_dim,
+        opts.sequence_size_coord,
+        opts.param_coord,
+    }
+    collisions = tuple(name for name in value_columns if name in layout_names)
+    if collisions:
+        raise ValueError(
+            f"{owner}: value columns collide with reserved semantic names: {collisions!r}."
+        )
+    occupied = (
+        opts.batch_dim,
+        opts.sequence_dim,
+        opts.sequence_size_coord,
+        opts.param_coord,
+        *value_columns,
+    )
+    require_generated_metadata_preflight(
+        options=opts.metadata_promotion,
+        generated_names=_CSV_GENERATED_METADATA_NAMES,
+        scalar_generated_names=_CSV_SCALAR_GENERATED_METADATA_NAMES,
+        user_metadata_names=opts.metadata_columns,
+        occupied_names=occupied,
+        owner=owner,
+    )
+
+
+def _resolve_time_column(
+    columns: Sequence[object],
+    *,
+    opts: CsvIngestOptions,
+    owner: str,
+    path: str,
+) -> str:
     if opts.time_col is not None:
-        if opts.time_col not in frame.columns:
+        if opts.time_col not in columns:
             raise ValueError(f"{owner}: time_col {opts.time_col!r} not found in {path!r}.")
         return opts.time_col
     if not opts.allow_time_infer:
@@ -59,7 +109,12 @@ def _resolve_time_column(frame: pd.DataFrame, *, opts: CsvIngestOptions, owner: 
             f"{owner}: time_col must be explicitly provided by default; set allow_time_infer=True "
             "to enable inference."
         )
-    matches = [name for name in frame.columns if str(name).lower() in _TIME_INFER_CANDIDATES]
+    matches = [
+        name
+        for candidate in _TIME_INFER_CANDIDATES
+        for name in columns
+        if str(name).lower() == candidate
+    ]
     if len(matches) != 1:
         raise ValueError(
             f"{owner}: time inference requires exactly one candidate from {_TIME_INFER_CANDIDATES!r}; "
@@ -76,20 +131,22 @@ def _coerce_time_column(
     owner: str,
     path: str,
 ) -> pd.DataFrame:
-    numeric = pd.to_numeric(frame[time_col], errors="coerce")
-    finite = np.isfinite(numeric.to_numpy(dtype=float, copy=False))
-    if not bool(np.all(finite)):
-        bad = int(finite.size - np.count_nonzero(finite))
+    normalized = normalize_csv_time_tokens(
+        frame[time_col],
+        owner=owner,
+        label=f"time column {time_col!r} in {path!r}",
+    )
+    if normalized.invalid_count:
         if opts.invalid_time == "fail":
             raise ValueError(
-                f"{owner}: time column {time_col!r} in {path!r} contains {bad} non-finite values."
+                f"{owner}: time column {time_col!r} in {path!r} contains "
+                f"{normalized.invalid_count} non-finite values."
             )
-        frame = frame.loc[finite].copy(deep=False)
-        numeric = numeric.loc[finite]
+        frame = frame.loc[normalized.valid_mask].copy(deep=False)
         if frame.empty:
             raise ValueError(f"{owner}: all rows were dropped in {path!r} due to non-finite time values.")
     out = frame.copy(deep=False)
-    out[time_col] = numeric.astype(float)
+    out[time_col] = normalized.values
     if opts.sort_time:
         out = out.sort_values(time_col, kind="mergesort").reset_index(drop=True)
     return out
@@ -103,16 +160,16 @@ def _apply_monotonic_policy(
     owner: str,
     path: str,
 ) -> pd.DataFrame:
-    values = frame[time_col].to_numpy(dtype=float, copy=False)
-    if _is_monotonic(values, order=opts.monotonic_order):
+    values = frame[time_col].to_numpy(copy=False)
+    if is_monotonic(values, order=opts.monotonic_order):
         return frame
     if not opts.allow_nonmonotonic_normalize:
         raise ValueError(
             f"{owner}: time column {time_col!r} in {path!r} violates monotonic_order={opts.monotonic_order!r}."
         )
     sorted_frame = frame.sort_values(time_col, kind="mergesort").reset_index(drop=True)
-    sorted_values = sorted_frame[time_col].to_numpy(dtype=float, copy=False)
-    if not _is_monotonic(sorted_values, order=opts.monotonic_order):
+    sorted_values = sorted_frame[time_col].to_numpy(copy=False)
+    if not is_monotonic(sorted_values, order=opts.monotonic_order):
         raise ValueError(
             f"{owner}: time normalization could not satisfy monotonic_order={opts.monotonic_order!r} in {path!r}."
         )
@@ -141,15 +198,7 @@ def _resolve_value_columns(
     missing = tuple(name for name in columns if name not in frame.columns)
     if missing:
         raise ValueError(f"{owner}: value columns {missing!r} were not found in {path!r}.")
-    collisions = tuple(
-        name
-        for name in columns
-        if name in {opts.batch_dim, opts.sequence_dim, opts.sequence_size_coord, opts.param_coord}
-    )
-    if collisions:
-        raise ValueError(
-            f"{owner}: value columns collide with reserved semantic names: {collisions!r}."
-        )
+    _require_csv_ingest_preflight(opts, value_columns=columns, owner=owner)
     return tuple(columns)
 
 
@@ -167,18 +216,38 @@ def _coerce_numeric_value_column(
     return numeric.to_numpy(dtype=float, copy=False)
 
 
+def _preserve_csv_time_token(value: str) -> str:
+    """Keep timestamp text raw until TAL classifies it."""
+    return value
+
+
+def _read_csv_frame(path: str, *, time_col: str, owner: str) -> pd.DataFrame:
+    """Delegate complete record parsing to pandas under the public owner."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", pd.errors.ParserWarning)
+            return pd.read_csv(
+                path,
+                converters={time_col: _preserve_csv_time_token},
+                index_col=False,
+                on_bad_lines="error",
+            )
+    except Exception as exc:  # pragma: no cover - pandas engine envelope.
+        raise ValueError(f"{owner}: failed reading CSV file {path!r}.") from exc
+
+
 def _read_csv_record(
     path_info: Any,
     *,
     opts: CsvIngestOptions,
     owner: str,
 ) -> _CsvRecord:
-    path = str(path_info.path)
-    try:
-        frame = pd.read_csv(path)
-    except Exception as exc:  # pragma: no cover - pandas engine envelope.
-        raise ValueError(f"{owner}: failed reading CSV file {path!r}.") from exc
-    time_col = _resolve_time_column(frame, opts=opts, owner=owner, path=path)
+    path = str(path_info.resolved_path)
+    columns = require_valid_csv_header(path, owner=owner)
+    time_col = _resolve_time_column(columns, opts=opts, owner=owner, path=path)
+    frame = _read_csv_frame(path, time_col=time_col, owner=owner)
+    if frame.empty:
+        raise ValueError(f"{owner}: CSV file {path!r} contains no data rows.")
     frame = _coerce_time_column(frame, time_col=time_col, opts=opts, owner=owner, path=path)
     frame = _apply_monotonic_policy(frame, time_col=time_col, opts=opts, owner=owner, path=path)
     value_columns = _resolve_value_columns(frame, time_col=time_col, opts=opts, owner=owner, path=path)
@@ -191,31 +260,76 @@ def _read_csv_record(
     )
     return _CsvRecord(
         label=path_info.label,
-        source_path=path,
         resolved_path=path_info.resolved_path,
         time_col=time_col,
-        time_values=frame[time_col].to_numpy(dtype=float, copy=False),
+        time_values=frame[time_col].to_numpy(copy=False),
         value_columns=value_columns,
         values=values,
         metadata=metadata,
     )
 
 
-def _records_to_dataset(
-    records: Sequence[_CsvRecord],
+def _integer_time_bounds(values: np.ndarray) -> tuple[int, int] | None:
+    if values.dtype.kind not in "iu":
+        return None
+    return int(values.min()), int(values.max())
+
+
+def _spool_csv_records(
+    path_infos: Sequence[Any],
     *,
+    spool_dir: str,
+    opts: CsvIngestOptions,
+    owner: str,
+) -> tuple[tuple[_CsvSpoolRecord, ...], tuple[str, ...]]:
+    plans: list[_CsvSpoolRecord] = []
+    value_columns: tuple[str, ...] | None = None
+    for row, path_info in enumerate(path_infos):
+        record = _read_csv_record(path_info, opts=opts, owner=owner)
+        if value_columns is None:
+            value_columns = record.value_columns
+        elif set(record.value_columns) != set(value_columns):
+            raise ValueError(
+                f"{owner}: value-column mismatch across inputs; expected {value_columns!r}, "
+                f"got {record.value_columns!r} for {record.resolved_path!r}."
+            )
+        arrays = spool_adapter_arrays(
+            spool_dir,
+            row=row,
+            time_values=record.time_values,
+            field_values=tuple(record.values[name] for name in value_columns),
+            owner=owner,
+        )
+        plans.append(
+            _CsvSpoolRecord(
+                label=record.label,
+                resolved_path=record.resolved_path,
+                time_col=record.time_col,
+                time_dtype=record.time_values.dtype.str,
+                integer_time_bounds=_integer_time_bounds(record.time_values),
+                metadata=record.metadata,
+                arrays=arrays,
+            )
+        )
+        del record
+    if value_columns is None:  # pragma: no cover - non-empty input invariant.
+        raise RuntimeError("CSV spool planning received no inputs")
+    return tuple(plans), value_columns
+
+
+def _spooled_csv_records_to_dataset(
+    records: Sequence[_CsvSpoolRecord],
+    *,
+    value_columns: tuple[str, ...],
     opts: CsvIngestOptions,
     owner: str,
 ) -> xr.Dataset:
-    first_columns = records[0].value_columns
-    for record in records[1:]:
-        if record.value_columns != first_columns:
-            raise ValueError(
-                f"{owner}: value-column mismatch across inputs; expected {first_columns!r}, "
-                f"got {record.value_columns!r} for {record.source_path!r}."
-            )
     labels = [record.label for record in records]
-    sizes, time_grid, var_arrays = _build_record_grids(records, value_columns=first_columns)
+    sizes, time_grid, var_arrays = _build_spooled_record_grids(
+        records,
+        value_columns=value_columns,
+        owner=owner,
+    )
     width = int(time_grid.shape[1])
     ds = xr.Dataset(
         data_vars={
@@ -239,28 +353,90 @@ def _records_to_dataset(
     )
 
 
-def _build_record_grids(
-    records: Sequence[_CsvRecord],
+def _build_spooled_record_grids(
+    records: Sequence[_CsvSpoolRecord],
     *,
     value_columns: tuple[str, ...],
+    owner: str,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     batch = len(records)
-    width = max(record.time_values.size for record in records)
-    sizes = np.asarray([record.time_values.size for record in records], dtype=np.int64)
-    time_grid = np.full((batch, width), np.nan, dtype=float)
+    width = max(record.arrays.size for record in records)
+    sizes = np.asarray([record.arrays.size for record in records], dtype=np.int64)
+    time_dtype = _resolve_csv_time_dtype(records, owner=owner)
+    time_grid = np.full(
+        (batch, width),
+        _csv_time_padding_value(time_dtype),
+        dtype=time_dtype,
+    )
     var_arrays = {
         name: np.full((batch, width), np.nan, dtype=float)
         for name in value_columns
     }
     for row, record in enumerate(records):
-        size = int(record.time_values.size)
-        time_grid[row, :size] = record.time_values
-        for name in value_columns:
-            var_arrays[name][row, :size] = record.values[name]
+        fill_spooled_adapter_row(
+            record.arrays,
+            row=row,
+            time_target=time_grid,
+            field_targets=tuple(var_arrays[name] for name in value_columns),
+            owner=owner,
+        )
     return sizes, time_grid, var_arrays
 
 
-def _build_batch_metadata(records: Sequence[_CsvRecord]) -> dict[str, object]:
+def _resolve_csv_time_dtype(
+    records: Sequence[_CsvSpoolRecord],
+    *,
+    owner: str,
+) -> np.dtype[Any]:
+    dtypes = tuple(np.dtype(record.time_dtype) for record in records)
+    integer_records = tuple(record for record in records if record.integer_time_bounds is not None)
+    if len(integer_records) == len(records):
+        return _resolve_integer_time_dtype(dtypes, integer_records, owner=owner)
+    dtype = np.result_type(*dtypes)
+    if integer_records and dtype.kind == "f":
+        exact_limit = 2 ** (np.finfo(dtype).nmant + 1)
+        if any(
+            max(abs(bounds[0]), abs(bounds[1])) > exact_limit
+            for record in integer_records
+            if (bounds := record.integer_time_bounds) is not None
+        ):
+            raise ValueError(
+                f"{owner}: integer CSV time values cannot be combined with floating-point "
+                "time values without precision loss."
+            )
+    return dtype
+
+
+def _resolve_integer_time_dtype(
+    dtypes: tuple[np.dtype[Any], ...],
+    records: Sequence[_CsvSpoolRecord],
+    *,
+    owner: str,
+) -> np.dtype[Any]:
+    dtype = np.result_type(*dtypes)
+    if dtype.kind in "iu":
+        return dtype
+    bounds = tuple(record.integer_time_bounds for record in records)
+    minimum = min(bound[0] for bound in bounds if bound is not None)
+    maximum = max(bound[1] for bound in bounds if bound is not None)
+    if minimum >= 0:
+        return np.dtype(np.uint64)
+    if maximum <= np.iinfo(np.int64).max:
+        return np.dtype(np.int64)
+    raise ValueError(
+        f"{owner}: integer CSV time values span no lossless NumPy integer dtype."
+    )
+
+
+def _csv_time_padding_value(dtype: np.dtype[Any]) -> int | float:
+    if dtype.kind == "f":
+        return np.nan
+    if dtype.kind == "u":
+        return 0
+    return int(np.iinfo(dtype).min)
+
+
+def _build_batch_metadata(records: Sequence[_CsvSpoolRecord]) -> dict[str, object]:
     metadata = aggregate_batch_metadata([record.metadata for record in records])
     time_cols = [record.time_col for record in records]
     if all(time_cols[0] == value for value in time_cols[1:]):
@@ -302,7 +478,13 @@ def read_csv_logs(
 
     Notes
     -----
-    Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+    This lossy adapter constructs a new AO from explicit ingest options and
+    input columns. It is not the inverse of :func:`write_csv_logs`. Duplicate
+    source headers fail before pandas can assign normalized identities. Python's
+    CSV reader owns logical-header grammar; Python/pandas own complete-record
+    grammar, payload NUL behavior, field-size limits, and parser security.
+    Normalized records are temporarily spooled so final padded grids do not
+    coexist with every source record in memory.
 
     Examples
     --------
@@ -318,10 +500,30 @@ def read_csv_logs(
     """
     owner = "tal.io.read_csv_logs"
     options = coerce_csv_ingest_options(opts, owner=owner)
+    _require_csv_ingest_preflight(
+        options,
+        value_columns=options.value_columns if options.value_columns is not None else (),
+        owner=owner,
+    )
     path_infos = resolve_ingest_inputs(inputs, owner=owner)
-    records = [_read_csv_record(path_info, opts=options, owner=owner) for path_info in path_infos]
-    ds = _records_to_dataset(records, opts=options, owner=owner)
-    return finalize_adapter_dataset(
+    with owned_temporary_directory(
+        prefix="tal-csv-ingest-",
+        owner=owner,
+        purpose="CSV ingest spool directory",
+    ) as spool_dir:
+        records, value_columns = _spool_csv_records(
+            path_infos,
+            spool_dir=spool_dir,
+            opts=options,
+            owner=owner,
+        )
+        ds = _spooled_csv_records_to_dataset(
+            records,
+            value_columns=value_columns,
+            opts=options,
+            owner=owner,
+        )
+    return _finalize_owned_adapter_dataset(
         ds,
         batch_dim=options.batch_dim,
         sequence_dim=options.sequence_dim,
@@ -330,164 +532,6 @@ def read_csv_logs(
         validate=validate,
         owner=owner,
     )
-
-
-def _raw_label_key(label: object) -> tuple[str, object]:
-    try:
-        if bool(np.isnan(label)):  # type: ignore[arg-type]
-            return ("nan", "nan")
-    except Exception:
-        pass
-    return ("value", repr(label))
-
-
-def _require_unique_batch_labels(labels: Sequence[object], *, owner: str) -> None:
-    seen: set[tuple[str, object]] = set()
-    for label in labels:
-        key = _raw_label_key(label)
-        if key in seen:
-            raise ValueError(
-                f"{owner}: duplicate batch label {label!r} is not supported for grouped CSV export."
-            )
-        seen.add(key)
-
-
-def _resolve_export_context(ao: Any, *, owner: str) -> tuple[str, str, str | None, xr.Dataset]:
-    context = resolve_dataset_context(
-        ao,
-        owner=owner,
-        options=DatasetContextOptions(require_roles=True, require_sequence_dim=True),
-    )
-    if context.sequence_dim is None:
-        raise ValueError(f"{owner}: grouped CSV export requires declared sequence_dim.")
-    if len(context.batch_dims) != 1:
-        raise ValueError(
-            f"{owner}: grouped CSV export requires exactly one batch dim; got {context.batch_dims!r}."
-        )
-    batch_dim = context.batch_dims[0]
-    if batch_dim not in context.ds.coords:
-        raise ValueError(
-            f"{owner}: grouped CSV export derives labels from batch coordinate values; "
-            f"coord {batch_dim!r} is missing."
-        )
-    return batch_dim, context.sequence_dim, context.sequence_size_coord, context.ds
-
-
-def _resolve_effective_export_size_name(
-    *,
-    options: CsvExportOptions,
-    context_size_name: str | None,
-) -> str | None:
-    if options.sequence_size_coord is not None:
-        return options.sequence_size_coord
-    return context_size_name
-
-
-def _resolve_valid_length(
-    ds: xr.Dataset,
-    *,
-    batch_dim: str,
-    row: int,
-    sequence_dim: str,
-    size_name: str | None,
-    owner: str,
-) -> int:
-    width = int(ds.sizes[sequence_dim])
-    if size_name is None:
-        return width
-    if size_name not in ds.coords:
-        raise ValueError(f"{owner}: sequence_size_coord {size_name!r} was not found in dataset coords.")
-    coord = ds.coords[size_name]
-    if coord.dims != (batch_dim,):
-        raise ValueError(
-            f"{owner}: sequence_size_coord {size_name!r} must have dims ({batch_dim!r},); "
-            f"got {tuple(coord.dims)!r}."
-        )
-    raw_value = np.asarray(coord.isel({batch_dim: row}).values).item()
-    if isinstance(raw_value, (bool, np.bool_)):
-        raise ValueError(f"{owner}: sequence_size_coord {size_name!r} value {raw_value!r} is not an integer.")
-    try:
-        numeric = float(raw_value)
-    except Exception as exc:
-        raise ValueError(
-            f"{owner}: sequence_size_coord {size_name!r} value {raw_value!r} is not numeric."
-        ) from exc
-    if not np.isfinite(numeric):
-        raise ValueError(
-            f"{owner}: sequence_size_coord {size_name!r} value {raw_value!r} must be finite."
-        )
-    if not float(numeric).is_integer():
-        raise ValueError(
-            f"{owner}: sequence_size_coord {size_name!r} value {raw_value!r} must be integer-valued."
-        )
-    value = int(numeric)
-    if value < 0 or value > width:
-        raise ValueError(
-            f"{owner}: sequence_size_coord {size_name!r} value {value} is out of bounds for width {width}."
-        )
-    return value
-
-
-def _append_csv_column(
-    columns: dict[str, np.ndarray],
-    column_origins: dict[str, object],
-    *,
-    raw_name: object,
-    values: np.ndarray,
-    owner: str,
-) -> None:
-    key = str(raw_name)
-    if key in columns:
-        first = column_origins[key]
-        raise ValueError(
-            f"{owner}: duplicate CSV column name {key!r} after string normalization from "
-            f"{first!r} and {raw_name!r}."
-        )
-    columns[key] = values
-    column_origins[key] = raw_name
-
-
-def _row_frame_columns(
-    row_ds: xr.Dataset,
-    *,
-    sequence_dim: str,
-    valid_length: int,
-    size_name: str | None,
-    owner: str,
-) -> dict[str, np.ndarray]:
-    columns: dict[str, np.ndarray] = {}
-    column_origins: dict[str, object] = {}
-    for name, coord in row_ds.coords.items():
-        if name in {sequence_dim, size_name}:
-            continue
-        if coord.dims == (sequence_dim,):
-            _append_csv_column(
-                columns,
-                column_origins,
-                raw_name=name,
-                values=coord.values[:valid_length],
-                owner=owner,
-            )
-            continue
-        if coord.dims != ():
-            raise ValueError(
-                f"{owner}: coordinate {name!r} is not representable for grouped CSV export; "
-                f"dims={tuple(coord.dims)!r}."
-            )
-    for name, arr in row_ds.data_vars.items():
-        if arr.dims != (sequence_dim,):
-            raise ValueError(
-                f"{owner}: variable {name!r} is not representable for grouped CSV export; "
-                f"dims={tuple(arr.dims)!r}."
-            )
-        _append_csv_column(
-            columns,
-            column_origins,
-            raw_name=name,
-            values=arr.values[:valid_length],
-            owner=owner,
-        )
-    return columns
 
 
 def write_csv_logs(
@@ -521,7 +565,15 @@ def write_csv_logs(
 
     Notes
     -----
-    Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+    This is a lossy tabular projection, not AO persistence. It omits padded
+    tails using declared validity, may eagerly materialize selected rows, and
+    does not preserve arbitrary schema, dtype, attrs, encoding, indexes,
+    chunks, or subclass identity. Resident rows serialize without Dask; lazy
+    rows share one graph under the configured scheduler and are jointly realized
+    before serialization. The writer serializes each row directly to a
+    same-directory temporary file and commits through per-destination atomic
+    replacement. The batch write is non-transactional. Export assumes a trusted
+    filesystem whose path topology remains stable.
 
     Examples
     --------
@@ -544,39 +596,8 @@ def write_csv_logs(
     """
     owner = "tal.io.write_csv_logs"
     options = coerce_csv_export_options(opts, owner=owner)
-    ao = coerce_analysis_object_input(value, owner=owner)
-    batch_dim, sequence_dim, context_size_name, ds = _resolve_export_context(ao, owner=owner)
-    size_name = _resolve_effective_export_size_name(options=options, context_size_name=context_size_name)
-    labels = list(ds.coords[batch_dim].values)
-    _require_unique_batch_labels(labels, owner=owner)
-    paths: list[str] = []
-    seen_paths: set[str] = set()
-    for row, label in enumerate(labels):
-        path = normalize_export_label_path(label, out_dir=out_dir, owner=owner)
-        if path in seen_paths:
-            raise ValueError(
-                f"{owner}: normalized export path collision for label {label!r} at path {path!r}."
-            )
-        seen_paths.add(path)
-        valid_length = _resolve_valid_length(
-            ds,
-            batch_dim=batch_dim,
-            row=row,
-            sequence_dim=sequence_dim,
-            size_name=size_name,
-            owner=owner,
-        )
-        row_ds = ds.isel({batch_dim: row}, drop=True)
-        columns = _row_frame_columns(
-            row_ds,
-            sequence_dim=sequence_dim,
-            valid_length=valid_length,
-            size_name=size_name,
-            owner=owner,
-        )
-        pd.DataFrame(columns).to_csv(path, index=False, float_format=options.float_format)
-        paths.append(path)
-    return tuple(paths)
+    ao = coerce_csv_export_source(value, owner=owner)
+    return execute_csv_export(ao, out_dir, options=options, owner=owner)
 
 
 __all__ = ["read_csv_logs", "write_csv_logs"]

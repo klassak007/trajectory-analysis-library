@@ -12,7 +12,7 @@ def _ao_two_vars() -> AnalysisObject:
     ds = xr.Dataset(
         data_vars={
             "v1": (("sample",), [0.0, 10.0, 20.0, 30.0]),
-            "v2": (("sample",), [1.0, 11.0, 21.0, 31.0]),
+            "value_b": (("sample",), [1.0, 11.0, 21.0, 31.0]),
         },
         coords={"sample": [0, 1, 2, 3], "tau": ("sample", [0.0, 0.5, 1.0, 1.5])},
     )
@@ -33,7 +33,7 @@ def test_param_perf_015_map_reuse_across_multiple_vars(monkeypatch) -> None:
     out = ao.param.at([0.25, 1.25], opts=ParamEvalOptions(method="linear"))
     assert calls["n"] == 1
     np.testing.assert_allclose(out.data["v1"].values, [5.0, 25.0])
-    np.testing.assert_allclose(out.data["v2"].values, [6.0, 26.0])
+    np.testing.assert_allclose(out.data["value_b"].values, [6.0, 26.0])
 
 
 def test_param_perf_016_integral_param_mapping_preserves_dask_laziness(

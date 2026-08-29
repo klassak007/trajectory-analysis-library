@@ -7,7 +7,7 @@ import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
-from tal.core.schema import merge_schema
+from tal.core.schema import copy_dataset_attrs, merge_schema
 from tal.core.orchestration.context import DatasetContext, DatasetContextOptions, resolve_dataset_context
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
@@ -107,8 +107,7 @@ def _assemble(
     arr = xr.concat(list(components), dim=dim).transpose(*target_dims)
     arr.name = var_name
     out = arr.to_dataset(name=var_name)
-    out.attrs = dict(attrs_source.attrs)
-    return out
+    return copy_dataset_attrs(attrs_source, out, validate=False)
 
 
 def _target_dims(data: xr.DataArray, *, old_core_dim: str, new_core_dim: str) -> tuple[str, ...]:

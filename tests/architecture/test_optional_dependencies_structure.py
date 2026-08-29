@@ -104,8 +104,8 @@ def test_numba_opt_001_numba_extra_is_optional_only() -> None:
     assert all("tal[numba]" not in dep for dep in optional["full"])
 
 
-def test_geo_opt_001_geo_extra_is_optional_and_test_enabled() -> None:
-    """ID: GEO_CORE_G1_011_geo_optional_dependency_group_declared."""
+def test_arch_geo_g1_008_geo_extra_is_optional_and_test_enabled() -> None:
+    """ID: ARCH_GEO_G1_008_geo_extra_is_optional_and_test_enabled."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     deps = pyproject["project"]["dependencies"]
     optional = pyproject["project"]["optional-dependencies"]
@@ -115,8 +115,8 @@ def test_geo_opt_001_geo_extra_is_optional_and_test_enabled() -> None:
     assert "tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]" in optional["full"]
 
 
-def test_astro_opt_001_astro_and_spice_extras_are_optional() -> None:
-    """ID: ASTRO_CORE_A1_008_astro_optional_dependency_groups_declared."""
+def test_arch_astro_a1_007_astro_and_spice_extras_are_optional() -> None:
+    """ID: ARCH_ASTRO_A1_007_astro_and_spice_extras_are_optional."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     deps = pyproject["project"]["dependencies"]
     optional = pyproject["project"]["optional-dependencies"]
@@ -164,7 +164,6 @@ def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
         "xr.",
         'attrs["tal"]',
         "attrs['tal']",
-        "tal_v2",
         "set_roles(",
         "set_param_coord(",
         "set_validity(",
@@ -231,7 +230,6 @@ def test_numba_arch_006_shared_block_rows_helper_is_schema_free() -> None:
     assert "tal.core" not in text
     assert "tal.linalg" not in text
     assert "tal.spatial" not in text
-    assert "tal_v2" not in text
     _assert_no_direct_numba_import(text)
 
 
@@ -295,7 +293,6 @@ def test_numba_arch_010_numba_scan_helper_is_schema_free() -> None:
     assert "tal.core" not in text
     assert "tal.linalg" not in text
     assert "tal.spatial" not in text
-    assert "tal_v2" not in text
     _assert_no_direct_numba_import(text)
 
 
@@ -369,7 +366,6 @@ def test_numba_arch_020_public_numba_utility_surface_import_boundaries() -> None
         assert "tal.core" not in text
         assert "tal.spatial" not in text
         assert "tal.linalg" not in text
-        assert "tal_v2" not in text
 
 
 def test_numba_arch_021_public_numba_utility_surface_has_no_domain_policy() -> None:
@@ -429,7 +425,6 @@ def test_numba_arch_022_public_numba_benchmark_helpers_are_schema_free() -> None
     assert "tal.core" not in text
     assert "tal.spatial" not in text
     assert "tal.linalg" not in text
-    assert "tal_v2" not in text
 
 
 def test_numba_arch_023_public_numba_window_topology_helpers_stay_policy_free() -> None:

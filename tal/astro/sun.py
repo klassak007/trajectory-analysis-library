@@ -267,7 +267,8 @@ def direction_to_sun(
     time : object | None, optional
         Explicit datetime-like scalar or one-dimensional observation time.
     opts : SunDirectionOptions | None, optional
-        Backend, time-source, IERS, and reserved SPICE options.
+        Backend and timing policy. Key fields are ``time`` and ``iers``;
+        ``backend`` selects Astropy or the reserved SPICE path.
     validate : bool, optional
         Whether to validate the finalized ``TopocentricDirection``.
 

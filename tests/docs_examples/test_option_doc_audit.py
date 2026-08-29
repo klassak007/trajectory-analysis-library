@@ -71,7 +71,7 @@ def _geo_option_items():
 
 
 def test_option_checklist_scope_is_frozen() -> None:
-    assert CURATED_OPTION_AUDIT_COUNT == 115
+    assert CURATED_OPTION_AUDIT_COUNT == 114
     derived = _option_symbol_rows_from_manifest()
     expected = sorted((item.symbol, item.option_param) for item in CURATED_OPTION_AUDIT_CHECKLIST)
     assert derived == expected

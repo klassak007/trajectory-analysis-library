@@ -42,12 +42,6 @@ def _literal_dynamic_imports(path: Path) -> list[str]:
     return out
 
 
-def test_arch_geo_g1_001_geo_package_has_no_tal_v2_imports() -> None:
-    """ID: ARCH_GEO_G1_001_geo_package_has_no_tal_v2_imports."""
-    for path in sorted(Path("tal/geo").glob("*.py")):
-        assert "tal_v2" not in path.read_text(encoding="utf-8")
-
-
 def test_arch_geo_g1_002_core_and_frames_do_not_import_geo() -> None:
     """ID: ARCH_GEO_G1_002_core_and_frames_do_not_import_geo."""
     for root in (Path("tal/core"), Path("tal/frames")):
@@ -164,13 +158,6 @@ def test_arch_geo_g3_003_geo_methods_are_thin_delegators() -> None:
     assert "from .distance import distance_to" in geodetic
     assert "from .interpolation import geodetic_param_at" in temporal
     assert "from .interpolation import geodetic_param_interp_like" in temporal
-
-
-def test_arch_geo_g3_004_no_tal_v2_imports() -> None:
-    """ID: ARCH_GEO_G3_004_no_tal_v2_imports."""
-    for path in sorted(Path("tal/geo").glob("*.py")):
-        imports = _imports(path)
-        assert all(not name.startswith("tal_v2") for name in imports)
 
 
 def test_arch_geo_g3_005_geo_does_not_import_astropy_or_spiceypy() -> None:

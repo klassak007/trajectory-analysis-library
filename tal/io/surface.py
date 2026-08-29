@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from .csv_io import read_analysis_object_csv, write_analysis_object_csv
-from .options import AOCsvReadOptions, AOCsvWriteOptions, AOZarrReadOptions, AOZarrWriteOptions
+from .options import AOZarrReadOptions, AOZarrWriteOptions
 from .zarr_io import read_analysis_object_zarr, write_analysis_object_zarr
 
 
@@ -24,7 +23,9 @@ class AnalysisObjectIOAccessor:
         store : str
             Zarr store location used by this IO operation.
         opts : AOZarrWriteOptions | None, optional
-            When ``None``, operation-specific defaults are resolved by internal option coercion. ``AOZarrWriteOptions`` key fields: ``mode`` (default None), ``consolidated`` (default None).
+            Full-store write policy. ``mode`` is ``None``, ``"w"``, or
+            ``"w-"``; incremental mutation modes are unsupported.
+            ``consolidated`` controls metadata consolidation.
 
         Returns
         -------
@@ -40,7 +41,9 @@ class AnalysisObjectIOAccessor:
 
         Notes
         -----
-        Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        The writer persists one complete AO snapshot. It validates schema and
+        validity before store access and does not expose xarray append/region
+        mutation through this canonical boundary.
 
         Examples
         --------
@@ -48,7 +51,7 @@ class AnalysisObjectIOAccessor:
         >>> import xarray as xr
         >>> from pathlib import Path
         >>> from tal.core import AnalysisObject
-        >>> from tal.io import AOZarrWriteOptions
+        >>> from tal.io import AOZarrReadOptions, AOZarrWriteOptions
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [1.0, 2.0])}, coords={"sample": [0, 1]}),
         ...     sequence_dim="sample",
@@ -58,58 +61,17 @@ class AnalysisObjectIOAccessor:
         >>> with tempfile.TemporaryDirectory() as tmpdir:
         ...     store = Path(tmpdir) / "trajectory.zarr"
         ...     _ = ao.io.to_zarr(str(store), opts=AOZarrWriteOptions(mode="w"))
-        ...     loaded = AnalysisObject.from_zarr(str(store))
-        >>> loaded.unsafe_data["value"].values.tolist()
+        ...     loaded = AnalysisObject.from_zarr(
+        ...         str(store), opts=AOZarrReadOptions(chunks={})
+        ...     )
+        ...     try:
+        ...         values = loaded.unsafe_data["value"].compute().values.tolist()
+        ...     finally:
+        ...         loaded.unsafe_data.close()
+        >>> values
         [1.0, 2.0]
         """
         return write_analysis_object_zarr(self._ao, store, opts=opts, owner="AnalysisObject.io.to_zarr")
-
-    def to_csv(self, path: str, *, opts: AOCsvWriteOptions | None = None) -> str:
-        """Write this AnalysisObject to CSV files rooted at ``path``.
-
-        Parameters
-        ----------
-        path : str
-            Filesystem path used by this IO operation.
-        opts : AOCsvWriteOptions | None, optional
-            When ``None``, operation-specific defaults are resolved by internal option coercion. ``AOCsvWriteOptions`` key fields: ``metadata_channel`` (default 'sidecar_json'), ``metadata_path`` (default None), ``float_format`` (default None).
-
-        Returns
-        -------
-        str
-            Operation result preserving TAL semantic/topology guarantees.
-
-        Raises
-        ------
-        TypeError
-            If option payload types are invalid for this API.
-        ValueError
-            If option values violate fail-closed semantic/layout constraints.
-
-        Notes
-        -----
-        Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
-
-        Examples
-        --------
-        >>> import tempfile
-        >>> import xarray as xr
-        >>> from pathlib import Path
-        >>> from tal.core import AnalysisObject
-        >>> from tal.io import AOCsvWriteOptions
-        >>> ao = AnalysisObject.from_data(
-        ...     xr.Dataset({"value": ("sample", [1.0, 2.0])}, coords={"sample": [0, 1]}),
-        ...     sequence_dim="sample",
-        ...     core_dims=(),
-        ...     validate=True,
-        ... )
-        >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     path = ao.io.to_csv(str(Path(tmpdir) / "trajectory"), opts=AOCsvWriteOptions())
-        ...     loaded = AnalysisObject.from_csv(path)
-        >>> loaded.unsafe_data["value"].values.tolist()
-        [1.0, 2.0]
-        """
-        return write_analysis_object_csv(self._ao, path, opts=opts, owner="AnalysisObject.io.to_csv")
 
 
 def _from_zarr(
@@ -162,9 +124,15 @@ def _from_zarr(
     >>> with tempfile.TemporaryDirectory() as tmpdir:
     ...     store = Path(tmpdir) / "trajectory.zarr"
     ...     _ = ao.io.to_zarr(str(store), opts=AOZarrWriteOptions(mode="w"))
-    ...     loaded = AnalysisObject.from_zarr(str(store), opts=AOZarrReadOptions())
-    >>> loaded.unsafe_data.sizes["sample"]
-    2
+    ...     loaded = AnalysisObject.from_zarr(
+    ...         str(store), opts=AOZarrReadOptions(chunks={})
+    ...     )
+    ...     try:
+    ...         values = loaded.unsafe_data["value"].compute().values.tolist()
+    ...     finally:
+    ...         loaded.unsafe_data.close()
+    >>> values
+    [1.0, 2.0]
     """
     return read_analysis_object_zarr(
         cls,
@@ -172,68 +140,6 @@ def _from_zarr(
         opts=opts,
         validate=validate,
         owner=f"{cls.__name__}.from_zarr",
-    )
-
-
-def _from_csv(
-    cls: type["AnalysisObject"],
-    path: str,
-    *,
-    opts: AOCsvReadOptions | None = None,
-    validate: bool = True,
-):
-    """Load an AnalysisObject from a CSV path via ``AnalysisObject.from_csv``.
-
-    Parameters
-    ----------
-    path : str
-        Filesystem path used by this IO operation.
-    opts : AOCsvReadOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``AOCsvReadOptions`` key fields: ``metadata_channel`` (default 'sidecar_json'), ``metadata_path`` (default None).
-    validate : bool, optional
-        When ``True``, validate output schema/layout invariants before returning.
-
-    Returns
-    -------
-    object
-        Operation result preserving TAL semantic/topology guarantees.
-
-    Raises
-    ------
-    TypeError
-        If option payload types are invalid for this API.
-    ValueError
-        If option values violate fail-closed semantic/layout constraints.
-
-    Notes
-    -----
-    Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
-
-    Examples
-    --------
-    >>> import tempfile
-    >>> import xarray as xr
-    >>> from pathlib import Path
-    >>> from tal.core import AnalysisObject
-    >>> from tal.io import AOCsvReadOptions, AOCsvWriteOptions
-    >>> ao = AnalysisObject.from_data(
-    ...     xr.Dataset({"value": ("sample", [1.0, 2.0])}, coords={"sample": [0, 1]}),
-    ...     sequence_dim="sample",
-    ...     core_dims=(),
-    ...     validate=True,
-    ... )
-    >>> with tempfile.TemporaryDirectory() as tmpdir:
-    ...     path = ao.io.to_csv(str(Path(tmpdir) / "trajectory"), opts=AOCsvWriteOptions())
-    ...     loaded = AnalysisObject.from_csv(path, opts=AOCsvReadOptions())
-    >>> loaded.unsafe_data.sizes["sample"]
-    2
-    """
-    return read_analysis_object_csv(
-        cls,
-        path,
-        opts=opts,
-        validate=validate,
-        owner=f"{cls.__name__}.from_csv",
     )
 
 
@@ -271,7 +177,7 @@ def _install_classmethod(cls: type, *, name: str, func) -> None:
 
 
 def install_analysis_object_io_surface() -> None:
-    """Install ``ao.io`` and ``AnalysisObject.from_*`` I/O bindings.
+    """Install ``ao.io`` and the ``AnalysisObject.from_zarr`` binding.
 
     Parameters
     ----------
@@ -291,7 +197,6 @@ def install_analysis_object_io_surface() -> None:
 
     _install_io_property(AnalysisObject)
     _install_classmethod(AnalysisObject, name="from_zarr", func=_from_zarr)
-    _install_classmethod(AnalysisObject, name="from_csv", func=_from_csv)
 
 
 __all__ = ["AnalysisObjectIOAccessor", "install_analysis_object_io_surface"]

@@ -26,6 +26,7 @@ from tal.core.orchestration.runtime_checks import (
     select_single_numeric_var,
 )
 from tal.core.schema_errors import SchemaError
+from tal.core.schema import copy_dataset_attrs
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
 from tal.utils.frame_schema import get_frames, set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
@@ -331,7 +332,7 @@ def _compose_quat_datasets(
     )
     out = out.assign_coords({left_quat_dim: list(_QUAT_LABELS)})
     out_ds = out.to_dataset(name=left_var)
-    out_ds.attrs = dict(left_candidate.attrs)
+    out_ds = copy_dataset_attrs(left_candidate, out_ds, validate=False)
     return _finalize_rotation_conversion(out_ds, core_dims=(left_quat_dim,), rep="quat", owner=owner), left_quat_dim
 
 
@@ -350,7 +351,7 @@ def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, st
     )
     quat = quat.assign_coords({quat_dim: list(_QUAT_LABELS)})
     out_ds = quat.to_dataset(name=var_name)
-    out_ds.attrs = dict(candidate.attrs)
+    out_ds = copy_dataset_attrs(candidate, out_ds, validate=False)
     return _finalize_rotation_conversion(out_ds, core_dims=(quat_dim,), rep="quat", owner=owner), quat_dim
 
 

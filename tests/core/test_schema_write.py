@@ -5,7 +5,13 @@ import pytest
 import xarray as xr
 
 from tal.core import AnalysisObject, SchemaError
-from tal.core import merge_schema, set_param_coord, set_roles, set_validity
+from tal.core import (
+    copy_dataset_attrs,
+    merge_schema,
+    set_param_coord,
+    set_roles,
+    set_validity,
+)
 
 
 class _HostileKey:
@@ -104,6 +110,21 @@ def test_schema_write_roles_003_returns_new_ao() -> None:
     assert updated is not ao
     assert "roles" not in ao.data.attrs["tal"]["core"]
     assert updated.data.attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
+
+
+def test_schema_write_copy_001_routes_schema_and_replaces_ordinary_attrs() -> None:
+    """ID: SCHEMA_WRITE_COPY_001_routes_schema_and_replaces_ordinary_attrs."""
+    source = _ds_sample_axis().assign_attrs(note="source")
+    source = set_roles(source, sequence_dim="sample", core_dims=())
+    target = _ds_sample_axis().rename(value="result").assign_attrs(stale=True)
+
+    out = copy_dataset_attrs(source, target)
+
+    assert out.attrs["note"] == "source"
+    assert "stale" not in out.attrs
+    assert out.attrs["tal"]["core"]["roles"]["sequence_dim"] == "sample"
+    assert out.attrs["tal"] is not source.attrs["tal"]
+    assert target.attrs == {"stale": True}
 
 
 def test_schema_write_roles_004_atomic_on_failure() -> None:
@@ -454,6 +475,8 @@ def test_schema_write_009_non_dataset_input_rejected_consistently() -> None:
         lambda validate: set_param_coord(da, name="sample", validate=validate),
         lambda validate: set_validity(da, sequence_size_coord="sample", validate=validate),
         lambda validate: merge_schema(da, {"core": {}}, validate=validate),
+        lambda validate: copy_dataset_attrs(da, _ds_sample_axis(), validate=validate),
+        lambda validate: copy_dataset_attrs(_ds_sample_axis(), da, validate=validate),
     )
     for validate in (False, True):
         for write in writers:

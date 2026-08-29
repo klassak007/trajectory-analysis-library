@@ -434,7 +434,7 @@ def test_spatial_hard_150_temporal_vector_like_param_key_request_rejects_missing
     ds = _position_temporal_dataset(include_param=False)
     ds = ds.assign_coords(time_str=("sample", ["t0", "t1", "t2"]))
     nonnumeric = Position(ds)
-    with pytest.raises(ValueError, match="require numeric param_coord"):
+    with pytest.raises(ValueError, match="require ordered real numeric or datetime64 param_coord"):
         nonnumeric.param.at([0.5], on="time_str")
 
 

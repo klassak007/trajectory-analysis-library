@@ -76,7 +76,10 @@ def test_arch_agents_009_non_deferred_nesting_reopened_hotspots_guard() -> None:
 def test_arch_agents_010_unique_numeric_regression_id_prefix_guard() -> None:
     """ID: ARCH_AGENTS_010_unique_numeric_regression_id_prefix_guard."""
     id_pat = re.compile(r"ID:\s*([A-Za-z0-9_]+)")
-    base_pat = re.compile(r"^([A-Z]+(?:_[A-Z]+)*_\d{3})")
+    base_pat = re.compile(r"^((?:[A-Z0-9]+_)+\d{3})(?:_|$)")
+    probe = base_pat.match("IO_HARD_P10B_042_example")
+    assert probe is not None
+    assert probe.group(1) == "IO_HARD_P10B_042"
     seen: dict[str, tuple[str, int]] = {}
     dupes: list[str] = []
     for path in sorted(Path("tests").rglob("test_*.py")):
