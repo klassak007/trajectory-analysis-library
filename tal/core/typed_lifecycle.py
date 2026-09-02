@@ -441,7 +441,7 @@ class TypedAnalysisObject(AnalysisObject):
         return obj
 
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> Self:
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> Self:
         """Bind a dataset without core schema validation and run lifecycle hooks.
 
         Parameters
@@ -449,6 +449,8 @@ class TypedAnalysisObject(AnalysisObject):
         ds : xr.Dataset | xr.DataArray
             Dataset or data array produced by an owner that intentionally chose
             the unvalidated rewrap path.
+        schema_prepared : bool, optional
+            Whether the trusted caller already completed schema preparation.
 
         Returns
         -------
@@ -473,7 +475,7 @@ class TypedAnalysisObject(AnalysisObject):
         >>> isinstance(Temperature._from_unvalidated(ds), Temperature)
         True
         """
-        obj = super()._from_unvalidated(ds)
+        obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._run_typed_lifecycle(cls._lifecycle_context(phase="from_unvalidated"))
         return obj
 

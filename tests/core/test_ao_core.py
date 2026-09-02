@@ -1,3 +1,6 @@
+from collections import UserDict
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, cast
 
 import numpy as np
@@ -41,6 +44,101 @@ def _ds_trial() -> xr.Dataset:
 
 def _ds_multiindex() -> xr.Dataset:
     return _ds_single().stack(sample_axis=("sample", "axis"))
+
+
+def _mapping_schema(
+    kind: str,
+    *,
+    bootstrap: bool,
+) -> tuple[Mapping[str, Any], list[str]]:
+    wrap = MappingProxyType if kind == "mapping-proxy" else UserDict
+    items = ["value"]
+    record = wrap({"name": "entry"})
+    demo = wrap({"enabled": True, "items": items, "records": [record]})
+    ext = wrap({"demo": demo})
+    if bootstrap:
+        core = wrap({})
+    else:
+        roles = wrap(
+            {
+                "sequence_dim": "sample",
+                "batch_dims": [],
+                "core_dims": ["axis"],
+            }
+        )
+        core = wrap({"roles": roles})
+    return wrap({"version": 1, "core": core, "ext": ext}), items
+
+
+class _CopyBomb:
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        del memo
+        raise RuntimeError("copy exploded")
+
+
+class _MutableSchemaKey:
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self.notes: list[str] = []
+
+    def __hash__(self) -> int:
+        return hash(self.label)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _MutableSchemaKey) and self.label == other.label
+
+
+class _SchemaCopyCounter:
+    def __init__(self, calls: list[int]) -> None:
+        self.calls = calls
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "_SchemaCopyCounter":
+        self.calls[0] += 1
+        out = type(self)(self.calls)
+        memo[id(self)] = out
+        return out
+
+
+def _aliasing_schema() -> tuple[Mapping[str, Any], _MutableSchemaKey, list[str]]:
+    key = _MutableSchemaKey("entry")
+    items = ["value"]
+    shared = MappingProxyType({key: MappingProxyType({"items": items})})
+    demo = MappingProxyType({"first": shared, "again": [shared, (shared,)]})
+    roles = MappingProxyType(
+        {
+            "sequence_dim": "sample",
+            "batch_dims": [],
+            "core_dims": ["axis"],
+        }
+    )
+    return (
+        MappingProxyType(
+            {
+                "version": 1,
+                "core": MappingProxyType({"roles": roles}),
+                "ext": MappingProxyType({"demo": demo}),
+            }
+        ),
+        key,
+        items,
+    )
+
+
+def _assert_aliasing_schema_owned(
+    tal: Mapping[str, Any],
+    source_key: _MutableSchemaKey,
+    source_items: list[str],
+) -> None:
+    demo = tal["ext"]["demo"]
+    first = demo["first"]
+    assert first is demo["again"][0]
+    assert first is demo["again"][1][0]
+    copied_key = next(iter(first))
+    assert copied_key is not source_key
+    source_key.notes.append("caller-key-mutation")
+    source_items.append("caller-value-mutation")
+    assert copied_key.notes == []
+    assert first[copied_key]["items"] == ["value"]
 
 
 def test_ao_init_001_dataset_accept() -> None:
@@ -177,8 +275,222 @@ def test_ao_init_009_constructor_bootstrap_with_ext_roundtrip_idempotent() -> No
     assert tal["ext"] == {"demo": {"enabled": True}}
 
 
-def test_ao_init_010_constructor_rejects_multiindex() -> None:
+@pytest.mark.parametrize(
+    "construct",
+    (AnalysisObject, AnalysisObject.from_data),
+    ids=("constructor", "from-data"),
+)
+def test_ao_init_013_dataarray_schema_is_relocated_once(construct: Any) -> None:
+    """ID: AO_INIT_013_dataarray_schema_is_relocated_once."""
+    tal = {"version": 1, "core": {}, "ext": {"demo": None}}
+    da = xr.DataArray(
+        np.arange(3),
+        dims=("sample",),
+        name="signal",
+        attrs={"tal": tal, "ordinary": {"items": ["value"]}},
+    )
+
+    ao = construct(da)
+
+    assert ao.unsafe_data.attrs["tal"] == tal
+    assert "tal" not in ao.unsafe_data["signal"].attrs
+    assert ao.unsafe_data["signal"].attrs["ordinary"] == {"items": ["value"]}
+
+
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+@pytest.mark.parametrize(
+    "tal",
+    (
+        {"version": 999, "core": {}},
+        {"core": {}},
+        {"version": "1", "core": {}},
+        {"version": True, "core": {}},
+        {"version": 1.0, "core": {}},
+    ),
+    ids=(
+        "wrong-version",
+        "missing-version",
+        "version-string",
+        "version-bool",
+        "version-float",
+    ),
+)
+def test_ao_init_014_constructor_validates_schema_before_bootstrap(
+    as_dataarray: bool,
+    tal: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: AO_INIT_014_constructor_validates_schema_before_bootstrap."""
+    data: xr.Dataset | xr.DataArray
+    if as_dataarray:
+        data = xr.DataArray([1], dims=("sample",), name="signal", attrs={"tal": tal})
+    else:
+        data = xr.Dataset({"signal": ("sample", [1])}, attrs={"tal": tal})
+
+    def fail_ownership_copy(_data: object) -> xr.Dataset:
+        raise AssertionError("deterministic schema failure reached ownership copy")
+
+    monkeypatch.setattr(
+        ao_mod._dataset_ownership,
+        "isolate_external_dataset",
+        fail_ownership_copy,
+    )
+    with pytest.raises(SchemaError) as error:
+        AnalysisObject(data)
+
+    assert error.value.code == "schema.version.invalid"
+    assert error.value.path == "tal.version"
+
+
+@pytest.mark.parametrize("kind", ("mapping-proxy", "user-dict"))
+@pytest.mark.parametrize("bootstrap", (False, True), ids=("roles", "bootstrap"))
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+@pytest.mark.parametrize(
+    "ingress",
+    ("constructor", "from-data-unvalidated", "from-data-validated"),
+)
+def test_ao_ingress_016_mapping_schema_is_canonical_and_isolated(
+    kind: str,
+    bootstrap: bool,
+    as_dataarray: bool,
+    ingress: str,
+) -> None:
+    """ID: AO_INGRESS_016_mapping_schema_is_canonical_and_isolated."""
+    tal, source_items = _mapping_schema(kind, bootstrap=bootstrap)
+    source: xr.Dataset | xr.DataArray
+    source = _ds_single()["value"] if as_dataarray else _ds_single()
+    source.attrs["tal"] = tal
+
+    if ingress == "constructor":
+        ao = AnalysisObject(source)
+    else:
+        validate = ingress == "from-data-validated"
+        ao = AnalysisObject.from_data(source, validate=validate)
+
+    actual = ao.unsafe_data.attrs["tal"]
+    assert type(actual) is dict
+    assert type(actual["core"]) is dict
+    assert type(actual["ext"]) is dict
+    assert type(actual["ext"]["demo"]) is dict
+    assert type(actual["ext"]["demo"]["records"][0]) is dict
+    if not bootstrap:
+        assert type(actual["core"]["roles"]) is dict
+    source_items.append("caller-mutation")
+    assert actual["ext"]["demo"]["items"] == ["value"]
+
+
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+@pytest.mark.parametrize(
+    "ingress",
+    ("constructor", "from-data-unvalidated", "from-data-validated"),
+)
+def test_ao_ingress_018_extension_graph_keys_and_aliases_owned(
+    as_dataarray: bool,
+    ingress: str,
+) -> None:
+    """ID: AO_INGRESS_018_extension_graph_keys_and_aliases_owned."""
+    tal, key, items = _aliasing_schema()
+    source: xr.Dataset | xr.DataArray
+    source = _ds_single()["value"] if as_dataarray else _ds_single()
+    source.attrs["tal"] = tal
+
+    if ingress == "constructor":
+        ao = AnalysisObject(source)
+    else:
+        ao = AnalysisObject.from_data(
+            source,
+            validate=ingress == "from-data-validated",
+        )
+
+    _assert_aliasing_schema_owned(ao.unsafe_data.attrs["tal"], key, items)
+
+
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+@pytest.mark.parametrize(
+    "ingress",
+    ("constructor", "from-data-unvalidated", "from-data-validated"),
+)
+def test_ao_ingress_019_core_extension_alias_is_value_only(
+    as_dataarray: bool,
+    ingress: str,
+) -> None:
+    """ID: AO_INGRESS_019_core_extension_alias_is_value_only."""
+    shared_dims = ["axis"]
+    source: xr.Dataset | xr.DataArray
+    source = _ds_single()["value"] if as_dataarray else _ds_single()
+    source.attrs["tal"] = {
+        "version": 1,
+        "core": {
+            "roles": {
+                "sequence_dim": "sample",
+                "batch_dims": [],
+                "core_dims": shared_dims,
+            }
+        },
+        "ext": {"demo": {"dims": shared_dims}},
+    }
+
+    if ingress == "constructor":
+        ao = AnalysisObject(source)
+    else:
+        ao = AnalysisObject.from_data(
+            source,
+            validate=ingress == "from-data-validated",
+        )
+    tal = ao.unsafe_data.attrs["tal"]
+
+    assert type(tal["core"]["roles"]["core_dims"]) is list
+    assert tal["core"]["roles"]["core_dims"] == ["axis"]
+    assert tal["ext"]["demo"]["dims"] == ["axis"]
+    shared_dims.append("caller-mutation")
+    assert tal["core"]["roles"]["core_dims"] == ["axis"]
+    assert tal["ext"]["demo"]["dims"] == ["axis"]
+
+
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+@pytest.mark.parametrize(
+    "ingress",
+    ("constructor", "from-data-unvalidated", "from-data-validated"),
+)
+def test_ao_ingress_017_invalid_schema_precedes_extension_copy(
+    as_dataarray: bool,
+    ingress: str,
+) -> None:
+    """ID: AO_INGRESS_017_invalid_schema_precedes_extension_copy."""
+    source: xr.Dataset | xr.DataArray
+    source = _ds_single()["value"] if as_dataarray else _ds_single()
+    source.attrs["tal"] = {
+        "version": 999,
+        "core": {},
+        "ext": {"demo": _CopyBomb()},
+    }
+
+    with pytest.raises(SchemaError) as error:
+        if ingress == "constructor":
+            AnalysisObject(source)
+        else:
+            AnalysisObject.from_data(
+                source,
+                validate=ingress == "from-data-validated",
+            )
+
+    assert error.value.code == "schema.version.invalid"
+    assert error.value.path == "tal.version"
+
+
+def test_ao_init_010_constructor_rejects_multiindex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """ID: AO_INIT_010_constructor_rejects_multiindex."""
+
+    def fail_ownership_copy(_data: object) -> xr.Dataset:
+        raise AssertionError("MultiIndex failure reached ownership copy")
+
+    monkeypatch.setattr(
+        ao_mod._dataset_ownership,
+        "isolate_external_dataset",
+        fail_ownership_copy,
+    )
     with pytest.raises(ValueError) as err:
         AnalysisObject(_ds_multiindex())
     assert "PandasMultiIndex dimensions are not supported" in str(err.value)
@@ -364,8 +676,19 @@ def test_ao_fromdata_009_validity_without_sequence_dim_rejected() -> None:
     assert "sequence_size_coord" in str(err.value)
 
 
-def test_ao_fromdata_010_rejects_multiindex() -> None:
+def test_ao_fromdata_010_rejects_multiindex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """ID: AO_FROMDATA_010_rejects_multiindex."""
+
+    def fail_ownership_copy(_data: object) -> xr.Dataset:
+        raise AssertionError("MultiIndex failure reached ownership copy")
+
+    monkeypatch.setattr(
+        ao_mod._dataset_ownership,
+        "isolate_external_dataset",
+        fail_ownership_copy,
+    )
     with pytest.raises(ValueError) as err:
         AnalysisObject.from_data(
             _ds_multiindex(),
@@ -389,6 +712,109 @@ def test_ao_fromdata_011_from_data_ingress_mutation_not_reflective() -> None:
     ds = ds.assign_coords(trial=[99, 1])
     assert float(ao.unsafe_data["value"].values[0, 0, 0]) == 1.0
     assert int(ao.unsafe_data.coords["trial"].values[0]) == 0
+
+
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+def test_ao_fromdata_014_invalid_tal_type_has_input_parity(
+    as_dataarray: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: AO_FROMDATA_014_invalid_tal_type_has_input_parity."""
+    data: xr.Dataset | xr.DataArray
+    if as_dataarray:
+        data = xr.DataArray([1], dims=("sample",), name="signal", attrs={"tal": "bad"})
+    else:
+        data = xr.Dataset({"signal": ("sample", [1])}, attrs={"tal": "bad"})
+
+    def fail_ownership_copy(_data: object) -> xr.Dataset:
+        raise AssertionError("invalid tal type reached ownership copy")
+
+    monkeypatch.setattr(
+        ao_mod._dataset_ownership,
+        "isolate_external_dataset",
+        fail_ownership_copy,
+    )
+    with pytest.raises(SchemaError) as error:
+        AnalysisObject.from_data(data)
+
+    assert error.value.code == "schema.not_mapping"
+    assert error.value.path == "tal"
+
+
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+@pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
+@pytest.mark.parametrize(
+    ("tal", "code", "path"),
+    (
+        ({"version": 999, "core": {}}, "schema.version.invalid", "tal.version"),
+        ({"core": {}}, "schema.version.invalid", "tal.version"),
+        ({"version": "1", "core": {}}, "schema.version.invalid", "tal.version"),
+        ({"version": True, "core": {}}, "schema.version.invalid", "tal.version"),
+        ({"version": 1.0, "core": {}}, "schema.version.invalid", "tal.version"),
+        ({"version": 1, "core": "bad"}, "schema.core.not_mapping", "tal.core"),
+        (
+            {"version": 1, "core": {}, "unknown": True},
+            "schema.unknown_key",
+            "tal.unknown",
+        ),
+        (
+            {"version": 1, "core": {"unknown": True}},
+            "schema.core.unknown_key",
+            "tal.core.unknown",
+        ),
+        (
+            {"version": 1, "core": {}, "ext": "bad"},
+            "schema.not_mapping",
+            "tal.ext",
+        ),
+        (
+            {"version": 1, "core": {}, "ext": {"": {}}},
+            "schema.ext.namespace.invalid",
+            "tal.ext.",
+        ),
+    ),
+    ids=(
+        "wrong-version",
+        "missing-version",
+        "version-string",
+        "version-bool",
+        "version-float",
+        "core-type",
+        "root-key",
+        "core-key",
+        "ext-type",
+        "ext-namespace",
+    ),
+)
+def test_ao_fromdata_015_existing_schema_envelope_fails_before_writers_and_copy(
+    validate: bool,
+    as_dataarray: bool,
+    tal: dict[str, Any],
+    code: str,
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: AO_FROMDATA_015_existing_schema_envelope_fails_before_writers_and_copy."""
+
+    data: xr.Dataset | xr.DataArray
+    if as_dataarray:
+        data = xr.DataArray([1.0], dims=("x",), name="value", attrs={"tal": tal})
+    else:
+        data = xr.Dataset({"value": ("x", [1.0])}, attrs={"tal": tal})
+
+    def fail_ownership_copy(_data: object) -> xr.Dataset:
+        raise AssertionError("schema envelope failure reached ownership copy")
+
+    monkeypatch.setattr(
+        ao_mod._dataset_ownership,
+        "isolate_external_dataset",
+        fail_ownership_copy,
+    )
+    with pytest.raises(SchemaError) as error:
+        AnalysisObject.from_data(data, core_dims=("x",), validate=validate)
+
+    assert error.value.code == code
+    assert error.value.path == path
 
 
 def test_ao_fromdata_006_atomic_on_failure() -> None:
@@ -431,6 +857,47 @@ def test_ao_fromdata_007_single_final_validation(monkeypatch: pytest.MonkeyPatch
         validate=True,
     )
     assert calls == ["validate"]
+
+
+@pytest.mark.parametrize(
+    ("validate", "expected"),
+    ((False, 2), (True, 3)),
+    ids=("unvalidated", "validated"),
+)
+def test_ao_fromdata_016_extension_copy_count_is_update_independent(
+    validate: bool,
+    expected: int,
+) -> None:
+    """ID: AO_FROMDATA_016_extension_copy_count_is_update_independent."""
+
+    def copy_count(*, complete_update: bool) -> int:
+        calls = [0]
+        ds = _ds_trial().assign_coords(
+            phase=(
+                ("trial", "sample"),
+                np.asarray([[0.0, 0.1, 0.2], [1.0, 1.1, 1.2]]),
+            ),
+            group_size=("trial", np.asarray([3, 2], dtype=np.int64)),
+        )
+        ds.attrs["tal"] = {
+            "version": 1,
+            "core": {},
+            "ext": {"demo": _SchemaCopyCounter(calls)},
+        }
+        kwargs: dict[str, Any] = {}
+        if complete_update:
+            kwargs = {
+                "sequence_dim": "sample",
+                "batch_dims": ("trial",),
+                "core_dims": ("axis",),
+                "param_coord": "phase",
+                "sequence_size_coord": "group_size",
+            }
+        AnalysisObject.from_data(ds, validate=validate, **kwargs)
+        return calls[0]
+
+    assert copy_count(complete_update=False) == expected
+    assert copy_count(complete_update=True) == expected
 
 
 def test_ao_fastpath_001_from_validated_binds_without_validate_call(

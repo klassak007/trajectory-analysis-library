@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 from typing import Any, Literal, Self
 
-import numpy as np
 import xarray as xr
 
-from .dataset_utils import dataset_to_dataarray, ensure_dataset
+from . import dataset_ownership as _dataset_ownership
+from .dataset_utils import ensure_dataset
 from .schema import UNSET, UnsetType
+from .schema import _SchemaUpdatePlan
+from .schema import _apply_schema_update
 from .schema import _is_bootstrap_schema
+from .schema import _relocate_dataarray_schema
+from .schema import _validate_existing_schema_envelope
 from .schema import merge_schema as _merge_schema
 from .schema import repair_schema_after_structure as _repair_schema_after_structure
 from .schema import set_param_coord as _set_param_coord
@@ -18,6 +21,49 @@ from .schema import set_validity as _set_validity
 from .schema import validate_schema as _validate_schema
 from .schema_errors import schema_error
 from .validity_finalize import reconcile_sequence_validity_after_structure
+
+
+def _require_sequence_dim_for_schema_fields(
+    *,
+    sequence_dim: str | None,
+    param_coord: str | None,
+    sequence_size_coord: str | None,
+) -> None:
+    required = [
+        name
+        for name, value in (
+            ("param_coord", param_coord),
+            ("sequence_size_coord", sequence_size_coord),
+        )
+        if value is not None
+    ]
+    if sequence_dim is not None or not required:
+        return
+    needed = ", ".join(required)
+    raise ValueError(
+        "from_data requires sequence_dim when schema-bearing arguments are provided. "
+        f"Missing sequence_dim with: {needed}."
+    )
+
+
+def _from_data_schema_plan(
+    *,
+    sequence_dim: str | None,
+    batch_dims: Sequence[str],
+    core_dims: Sequence[str],
+    param_coord: str | None,
+    sequence_size_coord: str | None,
+    layout: Literal["left_packed"],
+) -> _SchemaUpdatePlan:
+    roles_declared = sequence_dim is not None or bool(batch_dims) or bool(core_dims)
+    return _SchemaUpdatePlan(
+        sequence_dim=sequence_dim if sequence_dim is not None else UNSET,
+        batch_dims=batch_dims if roles_declared else UNSET,
+        core_dims=core_dims if roles_declared else UNSET,
+        param_coord=param_coord if param_coord is not None else UNSET,
+        sequence_size_coord=sequence_size_coord if sequence_size_coord is not None else UNSET,
+        layout=layout,
+    )
 
 
 class AnalysisObject:
@@ -90,29 +136,14 @@ class AnalysisObject:
             return False, None
         return True, data.attrs["tal"]
 
-    @staticmethod
-    def _isolated_ingress_dataset(data: xr.Dataset | xr.DataArray) -> xr.Dataset:
-        return ensure_dataset(data).copy(deep=True)
-
-    @staticmethod
-    def _isolate_coord_buffers(ds: xr.Dataset) -> xr.Dataset:
-        coord_updates: dict[str, xr.DataArray] = {}
-        coord_attrs: dict[str, dict[str, Any]] = {}
-        for name, coord in ds.coords.items():
-            coord_updates[name] = xr.DataArray(np.array(coord.values, copy=True), dims=coord.dims)
-            if coord.attrs:
-                coord_attrs[name] = deepcopy(dict(coord.attrs))
-        if not coord_updates:
-            return ds
-        out = ds.assign_coords(coord_updates)
-        for name, attrs in coord_attrs.items():
-            out.coords[name].attrs = attrs
-        return out
-
-    def __init__(self, data: xr.Dataset | xr.DataArray) -> None:
+    @classmethod
+    def _normalized_ingress_dataset(
+        cls,
+        data: xr.Dataset | xr.DataArray,
+    ) -> xr.Dataset:
         if not isinstance(data, (xr.Dataset, xr.DataArray)):
             ensure_dataset(data)
-        input_had_tal, tal_payload = self._input_tal_payload(data)
+        input_had_tal, tal_payload = cls._input_tal_payload(data)
         if input_had_tal and not isinstance(tal_payload, Mapping):
             raise schema_error(
                 code="schema.not_mapping",
@@ -121,14 +152,39 @@ class AnalysisObject:
                 actual=type(tal_payload).__name__,
                 hint="set ds.attrs['tal'] to a mapping payload",
             )
-        ds = self._isolated_ingress_dataset(data)
-        self._assert_no_multiindex(ds, owner="AnalysisObject")
-        if input_had_tal and isinstance(data, xr.DataArray) and "tal" not in ds.attrs:
-            ds = _merge_schema(ds, deepcopy(dict(tal_payload)), validate=False)
-        candidate = _merge_schema(ds, {"version": 1, "core": {}}, validate=False)
-        if input_had_tal and not _is_bootstrap_schema(tal_payload):
-            candidate = _validate_schema(candidate)
-        self._bind_dataset(candidate)
+        ds = ensure_dataset(data)
+        if input_had_tal and isinstance(data, xr.DataArray):
+            variable_name = next(iter(ds.data_vars))
+            ds = _relocate_dataarray_schema(
+                ds,
+                variable_name=variable_name,
+                tal_schema=tal_payload,
+            )
+        cls._assert_no_multiindex(ds, owner="AnalysisObject")
+        return ds
+
+    def __init__(self, data: xr.Dataset | xr.DataArray) -> None:
+        ds = self._normalized_ingress_dataset(data)
+        input_had_tal = "tal" in data.attrs
+        if input_had_tal:
+            tal_payload = ds.attrs["tal"]
+            candidate = (
+                _apply_schema_update(
+                    _validate_existing_schema_envelope(ds),
+                    _SchemaUpdatePlan(),
+                    validate=False,
+                )
+                if _is_bootstrap_schema(tal_payload)
+                else _validate_schema(ds)
+            )
+        else:
+            candidate = _apply_schema_update(
+                ds,
+                _SchemaUpdatePlan(),
+                validate=False,
+            )
+        owned = _dataset_ownership.isolate_external_dataset(candidate)
+        self._bind_dataset(owned)
 
     def _bind_dataset(self, ds: xr.Dataset) -> None:
         self._assert_no_multiindex(ds, owner="AnalysisObject")
@@ -148,8 +204,14 @@ class AnalysisObject:
         return obj
 
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> AnalysisObject:
-        candidate = _merge_schema(ensure_dataset(ds), {"version": 1, "core": {}}, validate=False)
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> AnalysisObject:
+        candidate = ensure_dataset(ds)
+        if not schema_prepared:
+            candidate = _merge_schema(
+                candidate,
+                {"version": 1, "core": {}},
+                validate=False,
+            )
         obj = cls.__new__(cls)
         obj._bind_dataset(candidate)
         return obj
@@ -161,7 +223,10 @@ class AnalysisObject:
         need direct in-place mutation should use ``unsafe_data`` explicitly.
         """
         self._assert_no_multiindex(self._data, owner="AnalysisObject.data")
-        return self._isolate_coord_buffers(self._data.copy(deep=True))
+        return _dataset_ownership.deep_public_dataset(
+            self._data,
+            owner="AnalysisObject.data",
+        )
 
     @property
     def data(self) -> xr.Dataset:
@@ -183,7 +248,7 @@ class AnalysisObject:
         xr.Dataset
             Resolved property value.
         """
-        return self._data
+        return _dataset_ownership.raw_dataset_reference(self._data)
 
     @property
     def param(self) -> "ParamAccessor":
@@ -379,7 +444,13 @@ class AnalysisObject:
         --------
         tal.core.dataset_utils.dataset_to_dataarray
         """
-        return dataset_to_dataarray(self._safe_public_dataset(), name=name)
+        self._assert_no_multiindex(self._data, owner="AnalysisObject.to_dataarray")
+        return _dataset_ownership.dataset_to_dataarray_view(
+            self._data,
+            name=name,
+            copy="deep",
+            owner="AnalysisObject.to_dataarray",
+        )
 
     def _rewrap_dataset(self, ds: xr.Dataset, *, validate: bool) -> AnalysisObject:
         if validate:
@@ -609,44 +680,27 @@ class AnalysisObject:
         tal.core.schema.set_param_coord
         tal.core.schema.set_validity
         """
-        sequence_requirements: list[str] = []
-        if param_coord is not None:
-            sequence_requirements.append("param_coord")
-        if sequence_size_coord is not None:
-            sequence_requirements.append("sequence_size_coord")
-        if sequence_dim is None and sequence_requirements:
-            needed = ", ".join(sequence_requirements)
-            raise ValueError(
-                "from_data requires sequence_dim when schema-bearing arguments are provided. "
-                f"Missing sequence_dim with: {needed}."
-            )
-        candidate = cls._isolated_ingress_dataset(data)
-        candidate = _merge_schema(candidate, {"version": 1, "core": {}}, validate=False)
-        if sequence_dim is not None or batch_dims or core_dims:
-            roles_kwargs: dict[str, object] = {
-                "batch_dims": batch_dims,
-                "core_dims": core_dims,
-            }
-            if sequence_dim is not None:
-                roles_kwargs["sequence_dim"] = sequence_dim
-            candidate = _set_roles(
-                candidate,
-                validate=False,
-                **roles_kwargs,
-            )
-        if param_coord is not None:
-            candidate = _set_param_coord(candidate, name=param_coord, validate=False)
-        if sequence_size_coord is not None:
-            candidate = _set_validity(
-                candidate,
-                sequence_size_coord=sequence_size_coord,
-                layout=layout,
-                validate=False,
-            )
+        _require_sequence_dim_for_schema_fields(
+            sequence_dim=sequence_dim,
+            param_coord=param_coord,
+            sequence_size_coord=sequence_size_coord,
+        )
+        candidate = cls._normalized_ingress_dataset(data)
+        if "tal" in data.attrs:
+            candidate = _validate_existing_schema_envelope(candidate)
+        plan = _from_data_schema_plan(
+            sequence_dim=sequence_dim,
+            batch_dims=batch_dims,
+            core_dims=core_dims,
+            param_coord=param_coord,
+            sequence_size_coord=sequence_size_coord,
+            layout=layout,
+        )
+        candidate = _apply_schema_update(candidate, plan, validate=validate)
+        owned = _dataset_ownership.isolate_external_dataset(candidate)
         if validate:
-            candidate = _validate_schema(candidate)
-            return cls._from_validated(candidate)
-        return cls._from_unvalidated(candidate)
+            return cls._from_validated(owned)
+        return cls._from_unvalidated(owned, schema_prepared=True)
 
     def isel(
         self,

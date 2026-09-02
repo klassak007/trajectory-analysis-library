@@ -59,6 +59,28 @@ def _tal_snapshot(ds: xr.Dataset) -> dict:
     return deepcopy(ds.attrs["tal"])
 
 
+def _ds_alias_merge_targets() -> xr.Dataset:
+    ds = _ds_sample_axis()
+    ds.attrs["tal"] = {
+        "version": 1,
+        "core": {
+            "roles": {
+                "sequence_dim": "sample",
+                "batch_dims": [],
+                "core_dims": ["axis"],
+            }
+        },
+        "ext": {
+            "demo": {
+                "left": {"left_only": 1},
+                "right": {"right_only": 2},
+                "empty": {},
+            }
+        },
+    }
+    return ds
+
+
 def test_schema_write_roles_001_minimal_success() -> None:
     """ID: SCHEMA_WRITE_ROLES_001_minimal_success."""
     ds = set_roles(_ds_sample_axis(), sequence_dim="sample", batch_dims=(), core_dims=())
@@ -443,6 +465,94 @@ def test_schema_write_merge_008_hostile_patch_key_validate_true_raises_schema_er
     _assert_schema_error(err, code="schema.core.unknown_key", path="tal.core.<_HostileKey>")
     assert isinstance(err.value.actual, dict)
     assert err.value.actual["key_type"] == "_HostileKey"
+
+
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+def test_schema_write_merge_011_ambiguous_alias_is_order_independent(
+    validate: bool,
+) -> None:
+    """ID: SCHEMA_WRITE_MERGE_011_ambiguous_alias_is_order_independent."""
+    for keys in (("left", "right"), ("right", "left")):
+        ds = _ds_alias_merge_targets()
+        before = _tal_snapshot(ds)
+        shared = {"new": 3}
+        patch = {"ext": {"demo": {key: shared for key in keys}}}
+
+        with pytest.raises(SchemaError) as err:
+            merge_schema(ds, patch, validate=validate)
+
+        _assert_schema_error(
+            err,
+            code="schema.patch.alias.ambiguous",
+            path="tal.ext.demo.right",
+        )
+        assert err.value.actual == {
+            "conflicting_paths": ["tal.ext.demo.left", "tal.ext.demo.right"]
+        }
+        assert ds.attrs["tal"] == before
+        assert patch["ext"]["demo"]["left"] is shared
+        assert patch["ext"]["demo"]["right"] is shared
+        assert shared == {"new": 3}
+
+
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+def test_schema_write_merge_012_alias_with_one_non_empty_target_succeeds(
+    validate: bool,
+) -> None:
+    """ID: SCHEMA_WRITE_MERGE_012_alias_with_one_non_empty_target_succeeds."""
+    ds = _ds_alias_merge_targets()
+    before = _tal_snapshot(ds)
+    shared = {"new": 3}
+    patch = {
+        "ext": {
+            "demo": {
+                "left": shared,
+                "empty": shared,
+                "missing": shared,
+            }
+        }
+    }
+
+    out = merge_schema(ds, patch, validate=validate)
+    demo = out.attrs["tal"]["ext"]["demo"]
+
+    assert demo["left"] == {"left_only": 1, "new": 3}
+    assert demo["left"] is demo["empty"]
+    assert demo["left"] is demo["missing"]
+    assert demo["right"] == {"right_only": 2}
+    assert ds.attrs["tal"] == before
+    assert patch["ext"]["demo"]["left"] is shared
+    assert patch["ext"]["demo"]["empty"] is shared
+    assert patch["ext"]["demo"]["missing"] is shared
+    assert shared == {"new": 3}
+
+
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+def test_schema_write_merge_013_alias_with_one_shared_base_target_succeeds(
+    validate: bool,
+) -> None:
+    """ID: SCHEMA_WRITE_MERGE_013_alias_with_one_shared_base_target_succeeds."""
+    ds = _ds_alias_merge_targets()
+    shared_base = {"base": 1}
+    ds.attrs["tal"]["ext"]["demo"] = {
+        "left": shared_base,
+        "right": shared_base,
+    }
+    before = _tal_snapshot(ds)
+    shared_patch = {"new": 2}
+    patch = {"ext": {"demo": {"left": shared_patch, "right": shared_patch}}}
+
+    out = merge_schema(ds, patch, validate=validate)
+    demo = out.attrs["tal"]["ext"]["demo"]
+
+    assert demo["left"] == {"base": 1, "new": 2}
+    assert demo["left"] is demo["right"]
+    assert ds.attrs["tal"] == before
+    assert ds.attrs["tal"]["ext"]["demo"]["left"] is shared_base
+    assert ds.attrs["tal"]["ext"]["demo"]["right"] is shared_base
+    assert patch["ext"]["demo"]["left"] is shared_patch
+    assert patch["ext"]["demo"]["right"] is shared_patch
+    assert shared_patch == {"new": 2}
 
 
 def test_schema_write_009_non_dataset_input_rejected_consistently() -> None:

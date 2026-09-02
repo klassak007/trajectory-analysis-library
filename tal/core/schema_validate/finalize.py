@@ -7,24 +7,79 @@ from typing import Any
 import xarray as xr
 
 
+def _copy_schema_value(value: Any, memo: dict[int, Any]) -> Any:
+    if id(value) in memo:
+        return memo[id(value)]
+    if isinstance(value, Mapping):
+        out: dict[Any, Any] = {}
+        memo[id(value)] = out
+        for key, item in value.items():
+            out[deepcopy(key, memo)] = _copy_schema_value(item, memo)
+        return out
+    if type(value) is list:
+        items: list[Any] = []
+        memo[id(value)] = items
+        items.extend(_copy_schema_value(item, memo) for item in value)
+        return items
+    if type(value) is tuple:
+        items = tuple(_copy_schema_value(item, memo) for item in value)
+        memo[id(value)] = items
+        return items
+    return deepcopy(value, memo)
+
+
+def _copy_schema_graph(value: Any) -> Any:
+    """Copy one supported acyclic schema graph with shared-reference fidelity."""
+    return _copy_schema_value(value, {})
+
+
+def _attrs_without_tal(attrs: Mapping[Any, Any]) -> dict[Any, Any]:
+    return {name: value for name, value in attrs.items() if name != "tal"}
+
+
 def _replace_dataset_attrs_with_tal(
     ds: xr.Dataset,
     *,
     ordinary_attrs: Mapping[Any, Any],
     tal: Mapping[str, Any] | None,
     canonicalize: bool = False,
+    isolate_tal: bool = True,
+    variable_without_tal: str | None = None,
 ) -> xr.Dataset:
-    """Replace dataset attrs while isolating the optional TAL payload."""
-    attrs = {name: value for name, value in ordinary_attrs.items() if name != "tal"}
+    """Replace dataset attrs through the single TAL-attribute write owner."""
+    attrs = _attrs_without_tal(ordinary_attrs)
     if tal is not None:
-        attrs["tal"] = canonicalize_tal(tal) if canonicalize else deepcopy(dict(tal))
+        tal_value = tal
+        if isolate_tal:
+            tal_value = canonicalize_tal(tal) if canonicalize else _copy_schema_graph(tal)
+        attrs["tal"] = tal_value
     out = ds.copy(deep=False)
     out.attrs = attrs
+    if variable_without_tal is not None:
+        out[variable_without_tal].attrs = _attrs_without_tal(
+            out[variable_without_tal].attrs
+        )
     return out
 
 
+def _relocate_promoted_dataarray_tal(
+    ds: xr.Dataset,
+    *,
+    variable_name: str,
+    tal: Mapping[str, Any],
+) -> xr.Dataset:
+    """Move a promoted DataArray TAL payload before ingress validation."""
+    return _replace_dataset_attrs_with_tal(
+        ds,
+        ordinary_attrs=ds.attrs,
+        tal=tal,
+        isolate_tal=False,
+        variable_without_tal=variable_name,
+    )
+
+
 def canonicalize_tal(tal: Mapping[str, Any]) -> dict[str, Any]:
-    out = deepcopy(dict(tal))
+    out = _copy_schema_graph(tal)
     out["version"] = int(out["version"])
     core = out.get("core")
     if not isinstance(core, Mapping):

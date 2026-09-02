@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import xarray as xr
 
 from .schema_errors import schema_error
-from .schema_validate.common import ALLOWED_LAYOUTS
+from .schema_validate.common import (
+    ALLOWED_LAYOUTS,
+    is_active_schema_version,
+    safe_path_key_segment,
+)
 from .schema_validate import SCHEMA_VERSION
+from .schema_validate import _validate_schema_envelope
 from .schema_validate import validate_schema as _validate_schema
-from .schema_validate.finalize import _replace_dataset_attrs_with_tal
+from .schema_validate.finalize import (
+    _copy_schema_graph,
+    _copy_schema_value,
+    _relocate_promoted_dataarray_tal,
+    _replace_dataset_attrs_with_tal,
+)
 
 
 class UnsetType:
@@ -21,6 +31,16 @@ class UnsetType:
 
 
 UNSET = UnsetType()
+
+
+@dataclass(frozen=True)
+class _SchemaUpdatePlan:
+    sequence_dim: str | None | UnsetType = UNSET
+    batch_dims: Sequence[str] | UnsetType = UNSET
+    core_dims: Sequence[str] | UnsetType = UNSET
+    param_coord: str | None | UnsetType = UNSET
+    sequence_size_coord: str | None | UnsetType = UNSET
+    layout: Literal["left_packed"] = "left_packed"
 
 
 def _fail_patch(code: str, actual: Any, hint: str) -> None:
@@ -56,7 +76,7 @@ def _tal_mapping(ds: xr.Dataset) -> Mapping[str, Any] | None:
 
 def _copy_tal(ds: xr.Dataset) -> dict[str, Any]:
     tal = _tal_mapping(ds)
-    return {} if tal is None else deepcopy(dict(tal))
+    return {} if tal is None else _copy_schema_graph(tal)
 
 
 def _with_schema(ds: xr.Dataset, tal_schema: Mapping[str, Any]) -> xr.Dataset:
@@ -64,7 +84,33 @@ def _with_schema(ds: xr.Dataset, tal_schema: Mapping[str, Any]) -> xr.Dataset:
         ds,
         ordinary_attrs=ds.attrs,
         tal=tal_schema,
+        isolate_tal=False,
     )
+
+
+def _relocate_dataarray_schema(
+    ds: xr.Dataset,
+    *,
+    variable_name: str,
+    tal_schema: Mapping[str, Any],
+) -> xr.Dataset:
+    """Relocate one promoted DataArray schema without applying patch semantics."""
+    candidate = _require_dataset(ds, owner="relocate_dataarray_schema")
+    return _relocate_promoted_dataarray_tal(
+        candidate,
+        variable_name=variable_name,
+        tal=tal_schema,
+    )
+
+
+def _validate_existing_schema_envelope(ds: xr.Dataset) -> xr.Dataset:
+    """Reject malformed existing schema envelopes before writer updates."""
+    candidate = _require_dataset(ds, owner="validate_existing_schema_envelope")
+    _validate_schema_envelope(candidate)
+    tal = _tal_mapping(candidate)
+    if tal is None:  # pragma: no cover - version validation rejects this first.
+        raise RuntimeError("validated schema envelope is missing tal")
+    return candidate
 
 
 def _apply_writer(
@@ -104,7 +150,7 @@ def _is_bootstrap_schema(tal_schema: Mapping[str, Any]) -> bool:
     allowed = {"version", "core", "ext"}
     if any(key not in allowed for key in tal_schema):
         return False
-    if tal_schema.get("version") != SCHEMA_VERSION:
+    if not is_active_schema_version(tal_schema.get("version")):
         return False
     if "ext" not in tal_schema:
         return True
@@ -129,42 +175,187 @@ def _apply_structural_writer(
     return _validate_schema(candidate)
 
 
-def _merge_dict(base: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:
-    out = deepcopy(dict(base))
+def _collect_merge_sites(
+    base: dict[Any, Any],
+    patch: dict[Any, Any],
+    path: str,
+    sites: dict[int, list[tuple[str, dict[Any, Any]]]],
+) -> None:
+    sites.setdefault(id(patch), []).append((path, base))
     for key, value in patch.items():
+        if not isinstance(value, dict):
+            continue
+        current = base.get(key)
+        target = current if isinstance(current, dict) else {}
+        child_path = f"{path}.{safe_path_key_segment(key)}"
+        _collect_merge_sites(target, value, child_path, sites)
+
+
+def _alias_conflict(
+    occurrences: list[tuple[str, dict[Any, Any]]],
+) -> tuple[str, list[str]] | None:
+    non_empty = sorted(
+        ((path, target) for path, target in occurrences if target),
+        key=lambda item: item[0],
+    )
+    seen: set[int] = set()
+    for path, target in non_empty:
+        if id(target) in seen:
+            continue
+        if seen:
+            return path, [item_path for item_path, _ in non_empty]
+        seen.add(id(target))
+    return None
+
+
+def _plan_merge_bases(
+    base: dict[Any, Any],
+    patch: dict[Any, Any],
+) -> dict[int, dict[Any, Any]]:
+    sites: dict[int, list[tuple[str, dict[Any, Any]]]] = {}
+    _collect_merge_sites(base, patch, "tal", sites)
+    conflicts = [
+        conflict
+        for occurrences in sites.values()
+        if (conflict := _alias_conflict(occurrences)) is not None
+    ]
+    if conflicts:
+        path, paths = min(conflicts)
+        raise schema_error(
+            code="schema.patch.alias.ambiguous",
+            path=path,
+            expected="one distinct non-empty base mapping per aliased patch mapping",
+            actual={"conflicting_paths": paths},
+            hint="use distinct patch mappings or apply separate patch operations",
+        )
+    return {
+        patch_id: next((target for _, target in occurrences if target), occurrences[0][1])
+        for patch_id, occurrences in sites.items()
+    }
+
+
+def _merge_owned_mapping(
+    patch: dict[Any, Any],
+    bases: dict[int, dict[Any, Any]],
+    merged: dict[int, dict[Any, Any]] | None = None,
+) -> dict[Any, Any]:
+    if merged is None:
+        merged = {}
+    existing = merged.get(id(patch))
+    if existing is not None:
+        return existing
+    merged[id(patch)] = patch
+    base = bases[id(patch)]
+    base_items = tuple(base.items())
+    patch_items = tuple(patch.items())
+    patch_keys = set(patch)
+    for key, value in patch_items:
         if value is None:
-            out.pop(key, None)
+            patch.pop(key, None)
             continue
-        current = out.get(key)
-        if isinstance(value, Mapping) and isinstance(current, Mapping):
-            out[key] = _merge_dict(current, value)
-            continue
-        if isinstance(value, Mapping):
-            out[key] = _merge_dict({}, value)
-            continue
-        out[key] = deepcopy(value)
-    return out
+        if isinstance(value, dict):
+            patch[key] = _merge_owned_mapping(value, bases, merged)
+    ordered = [
+        (key, patch[key] if key in patch_keys else value)
+        for key, value in base_items
+        if key not in patch_keys or key in patch
+    ]
+    ordered.extend(
+        (key, patch[key])
+        for key, _ in patch_items
+        if key not in base and key in patch
+    )
+    patch.clear()
+    patch.update(ordered)
+    return patch
 
 
-def _existing_roles(tal: Mapping[str, Any]) -> dict[str, Any]:
-    core = tal.get("core")
-    if not isinstance(core, Mapping):
-        return {"batch_dims": [], "core_dims": []}
+def _merge_dict(base: Mapping[Any, Any], patch: Mapping[Any, Any]) -> dict[Any, Any]:
+    memo: dict[int, Any] = {}
+    out = _copy_schema_value(base, memo)
+    owned_patch = _copy_schema_value(patch, memo)
+    bases = _plan_merge_bases(out, owned_patch)
+    return _merge_owned_mapping(owned_patch, bases)
+
+
+def _existing_roles(core: dict[str, Any]) -> dict[str, Any]:
     roles = core.get("roles")
-    if not isinstance(roles, Mapping):
-        return {"batch_dims": [], "core_dims": []}
-    out = deepcopy(dict(roles))
-    out.setdefault("batch_dims", [])
-    out.setdefault("core_dims", [])
-    return out
+    if not isinstance(roles, dict):
+        roles = {}
+        core["roles"] = roles
+    roles.setdefault("batch_dims", [])
+    roles.setdefault("core_dims", [])
+    return roles
 
 
 def _canon_dim_list(value: Sequence[str] | UnsetType) -> Any:
     if isinstance(value, (str, bytes)):
         return value
     if isinstance(value, Sequence):
-        return [str(item) for item in value]
+        return [_canon_name(item) for item in value]
     return value
+
+
+def _canon_name(value: Any) -> Any:
+    return str.__str__(value) if isinstance(value, str) else value
+
+
+def _owned_core(tal: dict[str, Any]) -> dict[str, Any]:
+    core = tal.get("core")
+    if isinstance(core, dict):
+        return core
+    out: dict[str, Any] = {}
+    tal["core"] = out
+    return out
+
+
+def _apply_role_update(core: dict[str, Any], plan: _SchemaUpdatePlan) -> None:
+    values = (plan.sequence_dim, plan.batch_dims, plan.core_dims)
+    if all(value is UNSET for value in values):
+        return
+    roles = _existing_roles(core)
+    if plan.sequence_dim is not UNSET:
+        if plan.sequence_dim is None:
+            roles.pop("sequence_dim", None)
+        else:
+            roles["sequence_dim"] = _canon_name(plan.sequence_dim)
+    if plan.batch_dims is not UNSET:
+        roles["batch_dims"] = _canon_dim_list(plan.batch_dims)
+    if plan.core_dims is not UNSET:
+        roles["core_dims"] = _canon_dim_list(plan.core_dims)
+
+
+def _apply_optional_updates(core: dict[str, Any], plan: _SchemaUpdatePlan) -> None:
+    if plan.param_coord is not UNSET:
+        if plan.param_coord is None:
+            core.pop("param_coord", None)
+        else:
+            core["param_coord"] = {"name": _canon_name(plan.param_coord)}
+    if plan.sequence_size_coord is UNSET:
+        return
+    if plan.sequence_size_coord is None:
+        core.pop("validity", None)
+        return
+    core["validity"] = {
+        "sequence_size_coord": _canon_name(plan.sequence_size_coord),
+        "layout": _canon_name(plan.layout),
+    }
+
+
+def _apply_schema_update(
+    ds: xr.Dataset,
+    plan: _SchemaUpdatePlan,
+    *,
+    validate: bool,
+) -> xr.Dataset:
+    """Apply one complete canonical core-schema update."""
+    candidate = _require_dataset(ds, owner="apply_schema_update")
+    tal = _copy_tal(candidate)
+    tal["version"] = SCHEMA_VERSION
+    core = _owned_core(tal)
+    _apply_role_update(core, plan)
+    _apply_optional_updates(core, plan)
+    return _apply_writer(candidate, tal, validate=validate)
 
 
 def set_roles(
@@ -212,17 +403,12 @@ def set_roles(
     True
     """
     ds = _require_dataset(ds, owner="set_roles")
-    tal = _copy_tal(ds)
-    roles = _existing_roles(tal)
-    if sequence_dim is not UNSET:
-        roles["sequence_dim"] = sequence_dim
-    if batch_dims is not UNSET:
-        roles["batch_dims"] = _canon_dim_list(batch_dims)
-    if core_dims is not UNSET:
-        roles["core_dims"] = _canon_dim_list(core_dims)
-    patch = {"version": SCHEMA_VERSION, "core": {"roles": roles}}
-    tal = _merge_dict(tal, patch)
-    return _apply_writer(ds, tal, validate=validate)
+    plan = _SchemaUpdatePlan(
+        sequence_dim=sequence_dim,
+        batch_dims=batch_dims,
+        core_dims=core_dims,
+    )
+    return _apply_schema_update(ds, plan, validate=validate)
 
 
 def set_param_coord(
@@ -265,11 +451,8 @@ def set_param_coord(
     'time'
     """
     ds = _require_dataset(ds, owner="set_param_coord")
-    block: dict[str, Any] | None
-    block = None if name is None else {"name": str(name)}
-    patch = {"version": SCHEMA_VERSION, "core": {"param_coord": block}}
-    tal = _merge_dict(_copy_tal(ds), patch)
-    return _apply_writer(ds, tal, validate=validate)
+    plan = _SchemaUpdatePlan(param_coord=name)
+    return _apply_schema_update(ds, plan, validate=validate)
 
 
 def set_validity(
@@ -315,14 +498,11 @@ def set_validity(
     'group_size'
     """
     ds = _require_dataset(ds, owner="set_validity")
-    block: dict[str, Any] | None
-    if sequence_size_coord is None:
-        block = None
-    else:
-        block = {"sequence_size_coord": str(sequence_size_coord), "layout": str(layout)}
-    patch = {"version": SCHEMA_VERSION, "core": {"validity": block}}
-    tal = _merge_dict(_copy_tal(ds), patch)
-    return _apply_writer(ds, tal, validate=validate)
+    plan = _SchemaUpdatePlan(
+        sequence_size_coord=sequence_size_coord,
+        layout=layout,
+    )
+    return _apply_schema_update(ds, plan, validate=validate)
 
 
 def merge_schema(
@@ -369,7 +549,7 @@ def merge_schema(
             {"keys": list(patch)},
             "remove top-level 'tal' wrapper from patch",
         )
-    tal = _merge_dict(_copy_tal(ds), patch)
+    tal = _merge_dict(_tal_mapping(ds) or {}, patch)
     return _apply_writer(ds, tal, validate=validate)
 
 

@@ -13,6 +13,15 @@ ALLOWED_VALIDITY_KEYS = {"sequence_size_coord", "layout"}
 ALLOWED_LAYOUTS = {"left_packed"}
 
 
+def is_active_schema_version(value: Any) -> bool:
+    """Return whether *value* is the exact supported schema version type/value."""
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value == SCHEMA_VERSION
+    )
+
+
 def fail(
     *,
     code: str,

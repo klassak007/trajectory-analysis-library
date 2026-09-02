@@ -9,6 +9,7 @@ from .common import ALLOWED_CORE_KEYS
 from .common import (
     SCHEMA_VERSION,
     fail,
+    is_active_schema_version,
     is_mapping,
     sorted_mapping_keys,
     unknown_key_actual,
@@ -59,15 +60,7 @@ def phase_root_shape(ds: xr.Dataset) -> Mapping[str, Any]:
 
 def phase_version(tal: Mapping[str, Any]) -> None:
     version = tal.get("version")
-    if not isinstance(version, int) or isinstance(version, bool):
-        fail(
-            code="schema.version.invalid",
-            path="tal.version",
-            expected=SCHEMA_VERSION,
-            actual=version,
-            hint=f"set tal.version to {SCHEMA_VERSION}",
-        )
-    if version != SCHEMA_VERSION:
+    if not is_active_schema_version(version):
         fail(
             code="schema.version.invalid",
             path="tal.version",

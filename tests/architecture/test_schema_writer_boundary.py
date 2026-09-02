@@ -455,3 +455,104 @@ def test_arch_schemawrite_007_private_schema_assignment_has_one_owner() -> None:
         owner_names.extend(owners)
     assert len(set(owner_names)) == 1
     assert owner_names[0].startswith("_")
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "value = ds.attrs\n"
+            "copied = {key: value for key, value in records}\n"
+            "out.attrs = copied",
+            [],
+        ),
+        (
+            "copied = {key: value for attrs_source in (ds.attrs,) "
+            "for key, value in attrs_source.items()}\n"
+            "out.attrs = copied",
+            [2],
+        ),
+        (
+            "attrs_source = ds.attrs\n"
+            "copied = {key: value for attrs_source in (attrs_source,) "
+            "for key, value in attrs_source.items()}\n"
+            "out.attrs = copied",
+            [3],
+        ),
+        (
+            "copied = {'tal': schema for _ in records}\n"
+            "out.attrs = copied",
+            [2],
+        ),
+        (
+            "copied = dict([('tal', schema) for _ in records])\n"
+            "out.attrs = copied",
+            [2],
+        ),
+        (
+            "copied = dict({('tal', schema) for _ in records})\n"
+            "out.attrs = copied",
+            [2],
+        ),
+        (
+            "copied = dict(('tal', schema) for _ in records)\n"
+            "out.attrs = copied",
+            [2],
+        ),
+    ],
+)
+def test_arch_schemawrite_008_comprehension_origins_use_local_scope(
+    source: str, expected: list[int]
+) -> None:
+    """ID: ARCH_SCHEMAWRITE_008_comprehension_origins_use_local_scope."""
+    assert tal_write_lines_from_source(source) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "import copy\n"
+            "copied = copy.copy(ds.attrs)\n"
+            "out.attrs = copied",
+            [3],
+        ),
+        (
+            "import copy as copier\n"
+            "copied = copier.deepcopy(ds.attrs)\n"
+            "out.attrs = copied",
+            [3],
+        ),
+        (
+            "from copy import copy as clone\n"
+            "copied = clone(ds.attrs)\n"
+            "out.attrs = copied",
+            [3],
+        ),
+        (
+            "from copy import deepcopy\n"
+            "copied = deepcopy(x=ds.attrs)\n"
+            "out.attrs = copied",
+            [3],
+        ),
+        (
+            "import copy\n"
+            "copy = custom\n"
+            "copied = copy.copy(ds.attrs)\n"
+            "out.attrs = copied",
+            [],
+        ),
+        (
+            "from copy import copy\n"
+            "def build(copy):\n"
+            "    copied = copy(ds.attrs)\n"
+            "    out.attrs = copied",
+            [],
+        ),
+    ],
+)
+def test_arch_schemawrite_009_stdlib_copy_tracks_aliases_and_shadowing(
+    source: str, expected: list[int]
+) -> None:
+    """ID: ARCH_SCHEMAWRITE_009_stdlib_copy_tracks_aliases_and_shadowing."""
+    assert tal_write_lines_from_source(source) == expected

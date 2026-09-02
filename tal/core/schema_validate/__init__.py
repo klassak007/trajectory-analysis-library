@@ -23,13 +23,25 @@ class _SchemaStructure:
     sequence_size_coord: str | None
 
 
-def _resolve_schema_structure(ds: xr.Dataset) -> _SchemaStructure:
+def _resolve_schema_root(
+    ds: xr.Dataset,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     if not isinstance(ds, xr.Dataset):
         actual = type(ds).__name__
         raise TypeError(f"validate_schema expects xr.Dataset, got {actual}.")
     tal = phase_root_shape(ds)
     phase_version(tal)
     core = phase_core_envelope(tal)
+    return tal, core
+
+
+def _validate_schema_envelope(ds: xr.Dataset) -> None:
+    tal, _ = _resolve_schema_root(ds)
+    phase_extension_envelope(tal)
+
+
+def _resolve_schema_structure(ds: xr.Dataset) -> _SchemaStructure:
+    tal, core = _resolve_schema_root(ds)
     sequence_dim, batch_dims, core_dims = phase_roles_structure(core)
     phase_roles_vs_dims(
         ds,

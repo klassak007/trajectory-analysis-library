@@ -5,6 +5,15 @@ from collections.abc import Callable
 from enum import IntFlag, auto
 from pathlib import Path
 
+from ._ast_scope import (
+    argument_names as _argument_names,
+    class_outer_expressions as _class_outer_expressions,
+    function_local_names as _function_local_names,
+    function_signature_expressions as _function_signature_expressions,
+    pattern_names as _pattern_names,
+    target_names as _target_names,
+)
+
 
 class _Origin(IntFlag):
     NONE = 0
@@ -13,6 +22,8 @@ class _Origin(IntFlag):
     TAL_ROOT = auto()
     TAL_COPY = auto()
     TAL_MAPPING = auto()
+    COPY_MODULE = auto()
+    COPY_FUNCTION = auto()
     XARRAY_MODULE = auto()
     XARRAY_DATASET = auto()
     XARRAY_DATA_ARRAY = auto()
@@ -70,153 +81,12 @@ def _is_tal_literal(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value == "tal"
 
 
-def _argument_names(args: ast.arguments) -> set[str]:
-    positional = (*args.posonlyargs, *args.args, *args.kwonlyargs)
-    names = {arg.arg for arg in positional}
-    names.update(arg.arg for arg in (args.vararg, args.kwarg) if arg is not None)
-    return names
-
-
-def _target_names(target: ast.AST) -> set[str]:
-    if isinstance(target, ast.Name):
-        return {target.id}
-    if isinstance(target, ast.Starred):
-        return _target_names(target.value)
-    if isinstance(target, (ast.List, ast.Tuple)):
-        return set().union(*(_target_names(item) for item in target.elts))
-    return set()
-
-
-def _function_signature_expressions(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> tuple[ast.AST, ...]:
-    expressions: list[ast.AST] = [*node.decorator_list]
-    expressions.extend(default for default in node.args.defaults)
-    expressions.extend(default for default in node.args.kw_defaults if default is not None)
-    arguments = (
-        *node.args.posonlyargs,
-        *node.args.args,
-        *node.args.kwonlyargs,
-        node.args.vararg,
-        node.args.kwarg,
+def _is_tal_pair(node: ast.AST) -> bool:
+    return (
+        isinstance(node, (ast.List, ast.Tuple))
+        and len(node.elts) == 2
+        and _is_tal_literal(node.elts[0])
     )
-    expressions.extend(
-        argument.annotation
-        for argument in arguments
-        if argument is not None and argument.annotation is not None
-    )
-    if node.returns is not None:
-        expressions.append(node.returns)
-    expressions.extend(getattr(node, "type_params", ()))
-    return tuple(expressions)
-
-
-def _class_outer_expressions(node: ast.ClassDef) -> tuple[ast.AST, ...]:
-    expressions: list[ast.AST] = [*node.decorator_list, *node.bases]
-    expressions.extend(keyword.value for keyword in node.keywords)
-    expressions.extend(getattr(node, "type_params", ()))
-    return tuple(expressions)
-
-
-def _pattern_names(pattern: ast.pattern) -> set[str]:
-    names = {
-        node.name
-        for node in ast.walk(pattern)
-        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name is not None
-    }
-    names.update(
-        node.rest
-        for node in ast.walk(pattern)
-        if isinstance(node, ast.MatchMapping) and node.rest is not None
-    )
-    return names
-
-
-class _FunctionBindingCollector(ast.NodeVisitor):
-    """Collect names bound in one function without entering nested scopes."""
-
-    def __init__(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        self.root = node
-        self.local_names = _argument_names(node.args)
-        self.global_names: set[str] = set()
-        self.nonlocal_names: set[str] = set()
-
-    def collect(self) -> set[str]:
-        for statement in self.root.body:
-            self.visit(statement)
-        return self.local_names - self.global_names - self.nonlocal_names
-
-    def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, (ast.Store, ast.Del)):
-            self.local_names.add(node.id)
-
-    def visit_Global(self, node: ast.Global) -> None:
-        self.global_names.update(node.names)
-
-    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
-        self.nonlocal_names.update(node.names)
-
-    def visit_Import(self, node: ast.Import) -> None:
-        self.local_names.update(
-            alias.asname or alias.name.partition(".")[0] for alias in node.names
-        )
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self.local_names.update(
-            alias.asname or alias.name for alias in node.names if alias.name != "*"
-        )
-
-    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
-        if node.name is not None:
-            self.local_names.add(node.name)
-        self.generic_visit(node)
-
-    def visit_Match(self, node: ast.Match) -> None:
-        self.visit(node.subject)
-        for case in node.cases:
-            self.local_names.update(_pattern_names(case.pattern))
-            if case.guard is not None:
-                self.visit(case.guard)
-            for statement in case.body:
-                self.visit(statement)
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.local_names.add(node.name)
-        for expression in _function_signature_expressions(node):
-            self.visit(expression)
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self.local_names.add(node.name)
-        for expression in _class_outer_expressions(node):
-            self.visit(expression)
-
-    def visit_Lambda(self, node: ast.Lambda) -> None:
-        for default in (*node.args.defaults, *node.args.kw_defaults):
-            if default is not None:
-                self.visit(default)
-
-    def _visit_comprehension(self, node: ast.AST, values: list[ast.AST]) -> None:
-        for value in values:
-            self.visit(value)
-        for generator in node.generators:
-            self.visit(generator.iter)
-            for condition in generator.ifs:
-                self.visit(condition)
-
-    def visit_ListComp(self, node: ast.ListComp) -> None:
-        self._visit_comprehension(node, [node.elt])
-
-    visit_SetComp = visit_ListComp
-    visit_GeneratorExp = visit_ListComp
-
-    def visit_DictComp(self, node: ast.DictComp) -> None:
-        self._visit_comprehension(node, [node.key, node.value])
-
-
-def _function_local_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    return _FunctionBindingCollector(node).collect()
 
 
 class _TalWriteDetector(ast.NodeVisitor):
@@ -391,12 +261,35 @@ class _TalWriteDetector(ast.NodeVisitor):
         self,
         node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
     ) -> _Origin:
-        sources = _Origin.NONE
-        for generator in node.generators:
-            sources |= self._mapping_iterable_origins(generator.iter)
-        values = (node.key, node.value) if isinstance(node, ast.DictComp) else (node.elt,)
-        for value in values:
-            sources |= self._expr_origins(value)
+        first, *remaining = node.generators
+        sources = self._mapping_iterable_origins(first.iter)
+        first_origins = self._iteration_target_origins(first.target, first.iter)
+        local_names = set().union(
+            *(_target_names(generator.target) for generator in node.generators)
+        )
+        self._push_scope(kind="comprehension", local_names=local_names)
+        try:
+            self._clear_names(local_names)
+            self._clear_potential_names(local_names)
+            self._bind_iteration_target(
+                first.target,
+                first.iter,
+                origins=first_origins,
+            )
+            for generator in remaining:
+                sources |= self._mapping_iterable_origins(generator.iter)
+                self._bind_iteration_target(generator.target, generator.iter)
+            values = (
+                (node.key, node.value)
+                if isinstance(node, ast.DictComp)
+                else (node.elt,)
+            )
+            for value in values:
+                sources |= self._expr_origins(value)
+            if isinstance(node, ast.DictComp) and _is_tal_literal(node.key):
+                sources |= _Origin.TAL_MAPPING
+        finally:
+            self._pop_scope()
         return self._mapping_copy_origins(sources)
 
     def _call_origins(self, expr: ast.Call) -> _Origin:
@@ -408,6 +301,17 @@ class _TalWriteDetector(ast.NodeVisitor):
                 origin |= self._mapping_copy_origins(
                     self._expr_origins(keyword.value)
                 )
+        if self._expr_origins(expr.func) & _Origin.COPY_FUNCTION:
+            if expr.args:
+                origin |= self._mapping_copy_origins(
+                    self._expr_origins(expr.args[0])
+                )
+            for keyword in expr.keywords:
+                if keyword.arg == "x":
+                    origin |= self._mapping_copy_origins(
+                        self._expr_origins(keyword.value)
+                    )
+            return origin
         if isinstance(expr.func, ast.Name) and expr.func.id == "dict":
             for argument in expr.args:
                 origin |= self._mapping_copy_origins(self._expr_origins(argument))
@@ -434,6 +338,8 @@ class _TalWriteDetector(ast.NodeVisitor):
             if expr.attr == "attrs":
                 return _Origin.ATTRS_ROOT
             receiver = self._expr_origins(expr.value)
+            if receiver & _Origin.COPY_MODULE and expr.attr in {"copy", "deepcopy"}:
+                return _Origin.COPY_FUNCTION
             if receiver & _Origin.XARRAY_MODULE:
                 return _XARRAY_CONSTRUCTORS.get(expr.attr, _Origin.NONE)
             return _Origin.NONE
@@ -464,11 +370,8 @@ class _TalWriteDetector(ast.NodeVisitor):
                 origin |= self._expr_origins(value)
             return origin
         if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
-            contains_tal = any(
-                isinstance(item, (ast.List, ast.Tuple))
-                and len(item.elts) == 2
-                and _is_tal_literal(item.elts[0])
-                for item in expr.elts
+            contains_tal = _is_tal_pair(expr) or any(
+                _is_tal_pair(item) for item in expr.elts
             )
             return _Origin.TAL_MAPPING if contains_tal else _Origin.NONE
         if isinstance(expr, ast.Call):
@@ -655,15 +558,29 @@ class _TalWriteDetector(ast.NodeVisitor):
         self._mark_local_tal_target(target)
         self._clear_names(_target_names(target))
 
-    def _bind_iteration_target(self, target: ast.AST, iterable: ast.AST) -> None:
-        self._bind_ordinary_target(target)
-        if not isinstance(iterable, (ast.List, ast.Tuple, ast.Set)):
-            return
+    def _iteration_target_origins(
+        self, target: ast.AST, iterable: ast.AST
+    ) -> _FlowState:
         origins: _FlowState = {}
+        if not isinstance(iterable, (ast.List, ast.Tuple, ast.Set)):
+            return origins
         for element in iterable.elts:
             for name, origin in self._assignment_bindings(target, element):
                 origins[name] = origins.get(name, _Origin.NONE) | origin
-        for name, origin in origins.items():
+        return origins
+
+    def _bind_iteration_target(
+        self,
+        target: ast.AST,
+        iterable: ast.AST,
+        *,
+        origins: _FlowState | None = None,
+    ) -> None:
+        resolved = self._iteration_target_origins(target, iterable)
+        if origins is not None:
+            resolved = origins
+        self._bind_ordinary_target(target)
+        for name, origin in resolved.items():
             self._set_name_origin(name, origin)
 
     def _assignment_bindings_for_targets(
@@ -796,11 +713,12 @@ class _TalWriteDetector(ast.NodeVisitor):
             imports_xarray = alias.name == "xarray" or (
                 alias.asname is None and alias.name.startswith("xarray.")
             )
-            origin = (
-                _Origin.XARRAY_MODULE
-                if imports_xarray
-                else _Origin.NONE
-            )
+            if imports_xarray:
+                origin = _Origin.XARRAY_MODULE
+            elif alias.name == "copy":
+                origin = _Origin.COPY_MODULE
+            else:
+                origin = _Origin.NONE
             self._set_name_origin(bound, origin)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -811,23 +729,29 @@ class _TalWriteDetector(ast.NodeVisitor):
             if alias.name == "*":
                 continue
             bound = alias.asname or alias.name
-            origin = (
-                _XARRAY_CONSTRUCTORS.get(alias.name, _Origin.NONE)
-                if is_xarray
-                else _Origin.NONE
-            )
+            if is_xarray:
+                origin = _XARRAY_CONSTRUCTORS.get(alias.name, _Origin.NONE)
+            elif node.module == "copy" and alias.name in {"copy", "deepcopy"}:
+                origin = _Origin.COPY_FUNCTION
+            else:
+                origin = _Origin.NONE
             self._set_name_origin(bound, origin)
 
     def _visit_comprehension(self, node: ast.AST, values: list[ast.AST]) -> None:
         first, *remaining = node.generators
         self.visit(first.iter)
+        first_origins = self._iteration_target_origins(first.target, first.iter)
         local_names = set().union(
             *(_target_names(generator.target) for generator in node.generators)
         )
         self._push_scope(kind="comprehension", local_names=local_names)
         self._clear_names(local_names)
         self._clear_potential_names(local_names)
-        self._bind_iteration_target(first.target, first.iter)
+        self._bind_iteration_target(
+            first.target,
+            first.iter,
+            origins=first_origins,
+        )
         for condition in first.ifs:
             self.visit(condition)
         for generator in remaining:

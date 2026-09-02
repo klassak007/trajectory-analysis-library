@@ -463,8 +463,8 @@ class Rotation(AnalysisObject):
         return obj
     
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Rotation":
-        obj = super()._from_unvalidated(ds)
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> "Rotation":
+        obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
         return obj
