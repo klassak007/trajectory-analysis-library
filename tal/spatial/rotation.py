@@ -29,6 +29,7 @@ from tal.core.orchestration.runtime_checks import (
 from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema_errors import SchemaError
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
+from tal.core.typed_lifecycle import _finish_typed_promotion, _prepare_typed_promotion
 from tal.utils.frame_schema import get_frames, set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
 
@@ -443,16 +444,17 @@ class Rotation(AnalysisObject):
     -----
     Public TAL class surface. See class methods/properties for operational semantics.
     """
-
     CANONICAL_REP: str = "quat"
     QUAT_LABELS: tuple[str, str, str, str] = _QUAT_LABELS
     MATRIX_LABELS: tuple[str, str, str] = _MATRIX_LABELS
 
     def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = _coerce_rotation_source(data, owner="spatial.rotation.__init__")
-        super().__init__(analysis_object_dataset(source))
-        self._normalize_metadata(owner="spatial.rotation.__init__")
-        self._enforce_invariants(owner="spatial.rotation.__init__")
+        owner = "spatial.rotation.__init__"
+        source = _coerce_rotation_source(data, owner=owner)
+        self._bind_dataset(_prepare_typed_promotion(source, owner=owner))
+        self._normalize_metadata(owner=owner)
+        self._enforce_invariants(owner=owner)
+        _finish_typed_promotion(source, analysis_object_dataset(self))
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Rotation":
@@ -460,14 +462,12 @@ class Rotation(AnalysisObject):
         obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
         return obj
-    
     @classmethod
     def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> "Rotation":
         obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
         return obj
-    
     def _normalize_metadata(self, *, owner: str) -> None:
         normalized = _normalize_rotation_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)

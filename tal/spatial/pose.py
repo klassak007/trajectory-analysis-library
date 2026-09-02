@@ -27,6 +27,7 @@ from tal.core.schema_read import (
     read_sequence_size_coord_name,
     validate_schema_if_needed,
 )
+from tal.core.typed_lifecycle import _finish_typed_promotion, _prepare_typed_promotion
 from tal.utils.frame_schema import get_frames, set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
 
@@ -379,13 +380,15 @@ class Pose(AnalysisObject):
     CANONICAL_POSITION_REP: str = "cart"
     CANONICAL_ROTATION_REP: str = "quat"
     def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = _coerce_pose_source(data, owner="spatial.pose.__init__")
-        super().__init__(analysis_object_dataset(source))
-        self._normalize_metadata(owner="spatial.pose.__init__")
-        self._enforce_invariants(owner="spatial.pose.__init__")
+        owner = "spatial.pose.__init__"
+        source = _coerce_pose_source(data, owner=owner)
+        self._bind_dataset(_prepare_typed_promotion(source, owner=owner))
+        self._normalize_metadata(owner=owner)
+        self._enforce_invariants(owner=owner)
         self._bind_dataset(
-            _validate_pose_matrix_if_needed(analysis_object_dataset(self), owner="spatial.pose.__init__")
+            _validate_pose_matrix_if_needed(analysis_object_dataset(self), owner=owner)
         )
+        _finish_typed_promotion(source, analysis_object_dataset(self))
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Pose":
         owner = f"{cls.__name__}._from_validated"

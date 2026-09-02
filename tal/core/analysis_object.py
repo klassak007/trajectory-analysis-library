@@ -164,11 +164,17 @@ class AnalysisObject:
         return ds
 
     def __init__(self, data: xr.Dataset | xr.DataArray) -> None:
-        ds = self._normalized_ingress_dataset(data)
+        candidate = self._prepared_ingress_dataset(data)
+        owned = _dataset_ownership.isolate_external_dataset(candidate)
+        self._bind_dataset(owned)
+
+    @classmethod
+    def _prepared_ingress_dataset(cls, data: xr.Dataset | xr.DataArray) -> xr.Dataset:
+        ds = cls._normalized_ingress_dataset(data)
         input_had_tal = "tal" in data.attrs
         if input_had_tal:
             tal_payload = ds.attrs["tal"]
-            candidate = (
+            return (
                 _apply_schema_update(
                     _validate_existing_schema_envelope(ds),
                     _SchemaUpdatePlan(),
@@ -177,14 +183,11 @@ class AnalysisObject:
                 if _is_bootstrap_schema(tal_payload)
                 else _validate_schema(ds)
             )
-        else:
-            candidate = _apply_schema_update(
-                ds,
-                _SchemaUpdatePlan(),
-                validate=False,
-            )
-        owned = _dataset_ownership.isolate_external_dataset(candidate)
-        self._bind_dataset(owned)
+        return _apply_schema_update(
+            ds,
+            _SchemaUpdatePlan(),
+            validate=False,
+        )
 
     def _bind_dataset(self, ds: xr.Dataset) -> None:
         self._assert_no_multiindex(ds, owner="AnalysisObject")

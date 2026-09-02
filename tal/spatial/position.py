@@ -9,6 +9,7 @@ from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
 from tal.core.schema_read import read_roles, validate_schema_if_needed
+from tal.core.typed_lifecycle import _finish_typed_promotion, _prepare_typed_promotion
 from tal.linalg import add as linalg_add
 from tal.utils.frame_schema import get_frames, set_frames
 
@@ -116,10 +117,12 @@ class Position(AnalysisObject):
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
 
     def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = _coerce_position_source(data, owner="spatial.position.__init__")
-        super().__init__(analysis_object_dataset(source))
-        self._normalize_metadata(owner="spatial.position.__init__")
-        self._enforce_invariants(owner="spatial.position.__init__")
+        owner = "spatial.position.__init__"
+        source = _coerce_position_source(data, owner=owner)
+        self._bind_dataset(_prepare_typed_promotion(source, owner=owner))
+        self._normalize_metadata(owner=owner)
+        self._enforce_invariants(owner=owner)
+        _finish_typed_promotion(source, analysis_object_dataset(self))
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Position":

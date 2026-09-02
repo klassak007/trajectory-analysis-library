@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Hashable, Mapping, MutableMapping
+from collections.abc import Callable, Hashable, Mapping, MutableMapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -134,6 +134,73 @@ def metadata_isolated_dataset(source: xr.Dataset, *, owner: str) -> xr.Dataset:
     return dataset_view(source, copy="shallow", owner=owner)
 
 
+def _capture_close_failure(
+    callback: Callable[[], None],
+    failure: BaseException | None,
+) -> BaseException | None:
+    try:
+        callback()
+    except BaseException as exc:  # noqa: BLE001 -- retain first failure
+        return exc if failure is None else failure
+    return failure
+
+
+class _CloseOnce:
+    def __init__(
+        self,
+        primary: Callable[[], None],
+        cleanup: _CloseOnce | None = None,
+    ) -> None:
+        self._primary = primary
+        self._cleanup = cleanup
+        self._closed = False
+
+    def __call__(self) -> None:
+        pending: list[Callable[[], None] | _CloseOnce] = [self]
+        failure: BaseException | None = None
+        while pending:
+            callback = pending.pop()
+            if not isinstance(callback, _CloseOnce):
+                failure = _capture_close_failure(callback, failure)
+                continue
+            if callback._closed:
+                continue
+            callback._closed = True
+            if callback._cleanup is not None:
+                pending.append(callback._cleanup)
+            pending.append(callback._primary)
+        if failure is not None:
+            raise failure
+
+
+def _idempotent_close(callback: Callable[[], None]) -> _CloseOnce:
+    if isinstance(callback, _CloseOnce):
+        return callback
+    return _CloseOnce(callback)
+
+
+def _compose_close_callbacks(
+    primary: Callable[[], None],
+    cleanup: Callable[[], None],
+) -> _CloseOnce:
+    return _CloseOnce(primary, cleanup=_idempotent_close(cleanup))
+
+
+def couple_dataset_resource(source: xr.Dataset, target: xr.Dataset) -> xr.Dataset:
+    """Give a promoted Dataset the source Dataset's coupled close lifetime."""
+    source_close = getattr(source, "_close", None)
+    if source is target or source_close is None:
+        return target
+    source_close = _idempotent_close(source_close)
+    source.set_close(source_close)
+    target_close = getattr(target, "_close", None)
+    close = source_close
+    if target_close is not None and target_close is not source_close:
+        close = _compose_close_callbacks(target_close, source_close)
+    target.set_close(close)
+    return target
+
+
 def analysis_object_dataset(source: AnalysisObject) -> xr.Dataset:
     """Return the exact Dataset backing one internal AnalysisObject boundary."""
     return cast(xr.Dataset, source._data)
@@ -161,6 +228,7 @@ __all__ = [
     "DatasetCopyMode",
     "analysis_object_dataset",
     "coerce_dataset_copy_mode",
+    "couple_dataset_resource",
     "dataset_to_dataarray_view",
     "dataset_view",
     "deep_public_dataset",

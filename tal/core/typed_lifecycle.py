@@ -7,7 +7,11 @@ from typing import ClassVar, Literal, Self
 import xarray as xr
 
 from .analysis_object import AnalysisObject
-from .dataset_ownership import analysis_object_dataset
+from .dataset_ownership import (
+    analysis_object_dataset,
+    couple_dataset_resource,
+    metadata_isolated_dataset,
+)
 
 LifecyclePhase = Literal["init", "from_validated", "from_unvalidated"]
 
@@ -88,6 +92,17 @@ def default_coerce_source(value: object, ctx: TypedLifecycleContext) -> Analysis
     from .orchestration.inputs import coerce_analysis_object_input
 
     return coerce_analysis_object_input(value, owner=ctx.owner)
+
+
+def _prepare_typed_promotion(source: AnalysisObject, *, owner: str) -> xr.Dataset:
+    candidate = AnalysisObject._prepared_ingress_dataset(
+        analysis_object_dataset(source)
+    )
+    return metadata_isolated_dataset(candidate, owner=owner)
+
+
+def _finish_typed_promotion(source: AnalysisObject, target: xr.Dataset) -> None:
+    couple_dataset_resource(analysis_object_dataset(source), target)
 
 
 def identity_init_options(ds: xr.Dataset, ctx: TypedLifecycleContext) -> xr.Dataset:
@@ -389,10 +404,11 @@ class TypedAnalysisObject(AnalysisObject):
         source = spec.coerce_source(data, ctx)
         if not isinstance(source, AnalysisObject):
             raise TypeError(f"{ctx.owner}: lifecycle source coercer returned {type(source).__name__}; expected AnalysisObject.")
-        AnalysisObject.__init__(self, analysis_object_dataset(source))
+        self._bind_dataset(_prepare_typed_promotion(source, owner=ctx.owner))
         initialized = spec.apply_init_options(analysis_object_dataset(self), ctx)
         self._bind_from_hook(initialized, ctx=ctx, hook="apply_init_options")
         self._run_typed_lifecycle(ctx)
+        _finish_typed_promotion(source, analysis_object_dataset(self))
 
     def _run_typed_lifecycle(self, ctx: TypedLifecycleContext) -> None:
         spec = self.__class__._lifecycle_spec()
