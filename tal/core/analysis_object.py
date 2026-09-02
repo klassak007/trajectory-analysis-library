@@ -77,9 +77,12 @@ class AnalysisObject:
 
     Operator Families
     -----------------
-    Arithmetic and comparison operators are routed through TAL ufunc owners.
-    This keeps orchestration/finalize behavior consistent with xarray alignment
-    and TAL schema truthfulness.
+    Arithmetic operators route through TAL's AO-aware ufunc owners and return
+    finalized ``AnalysisObject`` results using xarray labeled alignment.
+    Ordering operators (``<``, ``<=``, ``>``, ``>=``) build deferred
+    ``Condition`` expressions for event evaluation. ``==`` and ``!=`` retain
+    object-identity semantics; use ``tal.ufuncs.equal`` and
+    ``tal.ufuncs.not_equal`` for deferred elementwise equality conditions.
 
     See Also
     --------
@@ -272,7 +275,6 @@ class AnalysisObject:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import Condition
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset(
         ...         {"value": ("sample", [0.0, 2.0])},
@@ -283,7 +285,7 @@ class AnalysisObject:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", 1.0))
+        >>> mask = ao.events.mask(ao > 1.0)
         >>> mask.to_numpy().tolist()
         [False, True]
         """

@@ -236,7 +236,7 @@ class ParamAccessor:
         Examples
         --------
         >>> import xarray as xr
-        >>> from tal.core import AnalysisObject, ParamEvalOptions
+        >>> from tal.core import AnalysisObject
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 1.0, 4.0])}, coords={"sample": [0, 1, 2], "time": ("sample", [0.0, 1.0, 2.0])}),
         ...     sequence_dim="sample",
@@ -404,7 +404,7 @@ class ParamAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> out = source.param.interp_like(target, on="time", opts=ParamEvalOptions(method="linear"))
+        >>> out = source.param.interp_like(target, on="time")
         >>> out.as_dataset()["value"].values.tolist()
         [0.0, 4.0]
         """

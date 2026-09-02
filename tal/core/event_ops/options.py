@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import xarray as xr
 
@@ -7,11 +9,11 @@ from ..orchestration.lazy import is_chunked_dataarray
 from ..param_ops.guards import coerce_float_scalar
 from .types import (
     AroundOptions,
+    AtBoundariesOptions,
     ConditionEvalOptions,
-    WhenOptions,
     EventExtractOptions,
     IntervalExtractOptions,
-    AtBoundariesOptions,
+    WhenOptions,
 )
 
 _VALID_AO_INTERP = {"linear", "nearest"}
@@ -24,6 +26,16 @@ _VALID_WHEN_LAYOUTS = {"mask", "segments", "stream"}
 _VALID_WHEN_ON_EMPTY = {"empty", "error"}
 _VALID_AROUND_EDGES = {"all", "enter", "exit"}
 _VALID_AROUND_LAYOUTS = {"segments", "stacked"}
+
+
+class _AroundUnsetType:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+_AROUND_UNSET = _AroundUnsetType()
 
 
 def _validate_coord_name(name: str, *, owner: str) -> None:
@@ -307,9 +319,28 @@ def coerce_around_options(
     opts: object | None,
     *,
     owner: str,
+    edge: Literal["enter", "exit", "all"] | _AroundUnsetType = _AROUND_UNSET,
+    pre: float | _AroundUnsetType = _AROUND_UNSET,
+    post: float | _AroundUnsetType = _AROUND_UNSET,
+    dt: float | None | _AroundUnsetType = _AROUND_UNSET,
+    layout: Literal["segments", "stacked"] | _AroundUnsetType = _AROUND_UNSET,
 ) -> AroundOptions:
+    overrides = {
+        name: value
+        for name, value in (
+            ("edge", edge),
+            ("pre", pre),
+            ("post", post),
+            ("dt", dt),
+            ("layout", layout),
+        )
+        if value is not _AROUND_UNSET
+    }
+    if opts is not None and overrides:
+        fields = ", ".join(overrides)
+        raise TypeError(f"{owner}: opts cannot be combined with keyword overrides: {fields}.")
     if opts is None:
-        out = AroundOptions()
+        out = AroundOptions(**overrides)
     elif isinstance(opts, AroundOptions):
         out = opts
     else:

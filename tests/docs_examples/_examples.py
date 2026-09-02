@@ -14,7 +14,7 @@ from tal.astro import AstroBackend, AstroIERSOptions, AstroOptions, AstroTimeOpt
 from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject, GroupByOptions, SequenceConcatOptions, concat_sequence
 from tal.core.component_ops import ComponentRegistryOptions, ComponentSpec
-from tal.core.event_ops import Condition, WhenOptions
+from tal.core.event_ops import WhenOptions
 from tal.core.schema_read import read_roles
 from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds, snapshot_to_networkx
 from tal.io import CsvIngestOptions, read_csv_logs
@@ -287,7 +287,7 @@ def example_core_param_interp_like() -> None:
 
 def example_core_event_when() -> None:
     ao = _make_signal_ao()
-    cond = Condition.compare(Condition.var("value"), "gt", 2.0)
+    cond = ao > 2.0
     out = ao.events.when(cond, opts=WhenOptions(layout="mask"))
     assert out.as_dataset(copy="none")["value"].dims == ao.as_dataset(copy="none")["value"].dims
     assert bool(np.isnan(out.as_dataset(copy="none")["value"].values).any())
@@ -416,7 +416,7 @@ def example_core_param_surface() -> None:
         np.asarray([0.0, 0.5, 1.0]),
     )
     np.testing.assert_allclose(
-        ao.param.interp_like(target, on="time", opts=ParamEvalOptions(method="linear")).as_dataset(copy="none")["value"],
+        ao.param.interp_like(target, on="time").as_dataset(copy="none")["value"],
         np.asarray([0.0, 4.0]),
     )
     np.testing.assert_allclose(
@@ -451,7 +451,8 @@ def example_core_param_surface() -> None:
 
 
 def example_core_event_surface() -> None:
-    from tal.core.event_ops import AroundOptions, AtBoundariesOptions
+    from tal import ufuncs
+    from tal.core.event_ops import AtBoundariesOptions, Condition
 
     ao = AnalysisObject.from_data(
         xr.Dataset(
@@ -463,17 +464,24 @@ def example_core_event_surface() -> None:
         param_coord="time",
         validate=True,
     )
-    cond = Condition.compare(Condition.var("value"), "gt", 1.5)
-    assert ao.events.mask(cond).values.tolist() == [False, True, True, False]
-    assert ao.events.events(cond)["edge_code"].values.tolist() == [1, 2]
-    assert ao.events.intervals(cond).sizes["segment"] == 1
+    high = ao > 1.5
+    low = ao < 1.0
+    combined = (high | low) & ~(ao < 0.0)
+    same_as_two = ufuncs.equal(ao, 2.0)
+    assert ao.events.mask(combined).values.tolist() == [True, True, True, False]
+    assert ao.events.mask(same_as_two).values.tolist() == [False, True, False, False]
+    after_two_seconds = Condition.compare(Condition.coord("time"), ">=", 2.0)
+    assert ao.events.mask(after_two_seconds).values.tolist() == [False, False, True, True]
+    assert ao.events.mask(high).values.tolist() == [False, True, True, False]
+    assert ao.events.events(high)["edge_code"].values.tolist() == [1, 2]
+    assert ao.events.intervals(high).sizes["segment"] == 1
     np.testing.assert_allclose(
-        ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="enter")).as_dataset(copy="none")["value"],
+        ao.events.at_boundaries(high, opts=AtBoundariesOptions(edges="enter")).as_dataset(copy="none")["value"],
         np.asarray([2.0]),
     )
-    masked = ao.events.when(cond, opts=WhenOptions(layout="mask"))
+    masked = ao.events.when(high, opts=WhenOptions(layout="mask"))
     assert masked.as_dataset(copy="none")["value"].isnull().values.tolist() == [True, False, False, True]
-    around = ao.events.around(cond, opts=AroundOptions(pre=0.0, post=0.0, dt=1.0))
+    around = ao.events.around(high, pre=0.0, post=0.0, dt=1.0)
     assert around.as_dataset(copy="none").sizes["event"] == 1
 
 

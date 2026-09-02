@@ -56,7 +56,7 @@ def resolve_param_runtime_context(
 
     Returns
     -------
-    ParamRuntimeContext
+    tal.core.param_ops.types.ParamRuntimeContext
         Result of applying this operation with TAL semantic constraints preserved.
 
     Notes
@@ -147,7 +147,7 @@ def resolve_combine_contexts(
 
     Returns
     -------
-    list[CombineContext]
+    list[tal.core.combine_ops.types.CombineContext]
         Ordered collection produced by this operation.
 
     Notes

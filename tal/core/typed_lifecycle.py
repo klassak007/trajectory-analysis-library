@@ -24,8 +24,9 @@ class TypedLifecycleContext:
     ----------
     owner : str
         Owner string used by hooks when raising deterministic diagnostics.
-    phase : {'init', 'from_validated', 'from_unvalidated'}
-        Lifecycle path currently invoking the hook.
+    phase : str
+        Lifecycle path currently invoking the hook: ``"init"``,
+        ``"from_validated"``, or ``"from_unvalidated"``.
     options : object | None, optional
         Constructor-specific options supplied by a subclass.
 

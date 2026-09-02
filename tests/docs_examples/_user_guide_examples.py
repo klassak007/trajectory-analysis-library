@@ -12,12 +12,8 @@ from tal.astro import AstroIERSOptions, AstroOptions, AstroTimeOptions, Topocent
 from tal.astro.sun import SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject, ParamEvalOptions, ParamSyncOptions, synchronize
 from tal.core.event_ops import (
-    AroundOptions,
     AtBoundariesOptions,
     Condition,
-    ConditionEvalOptions,
-    EventExtractOptions,
-    IntervalExtractOptions,
     WhenOptions,
 )
 from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
@@ -67,14 +63,14 @@ def _event_ao() -> AnalysisObject:
             coords={
                 "trial": ["flight_0"],
                 "sample": sample,
-                "time_s": (("trial", "sample"), time_s[None, :]),
+                "time": (("trial", "sample"), time_s[None, :]),
                 "group_size": ("trial", np.array([sample.size], dtype=np.int64)),
             },
         ),
         sequence_dim="sample",
         batch_dims=("trial",),
         core_dims=(),
-        param_coord="time_s",
+        param_coord="time",
         sequence_size_coord="group_size",
         validate=True,
     )
@@ -294,18 +290,21 @@ def _time_source(var_name: str, values: np.ndarray, time_s: np.ndarray) -> Analy
 
 def example_guide_events_windows() -> None:
     ao = _event_ao()
-    fast = Condition.compare(Condition.var("speed_mps"), "gt", 5.0)
-    eval_opts = ConditionEvalOptions(coord_name="time_s")
-    mask = ao.events.mask(fast, opts=eval_opts)
-    events = ao.events.events(fast, opts=EventExtractOptions(eval=eval_opts))
-    intervals = ao.events.intervals(fast, opts=IntervalExtractOptions(eval=eval_opts))
-    boundaries = ao.events.at_boundaries(fast, opts=AtBoundariesOptions(eval=eval_opts, edges="enter"))
-    masked = ao.events.when(fast, opts=WhenOptions(eval=eval_opts, layout="mask"))
-    stream = ao.events.when(fast, opts=WhenOptions(eval=eval_opts, layout="stream"))
-    around = ao.events.around(fast, opts=AroundOptions(eval=eval_opts, edge="enter", pre=0.1, post=0.2, dt=0.1))
+    fast = ao > 5.0
+    mask = ao.events.mask(fast)
+    events = ao.events.events(fast)
+    intervals = ao.events.intervals(fast)
+    boundaries = ao.events.at_boundaries(fast, opts=AtBoundariesOptions(edges="enter"))
+    masked = ao.events.when(fast)
+    stream = ao.events.when(fast, opts=WhenOptions(layout="stream"))
+    around = ao.events.around(fast, edge="enter", pre=0.1, post=0.2, dt=0.1)
     around_stacked = ao.events.around(
         fast,
-        opts=AroundOptions(layout="stacked", eval=eval_opts, edge="enter", pre=0.1, post=0.2, dt=0.1),
+        layout="stacked",
+        edge="enter",
+        pre=0.1,
+        post=0.2,
+        dt=0.1,
     )
     assert mask.dtype == bool
     assert "event" in events.dims

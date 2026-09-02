@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import xarray as xr
 
 from .around import evaluate_around_windows
@@ -8,23 +10,25 @@ from .boundary import extract_event_boundaries
 from .evaluate import evaluate_mask
 from .intervals import extract_intervals
 from .options import (
+    _AROUND_UNSET,
+    _AroundUnsetType,
     coerce_around_options,
+    coerce_at_boundaries_options,
     coerce_condition_eval_options,
-    coerce_when_options,
     coerce_event_extract_options,
     coerce_interval_extract_options,
-    coerce_at_boundaries_options,
+    coerce_when_options,
 )
 from .pack import pack_event_table, pack_interval_table
 from .resolve import resolve_event_eval_context
 from .types import (
     AroundOptions,
+    AtBoundariesOptions,
     Condition,
     ConditionEvalOptions,
-    WhenOptions,
     EventExtractOptions,
     IntervalExtractOptions,
-    AtBoundariesOptions,
+    WhenOptions,
 )
 from .when import evaluate_when_condition
 
@@ -75,7 +79,6 @@ class EventsAccessor:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import Condition
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 2.0, 3.0, 1.0])}, coords={"sample": [0, 1, 2, 3], "time": ("sample", [0.0, 1.0, 2.0, 3.0])}),
         ...     sequence_dim="sample",
@@ -83,7 +86,7 @@ class EventsAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> condition = Condition.compare(Condition.var("value"), "gt", 1.5)
+        >>> condition = ao > 1.5
         >>> ao.events.mask(condition).values.tolist()
         [False, True, True, False]
         """
@@ -126,7 +129,6 @@ class EventsAccessor:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import Condition
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 2.0, 3.0, 1.0])}, coords={"sample": [0, 1, 2, 3], "time": ("sample", [0.0, 1.0, 2.0, 3.0])}),
         ...     sequence_dim="sample",
@@ -134,7 +136,7 @@ class EventsAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> table = ao.events.events(Condition.compare(Condition.var("value"), "gt", 1.5))
+        >>> table = ao.events.events(ao > 1.5)
         >>> table["edge_code"].values.tolist()
         [1, 2]
         """
@@ -189,7 +191,6 @@ class EventsAccessor:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import Condition
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 2.0, 3.0, 1.0])}, coords={"sample": [0, 1, 2, 3], "time": ("sample", [0.0, 1.0, 2.0, 3.0])}),
         ...     sequence_dim="sample",
@@ -197,7 +198,7 @@ class EventsAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> intervals = ao.events.intervals(Condition.compare(Condition.var("value"), "gt", 1.5))
+        >>> intervals = ao.events.intervals(ao > 1.5)
         >>> intervals.sizes["segment"]
         1
         """
@@ -252,7 +253,7 @@ class EventsAccessor:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import AtBoundariesOptions, Condition
+        >>> from tal.core.event_ops import AtBoundariesOptions
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 2.0, 3.0, 1.0])}, coords={"sample": [0, 1, 2, 3], "time": ("sample", [0.0, 1.0, 2.0, 3.0])}),
         ...     sequence_dim="sample",
@@ -260,7 +261,7 @@ class EventsAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> out = ao.events.at_boundaries(Condition.compare(Condition.var("value"), "gt", 1.5), opts=AtBoundariesOptions(edges="enter"))
+        >>> out = ao.events.at_boundaries(ao > 1.5, opts=AtBoundariesOptions(edges="enter"))
         >>> out.as_dataset()["value"].values.tolist()
         [2.0]
         """
@@ -308,7 +309,7 @@ class EventsAccessor:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import Condition, WhenOptions
+        >>> from tal.core.event_ops import WhenOptions
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 2.0, 3.0, 1.0])}, coords={"sample": [0, 1, 2, 3], "time": ("sample", [0.0, 1.0, 2.0, 3.0])}),
         ...     sequence_dim="sample",
@@ -316,7 +317,7 @@ class EventsAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> out = ao.events.when(Condition.compare(Condition.var("value"), "gt", 1.5), opts=WhenOptions(layout="mask"))
+        >>> out = ao.events.when(ao > 1.5, opts=WhenOptions(layout="mask"))
         >>> out.as_dataset()["value"].isnull().values.tolist()
         [True, False, False, True]
         """
@@ -334,6 +335,11 @@ class EventsAccessor:
         events_or_condition: Condition | xr.DataArray | xr.Dataset,
         *,
         opts: AroundOptions | None = None,
+        edge: Literal["enter", "exit", "all"] | _AroundUnsetType = _AROUND_UNSET,
+        pre: float | _AroundUnsetType = _AROUND_UNSET,
+        post: float | _AroundUnsetType = _AROUND_UNSET,
+        dt: float | None | _AroundUnsetType = _AROUND_UNSET,
+        layout: Literal["segments", "stacked"] | _AroundUnsetType = _AROUND_UNSET,
     ) -> "AnalysisObject":
         """Extract around-event windows from explicit events or a condition.
 
@@ -342,7 +348,20 @@ class EventsAccessor:
         events_or_condition : Condition | xr.DataArray | xr.Dataset
             Either a ``Condition`` or precomputed event payload used to define around-windows.
         opts : AroundOptions | None, optional
-            When ``None``, operation-specific defaults are resolved by internal option coercion. ``AroundOptions`` key fields: ``eval`` (default '<factory>'), ``edge`` (default 'enter'), ``pre`` (default 0.5), ``post`` (default 0.5).
+            Complete options object. Use this form for advanced ``eval`` or
+            ``grid`` configuration. It cannot be combined with a keyword
+            override.
+        edge : str, optional
+            Boundary kind to use for condition-derived events.
+        pre : float, optional
+            Window duration before each event.
+        post : float, optional
+            Window duration after each event.
+        dt : float | None, optional
+            Positive regular-grid spacing. A value is required unless
+            ``opts.grid`` supplies an explicit grid.
+        layout : str, optional
+            Output window layout.
 
         Returns
         -------
@@ -352,19 +371,21 @@ class EventsAccessor:
         Raises
         ------
         TypeError
-            If option payload types are invalid for this API.
+            If ``opts`` is combined with a keyword override or option payload
+            types are invalid.
         ValueError
             If option values violate fail-closed semantic/layout constraints.
 
         Notes
         -----
-        Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Omitted overrides retain ``AroundOptions`` defaults. Keyword overrides
+        and the options-object form share one validation path. Uses xarray
+        label-aware alignment and TAL fail-closed schema/runtime guards.
 
         Examples
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import AroundOptions, Condition
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": ("sample", [0.0, 2.0, 3.0, 1.0])}, coords={"sample": [0, 1, 2, 3], "time": ("sample", [0.0, 1.0, 2.0, 3.0])}),
         ...     sequence_dim="sample",
@@ -372,11 +393,27 @@ class EventsAccessor:
         ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> out = ao.events.around(Condition.compare(Condition.var("value"), "gt", 1.5), opts=AroundOptions(pre=0.0, post=0.0, dt=1.0))
+        >>> out = ao.events.around(ao > 1.5, pre=0.0, post=0.0, dt=1.0)
         >>> out.as_dataset().sizes["event"]
         1
+        >>> import numpy as np
+        >>> from tal.core.event_ops import AroundOptions
+        >>> custom = ao.events.around(
+        ...     ao > 1.5,
+        ...     opts=AroundOptions(grid=np.asarray([0.0])),
+        ... )
+        >>> custom.as_dataset().sizes["event"]
+        1
         """
-        options = coerce_around_options(opts, owner="events.around")
+        options = coerce_around_options(
+            opts,
+            owner="events.around",
+            edge=edge,
+            pre=pre,
+            post=post,
+            dt=dt,
+            layout=layout,
+        )
         return evaluate_around_windows(
             self._ao,
             events_or_condition,
