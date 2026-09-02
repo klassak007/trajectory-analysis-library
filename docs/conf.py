@@ -98,7 +98,6 @@ intersphinx_mapping = {
 }
 
 nitpick_ignore_regex = [
-    ("py:attr", r"unsafe_data"),
     ("py:class", r".*Accessor"),
     ("py:class", r".*Options"),
     ("py:class", r"'AnalysisObject"),

@@ -60,9 +60,9 @@ def test_spatial_core_069_solve_rotation_path_transform_identity_src_eq_dst_dete
         camera = graph.get_or_create_frame("camera")
         out = solve_rotation_path_transform(camera, camera, edge_rotation_fn=lambda *_: None)
     assert isinstance(out, Rotation)
-    assert get_rotation_rep(out.unsafe_data, owner="test") == "quat"
-    assert get_frames(out.unsafe_data) == ("camera", "camera")
-    quat = out.unsafe_data["rotation"].isel(sample=0).values
+    assert get_rotation_rep(out.as_dataset(copy="none"), owner="test") == "quat"
+    assert get_frames(out.as_dataset(copy="none")) == ("camera", "camera")
+    quat = out.as_dataset(copy="none")["rotation"].isel(sample=0).values
     assert _quat_equivalent(quat, np.asarray([0.0, 0.0, 0.0, 1.0], dtype=float))
 
 
@@ -78,8 +78,8 @@ def test_spatial_core_070_solve_rotation_path_transform_chain_deterministic_and_
         edge_map = {("sensor", "body"): edge_sb, ("body", "world"): edge_bw}
         out = solve_rotation_path_transform(sensor, world, edge_rotation_fn=lambda child, parent: edge_map[(child.id, parent.id)])
     expected = SciRotation.from_quat(_quat("x", 90.0)).as_matrix() @ SciRotation.from_quat(_quat("z", 90.0)).as_matrix()
-    assert get_frames(out.unsafe_data) == ("world", "sensor")
-    out_matrix = out.as_matrix(validate=True).unsafe_data["rotation"].isel(sample=0).values
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "sensor")
+    out_matrix = out.as_matrix(validate=True).as_dataset(copy="none")["rotation"].isel(sample=0).values
     np.testing.assert_allclose(out_matrix, expected, atol=1e-6, rtol=0.0)
 
 
@@ -90,9 +90,9 @@ def test_spatial_core_071_solve_pose_path_transform_identity_src_eq_dst_determin
         tool = graph.get_or_create_frame("tool")
         out = solve_pose_path_transform(tool, tool, edge_pose_fn=lambda *_: None)
     assert isinstance(out, Pose)
-    assert get_pose_rep(out.unsafe_data, owner="test") == "components"
-    assert get_frames(out.unsafe_data) == ("tool", "tool")
-    matrix = out.as_matrix(validate=True).unsafe_data["pose_matrix"].isel(sample=0).values
+    assert get_pose_rep(out.as_dataset(copy="none"), owner="test") == "components"
+    assert get_frames(out.as_dataset(copy="none")) == ("tool", "tool")
+    matrix = out.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].isel(sample=0).values
     np.testing.assert_allclose(matrix, np.eye(4, dtype=float), atol=1e-6, rtol=0.0)
 
 
@@ -123,11 +123,11 @@ def test_spatial_core_072_solve_pose_path_transform_chain_deterministic_and_fram
         )
         edge_map = {("sensor", "body"): edge_sb, ("body", "world"): edge_bw}
         out = solve_pose_path_transform(sensor, world, edge_pose_fn=lambda child, parent: edge_map[(child.id, parent.id)])
-    h_sb = edge_sb.as_matrix(validate=True).unsafe_data["pose_matrix"].isel(sample=0).values
-    h_bw = edge_bw.as_matrix(validate=True).unsafe_data["pose_matrix"].isel(sample=0).values
+    h_sb = edge_sb.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].isel(sample=0).values
+    h_bw = edge_bw.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].isel(sample=0).values
     expected = h_bw @ h_sb
-    assert get_frames(out.unsafe_data) == ("world", "sensor")
-    out_matrix = out.as_matrix(validate=True).unsafe_data["pose_matrix"].isel(sample=0).values
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "sensor")
+    out_matrix = out.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].isel(sample=0).values
     np.testing.assert_allclose(out_matrix, expected, atol=1e-6, rtol=0.0)
 
 
@@ -152,10 +152,10 @@ def test_spatial_core_073_path_solver_accepts_frame_and_string_endpoints_with_ex
             edge_rotation_fn=resolver,
             opts=PathSolveOptions(graph=graph),
         )
-    mat_ff = out_ff.as_matrix(validate=True).unsafe_data["rotation"].isel(sample=0).values
-    mat_fs = out_fs.as_matrix(validate=True).unsafe_data["rotation"].isel(sample=0).values
-    mat_sf = out_sf.as_matrix(validate=True).unsafe_data["rotation"].isel(sample=0).values
-    mat_ss = out_ss.as_matrix(validate=True).unsafe_data["rotation"].isel(sample=0).values
+    mat_ff = out_ff.as_matrix(validate=True).as_dataset(copy="none")["rotation"].isel(sample=0).values
+    mat_fs = out_fs.as_matrix(validate=True).as_dataset(copy="none")["rotation"].isel(sample=0).values
+    mat_sf = out_sf.as_matrix(validate=True).as_dataset(copy="none")["rotation"].isel(sample=0).values
+    mat_ss = out_ss.as_matrix(validate=True).as_dataset(copy="none")["rotation"].isel(sample=0).values
     np.testing.assert_allclose(mat_ff, mat_fs, atol=1e-6, rtol=0.0)
     np.testing.assert_allclose(mat_ff, mat_sf, atol=1e-6, rtol=0.0)
     np.testing.assert_allclose(mat_ff, mat_ss, atol=1e-6, rtol=0.0)
@@ -288,7 +288,7 @@ def test_spatial_hard_081_path_solver_dask_lazy_kernel_failure_preserves_path_ow
         }
         out = solve_rotation_path_transform(sensor, world, edge_rotation_fn=lambda child, parent: edge_map[(child.id, parent.id)])
     with pytest.raises(ValueError) as exc_info:
-        out.unsafe_data["rotation"].compute()
+        out.as_dataset(copy="none")["rotation"].compute()
     message = str(exc_info.value)
     assert "spatial.path_solve.rotation" in message
     assert "spatial.rotation.kernel" not in message

@@ -72,7 +72,7 @@ def test_geo_core_g3_001_geodesic_distance_known_wgs84_fixture() -> None:
 
     out = left.distance_to(right)
 
-    np.testing.assert_allclose(out.unsafe_data["distance_m"], [111319.49079327357], rtol=0.0, atol=1e-6)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["distance_m"], [111319.49079327357], rtol=0.0, atol=1e-6)
 
 
 def test_geo_core_g3_002_geodesic_initial_bearing_known_fixture() -> None:
@@ -83,7 +83,7 @@ def test_geo_core_g3_002_geodesic_initial_bearing_known_fixture() -> None:
 
     out = left.initial_bearing_to(right)
 
-    np.testing.assert_allclose(out.unsafe_data["initial_bearing_deg"], [90.0], atol=1e-10)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["initial_bearing_deg"], [90.0], atol=1e-10)
 
 
 def test_geo_core_g3_003_distance_aligns_batch_and_sequence_by_topology(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,14 +95,14 @@ def test_geo_core_g3_003_distance_aligns_batch_and_sequence_by_topology(monkeypa
     out = left.distance_to(right)
 
     assert isinstance(out, Array)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ()
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    np.testing.assert_allclose(out.unsafe_data["distance_m"], [1000.0, 2000.0])
-    assert "ext" not in out.unsafe_data.attrs["tal"] or "geo" not in out.unsafe_data.attrs["tal"]["ext"]
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    np.testing.assert_allclose(out.as_dataset(copy="none")["distance_m"], [1000.0, 2000.0])
+    assert "ext" not in out.as_dataset(copy="none").attrs["tal"] or "geo" not in out.as_dataset(copy="none").attrs["tal"]["ext"]
 
 
 def test_geo_core_g3_004_distance_preserves_validity_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,7 +111,7 @@ def test_geo_core_g3_004_distance_preserves_validity_semantics(monkeypatch: pyte
 
     out = _lla().distance_to(_lla())
 
-    assert read_sequence_size_coord_name(out.unsafe_data) == "group_size"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "group_size"
 
 
 def test_geo_core_g3_005_local_enu_distance_requires_origin() -> None:
@@ -130,8 +130,8 @@ def test_geo_distance_local_enu_approximation_and_bearing(monkeypatch: pytest.Mo
     distance = left.distance_to(right, opts=opts)
     bearing = left.initial_bearing_to(right, opts=opts)
 
-    np.testing.assert_allclose(distance.unsafe_data["distance_m"], [5.0])
-    np.testing.assert_allclose(bearing.unsafe_data["initial_bearing_deg"], [np.degrees(np.arctan2(3.0, 4.0))])
+    np.testing.assert_allclose(distance.as_dataset(copy="none")["distance_m"], [5.0])
+    np.testing.assert_allclose(bearing.as_dataset(copy="none")["initial_bearing_deg"], [np.degrees(np.arctan2(3.0, 4.0))])
 
 
 def test_geo_distance_include_altitude_endpoint_adjustment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,26 +142,26 @@ def test_geo_distance_include_altitude_endpoint_adjustment(monkeypatch: pytest.M
 
     out = left.distance_to(right, opts=GeodesicOptions(include_altitude=True))
 
-    np.testing.assert_allclose(out.unsafe_data["distance_m"], [np.hypot(1000.0, 10.0)])
+    np.testing.assert_allclose(out.as_dataset(copy="none")["distance_m"], [np.hypot(1000.0, 10.0)])
 
 
 def test_geo_distance_preserves_dask_payload_laziness(monkeypatch: pytest.MonkeyPatch) -> None:
     """Payload math remains lazy across the geodesic apply_ufunc boundary."""
     _stub_geod(monkeypatch)
     source = _lla()
-    ds = source.unsafe_data.copy(deep=True)
+    ds = source.as_dataset(copy="none").copy(deep=True)
     ds["position"] = ds["position"].copy(data=da.from_array(ds["position"].data, chunks=(1, 3)))
 
     out = GeodeticPosition(ds).distance_to(GeodeticPosition(ds), validate=False)
 
-    assert is_dask_collection(out.unsafe_data["distance_m"].data)
+    assert is_dask_collection(out.as_dataset(copy="none")["distance_m"].data)
 
 
 def test_geo_hard_g3_001_distance_rejects_incompatible_geo_metadata() -> None:
     """ID: GEO_HARD_G3_001_distance_rejects_incompatible_geo_metadata."""
     good = _lla()
-    bad = GeodeticPosition._from_unvalidated(good.unsafe_data.copy(deep=True))
-    bad.unsafe_data.attrs["tal"]["ext"]["geo"] = {
+    bad = GeodeticPosition._from_unvalidated(good.as_dataset(copy="none").copy(deep=True))
+    bad.as_dataset(copy="none").attrs["tal"]["ext"]["geo"] = {
         "kind": "cartesian_geo_position",
         "cartesian_system": "enu",
         "geodetic_crs": "EPSG:4979",

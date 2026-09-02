@@ -598,7 +598,7 @@ def test_io_hard_p10b_013_csv_export_preflight_precedes_output_mutation(
         labels=["a", "b"],
         values=np.asarray([[1.0], [2.0]], dtype=float),
         sizes=np.asarray([1, 1], dtype=np.int64),
-    ).unsafe_data.assign_coords(sequence_size=("trial", [1, 2]))
+    ).as_dataset(copy="none").assign_coords(sequence_size=("trial", [1, 2]))
     malformed = AnalysisObject.from_data(
         malformed_ds,
         sequence_dim="sample",
@@ -1283,7 +1283,7 @@ def test_io_hard_p10b_049_csv_export_schema_failure_retains_public_owner(
         values=np.asarray([[1.0]], dtype=float),
         sizes=np.asarray([1], dtype=np.int64),
     )
-    malformed = source.unsafe_data.copy(deep=False)
+    malformed = source.as_dataset(copy="none").copy(deep=False)
     schema = deepcopy(malformed.attrs["tal"])
     schema["core"]["roles"]["sequence_dim"] = "missing"
     malformed.attrs = {**malformed.attrs, "tal": schema}
@@ -1306,7 +1306,7 @@ def test_io_hard_p10b_076_csv_external_dataset_schema_failure_retains_public_own
         labels=["run"],
         values=np.asarray([[1.0]], dtype=float),
         sizes=np.asarray([1], dtype=np.int64),
-    ).unsafe_data.copy(deep=False)
+    ).as_dataset(copy="none").copy(deep=False)
     schema = deepcopy(malformed.attrs["tal"])
     schema["core"]["roles"]["sequence_dim"] = "missing"
     malformed.attrs = {**malformed.attrs, "tal": schema}
@@ -1496,7 +1496,7 @@ def test_io_hard_p10b_074_csv_export_preflight_does_not_reconstruct_subclass(
         values=np.asarray([[1.0]], dtype=float),
         sizes=np.asarray([1], dtype=np.int64),
     )
-    ao = LifecycleProbeAO(source.unsafe_data)
+    ao = LifecycleProbeAO(source.as_dataset(copy="none"))
     LifecycleProbeAO.bind_count = 0
 
     paths = write_csv_logs(ao, str(tmp_path / "subclass"))
@@ -1692,7 +1692,7 @@ def test_io_hard_p10b_087_field_lowering_failure_retains_writer_owner(
         values=np.asarray([[1.0]], dtype=float),
         sizes=np.asarray([1], dtype=np.int64),
     )
-    ds = base.unsafe_data.copy(deep=False)
+    ds = base.as_dataset(copy="none").copy(deep=False)
     ds["value"] = xr.Variable(
         ("trial", "sample"),
         indexing.LazilyIndexedArray(FailingFieldBackend()),
@@ -1733,7 +1733,7 @@ def test_io_hard_p10b_088_external_source_override_defers_declared_validity(
         labels=["run"],
         values=np.asarray([[1.0, 2.0]], dtype=float),
         sizes=np.asarray([2], dtype=np.int64),
-    ).unsafe_data.assign_coords(
+    ).as_dataset(copy="none").assign_coords(
         sequence_size=("trial", declared),
         effective_size=("trial", np.asarray([1], dtype=np.int64)),
     )
@@ -1762,7 +1762,7 @@ def test_io_hard_p10b_101_explicit_size_override_wins_before_schema_validity_val
         labels=["run"],
         values=np.asarray([[1.0, 2.0]], dtype=float),
         sizes=np.asarray([2], dtype=np.int64),
-    ).unsafe_data.assign_coords(
+    ).as_dataset(copy="none").assign_coords(
         effective_size=("trial", np.asarray([1], dtype=np.int64)),
     )
     if declared_state == "missing":
@@ -1798,7 +1798,7 @@ def test_io_hard_p10b_113_explicit_size_override_supersedes_malformed_validity_b
         labels=["run"],
         values=np.asarray([[1.0, 2.0]], dtype=float),
         sizes=np.asarray([2], dtype=np.int64),
-    ).unsafe_data.assign_coords(
+    ).as_dataset(copy="none").assign_coords(
         effective_size=("trial", np.asarray([1], dtype=np.int64)),
     )
     source.attrs = deepcopy(source.attrs)
@@ -1821,7 +1821,7 @@ def test_io_hard_p10b_114_explicit_size_override_does_not_mask_other_schema_erro
         labels=["run"],
         values=np.asarray([[1.0]], dtype=float),
         sizes=np.asarray([1], dtype=np.int64),
-    ).unsafe_data.assign_coords(
+    ).as_dataset(copy="none").assign_coords(
         effective_size=("trial", np.asarray([1], dtype=np.int64)),
     )
     source.attrs = deepcopy(source.attrs)
@@ -1867,7 +1867,7 @@ def test_io_hard_p10b_115_malformed_override_omits_declared_validity_field(
         labels=["run"],
         values=np.asarray([[1.0, 2.0]], dtype=float),
         sizes=np.asarray([2], dtype=np.int64),
-    ).unsafe_data.assign_coords(
+    ).as_dataset(copy="none").assign_coords(
         sequence_size=("sample", declared),
         effective_size=("trial", np.asarray([1], dtype=np.int64)),
     )
@@ -1905,7 +1905,7 @@ def test_io_hard_p10b_104_explicit_size_override_omits_declared_validity_field(
         labels=["run"],
         values=np.asarray([[1.0, 2.0]], dtype=float),
         sizes=np.asarray([2], dtype=np.int64),
-    ).unsafe_data.assign_coords(
+    ).as_dataset(copy="none").assign_coords(
         sequence_size=("sample", declared),
         effective_size=("trial", np.asarray([1], dtype=np.int64)),
     )
@@ -1926,7 +1926,7 @@ def test_io_hard_p10b_110_explicit_override_preserves_surviving_parameter(
     tmp_path: Path,
 ) -> None:
     """ID: IO_HARD_P10B_110_explicit_override_preserves_surviving_parameter."""
-    source = _dimension_param_export_ao(include_value=True).unsafe_data.assign_coords(
+    source = _dimension_param_export_ao(include_value=True).as_dataset(copy="none").assign_coords(
         effective_size=("trial", np.asarray([2], dtype=np.int64)),
     )
     source = set_validity(
@@ -1955,16 +1955,16 @@ def test_io_perf_p10b_014_external_source_coercion_shares_payload_buffers() -> N
         labels=["run"],
         values=payload,
         sizes=np.asarray([256], dtype=np.int64),
-    ).unsafe_data
+    ).as_dataset(copy="none")
 
     coerced = csv_export_module.coerce_csv_export_source(
         external,
         owner="tal.io.write_csv_logs",
     )
 
-    assert coerced.unsafe_data is not external
+    assert coerced.as_dataset(copy="none") is not external
     assert np.shares_memory(
-        coerced.unsafe_data["value"].data,
+        coerced.as_dataset(copy="none")["value"].data,
         external["value"].data,
     )
 
@@ -2003,7 +2003,7 @@ def test_io_perf_p10b_015_csv_backend_rows_spool_without_full_projection(
         values=np.ones((3, 3), dtype=float),
         sizes=np.asarray([1, 2, 3], dtype=np.int64),
     )
-    ds = base.unsafe_data.copy(deep=False)
+    ds = base.as_dataset(copy="none").copy(deep=False)
     ds["value"] = xr.Variable(
         ("trial", "sample"),
         indexing.LazilyIndexedArray(TrackingBackend(np.arange(9).reshape(3, 3), "value")),
@@ -2068,7 +2068,7 @@ def test_io_hard_p10b_097_csv_zero_valid_length_skips_backend_payload(
         values=np.asarray([[1.0]], dtype=float),
         sizes=np.asarray([0], dtype=np.int64),
     )
-    ds = base.unsafe_data.copy(deep=False)
+    ds = base.as_dataset(copy="none").copy(deep=False)
     ds["value"] = xr.Variable(
         ("trial", "sample"),
         indexing.LazilyIndexedArray(InvalidTailBackend()),

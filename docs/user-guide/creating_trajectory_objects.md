@@ -95,13 +95,15 @@ metadata after loading.
 Delayed schema writes are still explicit and validated. They return new AOs
 rather than mutating the source object in place.
 
-## `ao.data` vs `ao.unsafe_data`
+## Dataset exposure
 
-- `ao.data` and `ao.as_dataset()` return mutation-safe deep copies.
-- `ao.unsafe_data` returns the backing dataset for low-level inspection and
-  advanced debugging.
-- Prefer `ao.data` in notebooks unless you intentionally need direct backing
-  store access.
+- `ao.as_dataset()` returns a mutation-safe deep snapshot.
+- `ao.as_dataset(copy="shallow")` isolates xarray structure and metadata while
+  sharing payload buffers or lazy graphs.
+- `ao.as_dataset(copy="none")` returns the backing Dataset and is reserved for
+  explicit expert ownership crossings.
+- Keep the AO open while using lazy deep/shallow views, and call `ao.close()`
+  when a lazily loaded AO is no longer needed.
 
 ## What Usually Goes Wrong
 
@@ -116,8 +118,8 @@ interpolation errors, so it is worth declaring semantics early.
 
 ## Quick Checks
 
-- Inspect `full.unsafe_data`.
-- Check `full.unsafe_data.attrs["tal"]`.
+- Capture one `snapshot = full.as_dataset()`, inspect it, then check
+  `snapshot.attrs["tal"]`.
 - Use `full.to_dataarray(name="position")` only when one data variable should
   become the payload boundary.
 

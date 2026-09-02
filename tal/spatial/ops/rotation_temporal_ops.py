@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.resolve import resolve_param_runtime_context
 from tal.core.param_engine import ParamMapOptions, build_param_map, normalize_query_grid
 from tal.core.param_engine.map_apply import gather_along_sequence
@@ -241,18 +242,19 @@ def _finalize_rotation_temporal_output(
         validate=False,
         trajectory=True,
     )
-    result = evaluated if isinstance(evaluated, source.__class__) else source.__class__(evaluated.unsafe_data)
+    result = evaluated if isinstance(evaluated, source.__class__) else source.__class__(analysis_object_dataset(evaluated))
     if source_rep != "quat":
         result = result.to_rep(source_rep, validate=False)
     if validate:
-        return source.__class__._from_validated(result.unsafe_data)
-    return source.__class__._from_unvalidated(result.unsafe_data)
+        return source.__class__._from_validated(analysis_object_dataset(result))
+    return source.__class__._from_unvalidated(analysis_object_dataset(result))
 
 
 def _run_rotation_temporal_request(request: RotationTemporalRequest) -> Rotation:
     source = request.rotation
-    _require_single_payload_var(source.unsafe_data, owner=request.owner)
-    source_rep = get_rotation_rep(source.unsafe_data, owner=request.owner)
+    source_ds = analysis_object_dataset(source)
+    _require_single_payload_var(source_ds, owner=request.owner)
+    source_rep = get_rotation_rep(source_ds, owner=request.owner)
     quat_source = source.as_quat(validate=False)
     context = _resolve_runtime(request, source=quat_source)
     var_name = _require_single_payload_var(context.ds, owner=request.owner)

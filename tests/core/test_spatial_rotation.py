@@ -41,7 +41,7 @@ def _rotation_dataset_quat(
         core_dims=("quat",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _rotation_dataset_quat_with_sequence_dim(sequence_dim: str) -> xr.Dataset:
@@ -64,7 +64,7 @@ def _rotation_dataset_quat_with_sequence_dim(sequence_dim: str) -> xr.Dataset:
         core_dims=("quat",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _rotation_dataset_matrix(
@@ -93,7 +93,7 @@ def _rotation_dataset_matrix(
         core_dims=("row", "col"),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _rotation_dataset_temporal(
@@ -126,10 +126,10 @@ def _rotation_dataset_temporal(
         core_dims=("quat",),
         param_coord="time_s",
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     if rep == "matrix":
-        ds = Rotation(ds).as_matrix(validate=False).unsafe_data
-        ds = AnalysisObject._from_validated(ds).set_param_coord(name="time_s", validate=False).unsafe_data
+        ds = Rotation(ds).as_matrix(validate=False).as_dataset(copy="none")
+        ds = AnalysisObject._from_validated(ds).set_param_coord(name="time_s", validate=False).as_dataset(copy="none")
         ds = ds.assign_coords(alt_time=("sample", [10.0, 20.0]))
     return ds.copy(deep=True)
 
@@ -189,19 +189,19 @@ def test_spatial_core_014_rotation_constructor_accepts_ao_dataset_dataarray_dete
     assert isinstance(from_ao, Rotation)
     assert isinstance(from_ds, Rotation)
     assert isinstance(from_da, Rotation)
-    assert get_rotation_rep(from_ao.unsafe_data, owner="test") == "quat"
-    assert get_rotation_rep(from_ds.unsafe_data, owner="test") == "quat"
-    assert get_rotation_rep(from_da.unsafe_data, owner="test") == "quat"
+    assert get_rotation_rep(from_ao.as_dataset(copy="none"), owner="test") == "quat"
+    assert get_rotation_rep(from_ds.as_dataset(copy="none"), owner="test") == "quat"
+    assert get_rotation_rep(from_da.as_dataset(copy="none"), owner="test") == "quat"
 
 
 def test_spatial_core_015_rotation_representation_tag_boundary_deterministic() -> None:
     """ID: SPATIAL_CORE_015_rotation_representation_tag_boundary_deterministic."""
     ds_missing_rep = _rotation_dataset_quat()
     out = Rotation(ds_missing_rep)
-    assert get_rotation_rep(out.unsafe_data, owner="test") == "quat"
+    assert get_rotation_rep(out.as_dataset(copy="none"), owner="test") == "quat"
 
     ds_matrix = _set_rep(_rotation_dataset_matrix(), "matrix")
-    assert get_rotation_rep(Rotation(ds_matrix).unsafe_data, owner="test") == "matrix"
+    assert get_rotation_rep(Rotation(ds_matrix).as_dataset(copy="none"), owner="test") == "matrix"
 
     for rep in ("cart", "rotvec", "euler"):
         ds = _set_rep(_rotation_dataset_quat(), rep)
@@ -242,7 +242,7 @@ def test_spatial_core_179_rotation_norm_magnitude_angle_values_and_rep_independe
         sequence_dim="sample",
         core_dims=("quat",),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     quat_rot = Rotation(quat_ds)
     matrix_rot = quat_rot.as_matrix(validate=True)
 
@@ -254,10 +254,10 @@ def test_spatial_core_179_rotation_norm_magnitude_angle_values_and_rep_independe
     assert isinstance(out_norm, Array)
     assert isinstance(out_mag, Array)
     assert isinstance(out_matrix_mag, Array)
-    np.testing.assert_allclose(out_norm.unsafe_data["datavar"].values, expected, atol=1e-6)
-    np.testing.assert_allclose(out_mag.unsafe_data["datavar"].values, expected, atol=1e-6)
-    np.testing.assert_allclose(out_matrix_mag.unsafe_data["datavar"].values, expected, atol=1e-6)
-    xr.testing.assert_identical(out_norm.unsafe_data, out_mag.unsafe_data)
+    np.testing.assert_allclose(out_norm.as_dataset(copy="none")["datavar"].values, expected, atol=1e-6)
+    np.testing.assert_allclose(out_mag.as_dataset(copy="none")["datavar"].values, expected, atol=1e-6)
+    np.testing.assert_allclose(out_matrix_mag.as_dataset(copy="none")["datavar"].values, expected, atol=1e-6)
+    xr.testing.assert_identical(out_norm.as_dataset(copy="none"), out_mag.as_dataset(copy="none"))
 
 
 def test_spatial_core_180_rotation_magnitude_preserves_scalar_sequence_topology() -> None:
@@ -266,19 +266,19 @@ def test_spatial_core_180_rotation_magnitude_preserves_scalar_sequence_topology(
     out = rot.magnitude()
 
     assert isinstance(out, Array)
-    assert tuple(out.unsafe_data.data_vars) == ("datavar",)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    assert tuple(out.as_dataset(copy="none").data_vars) == ("datavar",)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ()
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
 
 
 def test_spatial_hard_181_rotation_magnitude_fail_closed_on_quaternion_layout_violation() -> None:
     """ID: SPATIAL_HARD_181_rotation_magnitude_fail_closed_on_quaternion_layout_violation."""
     rot = Rotation(_rotation_dataset_quat())
-    rot.unsafe_data["rotation"] = xr.DataArray(
+    rot.as_dataset(copy="none")["rotation"] = xr.DataArray(
         np.asarray([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]], dtype="float64"),
         dims=("sample", "quat_component"),
         coords={"sample": [0, 1], "quat_component": ["x", "y", "z"]},
@@ -355,9 +355,9 @@ def test_spatial_core_034_rotation_constructor_accepts_matrix_rep_layout_determi
     from_ds = Rotation(ds)
     from_da = Rotation(da)
 
-    assert get_rotation_rep(from_ao.unsafe_data, owner="test") == "matrix"
-    assert get_rotation_rep(from_ds.unsafe_data, owner="test") == "matrix"
-    assert get_rotation_rep(from_da.unsafe_data, owner="test") == "matrix"
+    assert get_rotation_rep(from_ao.as_dataset(copy="none"), owner="test") == "matrix"
+    assert get_rotation_rep(from_ds.as_dataset(copy="none"), owner="test") == "matrix"
+    assert get_rotation_rep(from_da.as_dataset(copy="none"), owner="test") == "matrix"
 
 
 def test_spatial_core_035_rotation_to_rep_quat_to_matrix_deterministic() -> None:
@@ -365,17 +365,17 @@ def test_spatial_core_035_rotation_to_rep_quat_to_matrix_deterministic() -> None
     rot = Rotation(_rotation_dataset_quat())
     out = rot.as_matrix()
 
-    assert get_rotation_rep(out.unsafe_data, owner="test") == "matrix"
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    assert get_rotation_rep(out.as_dataset(copy="none"), owner="test") == "matrix"
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ("row", "col")
-    assert tuple(out.unsafe_data.get_index("row").tolist()) == ("x", "y", "z")
-    assert tuple(out.unsafe_data.get_index("col").tolist()) == ("x", "y", "z")
+    assert tuple(out.as_dataset(copy="none").get_index("row").tolist()) == ("x", "y", "z")
+    assert tuple(out.as_dataset(copy="none").get_index("col").tolist()) == ("x", "y", "z")
 
     expected = _rotation_dataset_matrix()["rotation"].values
-    assert np.allclose(out.unsafe_data["rotation"].values, expected, atol=1e-6, rtol=0.0)
+    assert np.allclose(out.as_dataset(copy="none")["rotation"].values, expected, atol=1e-6, rtol=0.0)
 
 
 def test_spatial_core_036_rotation_to_rep_matrix_to_quat_deterministic() -> None:
@@ -383,23 +383,23 @@ def test_spatial_core_036_rotation_to_rep_matrix_to_quat_deterministic() -> None
     rot = Rotation(_set_rep(_rotation_dataset_matrix(), "matrix"))
     out = rot.as_quat()
 
-    assert get_rotation_rep(out.unsafe_data, owner="test") == "quat"
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    assert get_rotation_rep(out.as_dataset(copy="none"), owner="test") == "quat"
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ("quat",)
-    assert tuple(out.unsafe_data.get_index("quat").tolist()) == ("x", "y", "z", "w")
+    assert tuple(out.as_dataset(copy="none").get_index("quat").tolist()) == ("x", "y", "z", "w")
 
     expected = _rotation_dataset_quat()["rotation"].values
-    _assert_quat_equivalent(out.unsafe_data["rotation"].values, expected, atol=1e-6)
+    _assert_quat_equivalent(out.as_dataset(copy="none")["rotation"].values, expected, atol=1e-6)
 
 
 def test_spatial_core_037_rotation_conversion_roundtrip_quat_matrix_within_tolerance() -> None:
     """ID: SPATIAL_CORE_037_rotation_conversion_roundtrip_quat_matrix_within_tolerance."""
     rot = Rotation(_rotation_dataset_quat())
     roundtrip = rot.as_matrix().as_quat()
-    _assert_quat_equivalent(roundtrip.unsafe_data["rotation"].values, rot.unsafe_data["rotation"].values, atol=1e-6)
+    _assert_quat_equivalent(roundtrip.as_dataset(copy="none")["rotation"].values, rot.as_dataset(copy="none")["rotation"].values, atol=1e-6)
 
 
 def test_spatial_core_038_rotation_conversion_preserves_frames_roles_and_sequence_layout() -> None:
@@ -417,18 +417,18 @@ def test_spatial_core_038_rotation_conversion_preserves_frames_roles_and_sequenc
         name="rotation",
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name="rotation"), sequence_dim="sample", batch_dims=("trial",), core_dims=("quat",), validate=True)
-    ds = set_frames(ao.unsafe_data, parent="world", child="body", validate=False)
+    ds = set_frames(ao.as_dataset(copy="none"), parent="world", child="body", validate=False)
     ds = _set_roles(ds, {"rotation_hint": "quat"})
 
     rot = Rotation(ds)
     matrix_rot = rot.as_matrix()
     quat_rot = matrix_rot.as_quat()
 
-    assert get_frames(matrix_rot.unsafe_data) == ("world", "body")
-    assert get_frames(quat_rot.unsafe_data) == ("world", "body")
+    assert get_frames(matrix_rot.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(quat_rot.as_dataset(copy="none")) == ("world", "body")
 
-    _, seq_matrix, batch_matrix, core_matrix = read_roles(matrix_rot.unsafe_data)
-    _, seq_quat, batch_quat, core_quat = read_roles(quat_rot.unsafe_data)
+    _, seq_matrix, batch_matrix, core_matrix = read_roles(matrix_rot.as_dataset(copy="none"))
+    _, seq_quat, batch_quat, core_quat = read_roles(quat_rot.as_dataset(copy="none"))
     assert seq_matrix == "sample"
     assert batch_matrix == ("trial",)
     assert core_matrix == ("row", "col")
@@ -436,8 +436,8 @@ def test_spatial_core_038_rotation_conversion_preserves_frames_roles_and_sequenc
     assert batch_quat == ("trial",)
     assert core_quat == ("quat",)
 
-    roles_matrix = matrix_rot.unsafe_data.attrs["tal"]["ext"]["spatial"]["roles"]
-    roles_quat = quat_rot.unsafe_data.attrs["tal"]["ext"]["spatial"]["roles"]
+    roles_matrix = matrix_rot.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"]["roles"]
+    roles_quat = quat_rot.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"]["roles"]
     assert roles_matrix["rotation_hint"] == "quat"
     assert roles_quat["rotation_hint"] == "quat"
 
@@ -507,11 +507,11 @@ def test_spatial_core_039_rotation_compose_quat_tip_tail_chain_deterministic() -
     right = Rotation(set_frames(right_ds, parent="a", child="b", validate=False))
 
     out = left.compose(right)
-    assert get_rotation_rep(out.unsafe_data, owner="test") == "quat"
-    assert get_frames(out.unsafe_data) == ("world", "b")
+    assert get_rotation_rep(out.as_dataset(copy="none"), owner="test") == "quat"
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "b")
 
     expected = np.array([[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 0.0]], dtype=float)
-    _assert_quat_equivalent(out.unsafe_data["rotation"].values, expected, atol=1e-6)
+    _assert_quat_equivalent(out.as_dataset(copy="none")["rotation"].values, expected, atol=1e-6)
 
 
 def test_spatial_core_040_rotation_compose_mixed_rep_executes_via_quat_and_returns_left_rep() -> None:
@@ -519,7 +519,7 @@ def test_spatial_core_040_rotation_compose_mixed_rep_executes_via_quat_and_retur
     left_matrix = Rotation(_set_rep(_rotation_dataset_matrix(), "matrix"))
     right_quat = Rotation(_rotation_dataset_quat())
     out_matrix = left_matrix.compose(right_quat)
-    assert get_rotation_rep(out_matrix.unsafe_data, owner="test") == "matrix"
+    assert get_rotation_rep(out_matrix.as_dataset(copy="none"), owner="test") == "matrix"
     expected_matrix = np.array(
         [
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -527,30 +527,30 @@ def test_spatial_core_040_rotation_compose_mixed_rep_executes_via_quat_and_retur
         ],
         dtype=float,
     )
-    assert np.allclose(out_matrix.unsafe_data["rotation"].values, expected_matrix, atol=1e-6, rtol=0.0)
+    assert np.allclose(out_matrix.as_dataset(copy="none")["rotation"].values, expected_matrix, atol=1e-6, rtol=0.0)
 
     left_quat = Rotation(_rotation_dataset_quat())
     right_matrix = Rotation(_set_rep(_rotation_dataset_matrix(), "matrix"))
     out_quat = left_quat.compose(right_matrix)
-    assert get_rotation_rep(out_quat.unsafe_data, owner="test") == "quat"
+    assert get_rotation_rep(out_quat.as_dataset(copy="none"), owner="test") == "quat"
     expected_quat = np.array([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0]], dtype=float)
-    _assert_quat_equivalent(out_quat.unsafe_data["rotation"].values, expected_quat, atol=1e-6)
+    _assert_quat_equivalent(out_quat.as_dataset(copy="none")["rotation"].values, expected_quat, atol=1e-6)
 
 
 def test_spatial_core_041_rotation_inverse_quat_roundtrip_identity_deterministic() -> None:
     """ID: SPATIAL_CORE_041_rotation_inverse_quat_roundtrip_identity_deterministic."""
     rot = Rotation(_rotation_dataset_quat())
     identity = rot.compose(rot.inverse())
-    assert get_rotation_rep(identity.unsafe_data, owner="test") == "quat"
+    assert get_rotation_rep(identity.as_dataset(copy="none"), owner="test") == "quat"
     expected = np.array([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]], dtype=float)
-    _assert_quat_equivalent(identity.unsafe_data["rotation"].values, expected, atol=1e-6)
+    _assert_quat_equivalent(identity.as_dataset(copy="none")["rotation"].values, expected, atol=1e-6)
 
 
 def test_spatial_core_042_rotation_inverse_matrix_roundtrip_identity_deterministic() -> None:
     """ID: SPATIAL_CORE_042_rotation_inverse_matrix_roundtrip_identity_deterministic."""
     rot = Rotation(_set_rep(_rotation_dataset_matrix(), "matrix"))
     identity = rot.compose(rot.inverse())
-    assert get_rotation_rep(identity.unsafe_data, owner="test") == "matrix"
+    assert get_rotation_rep(identity.as_dataset(copy="none"), owner="test") == "matrix"
     expected = np.array(
         [
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
@@ -558,28 +558,28 @@ def test_spatial_core_042_rotation_inverse_matrix_roundtrip_identity_determinist
         ],
         dtype=float,
     )
-    assert np.allclose(identity.unsafe_data["rotation"].values, expected, atol=1e-6, rtol=0.0)
+    assert np.allclose(identity.as_dataset(copy="none")["rotation"].values, expected, atol=1e-6, rtol=0.0)
 
 
 def test_spatial_core_043_rotation_compose_frame_policy_one_framed_inherits_tags() -> None:
     """ID: SPATIAL_CORE_043_rotation_compose_frame_policy_one_framed_inherits_tags."""
     base_left = Rotation(_rotation_dataset_quat())
     base_right = Rotation(_rotation_dataset_quat())
-    left_framed = Rotation(set_frames(base_left.unsafe_data, parent="world", child="body", validate=False))
-    right_framed = Rotation(set_frames(base_right.unsafe_data, parent="map", child="sensor", validate=False))
+    left_framed = Rotation(set_frames(base_left.as_dataset(copy="none"), parent="world", child="body", validate=False))
+    right_framed = Rotation(set_frames(base_right.as_dataset(copy="none"), parent="map", child="sensor", validate=False))
 
     out_left = left_framed.compose(base_right)
-    assert get_frames(out_left.unsafe_data) == ("world", "body")
+    assert get_frames(out_left.as_dataset(copy="none")) == ("world", "body")
 
     out_right = base_left.compose(right_framed)
-    assert get_frames(out_right.unsafe_data) == ("map", "sensor")
+    assert get_frames(out_right.as_dataset(copy="none")) == ("map", "sensor")
 
 
 def test_spatial_core_044_rotation_inverse_swaps_frame_tags_deterministic() -> None:
     """ID: SPATIAL_CORE_044_rotation_inverse_swaps_frame_tags_deterministic."""
     rot = Rotation(set_frames(_rotation_dataset_quat(), parent="world", child="body", validate=False))
     inv = rot.inverse()
-    assert get_frames(inv.unsafe_data) == ("body", "world")
+    assert get_frames(inv.as_dataset(copy="none")) == ("body", "world")
 
 
 def test_bcast_core_048_spatial_compose_family_supports_missing_semantic_dim_materialization_after_frame_check() -> None:
@@ -604,7 +604,7 @@ def test_bcast_core_048_spatial_compose_family_supports_missing_semantic_dim_mat
                 batch_dims=("trial",),
                 core_dims=("quat",),
                 validate=True,
-            ).unsafe_data,
+            ).as_dataset(copy="none"),
             parent="world",
             child="a",
             validate=False,
@@ -624,15 +624,15 @@ def test_bcast_core_048_spatial_compose_family_supports_missing_semantic_dim_mat
                 batch_dims=("trial",),
                 core_dims=("quat",),
                 validate=False,
-            ).unsafe_data,
+            ).as_dataset(copy="none"),
             parent="a",
             child="b",
             validate=False,
         )
     )
     out = left.compose(right, validate=True)
-    assert out.unsafe_data["rotation"].sizes["trial"] == 2
-    assert get_frames(out.unsafe_data) == ("world", "b")
+    assert out.as_dataset(copy="none")["rotation"].sizes["trial"] == 2
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "b")
 
 
 def test_spatial_hard_037_rotation_compose_framed_chain_mismatch_fail_closed() -> None:
@@ -664,7 +664,7 @@ def test_spatial_hard_038_rotation_compose_type_boundary_no_raw_runtime_exceptio
 def test_spatial_hard_039_rotation_inverse_fail_closed_on_malformed_internal_state() -> None:
     """ID: SPATIAL_HARD_039_rotation_inverse_fail_closed_on_malformed_internal_state."""
     rot = Rotation(_rotation_dataset_quat())
-    rot.unsafe_data["rotation"].data[0, :] = 0.0
+    rot.as_dataset(copy="none")["rotation"].data[0, :] = 0.0
     with pytest.raises(ValueError, match="spatial.rotation.kernel.inverse"):
         rot.inverse()
 
@@ -715,15 +715,15 @@ def test_bcast_core_050_rotation_compose_static_dynamic_adopts_batch_semantics()
     )
     right = Rotation(_rotation_dataset_quat())
     out = left.compose(right, validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("quat",)
-    assert out.unsafe_data["rotation"].sizes["trial"] == 2
+    assert out.as_dataset(copy="none")["rotation"].sizes["trial"] == 2
 
-    trial_coord = left.unsafe_data.coords["trial"]
-    right_batched_arr = right.unsafe_data["rotation"].expand_dims(trial=trial_coord).transpose("trial", "sample", "quat")
+    trial_coord = left.as_dataset(copy="none").coords["trial"]
+    right_batched_arr = right.as_dataset(copy="none")["rotation"].expand_dims(trial=trial_coord).transpose("trial", "sample", "quat")
     right_batched = Rotation(
         AnalysisObject.from_data(
             right_batched_arr.to_dataset(name="rotation"),
@@ -734,7 +734,7 @@ def test_bcast_core_050_rotation_compose_static_dynamic_adopts_batch_semantics()
         )
     )
     expected = left.compose(right_batched, validate=True)
-    np.testing.assert_allclose(out.unsafe_data["rotation"].values, expected.unsafe_data["rotation"].values, atol=1e-7)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["rotation"].values, expected.as_dataset(copy="none")["rotation"].values, atol=1e-7)
 
 
 def test_spatial_hard_042_rotation_compose_rejects_conflicting_non_empty_batch_dims_fail_closed() -> None:
@@ -804,15 +804,15 @@ def test_topo_core_005_rotation_compose_uses_core_topology_touchpoint() -> None:
     right = Rotation(_rotation_dataset_quat().transpose("quat", "sample"))
     out = left.compose(right, validate=True)
     expected = left.compose(Rotation(_rotation_dataset_quat()), validate=True)
-    np.testing.assert_allclose(out.unsafe_data["rotation"].values, expected.unsafe_data["rotation"].values, atol=1e-6)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["rotation"].values, expected.as_dataset(copy="none")["rotation"].values, atol=1e-6)
 
 
 def test_spatial_core_111_rotation_interpolation_uses_quaternion_canonical_path() -> None:
     """ID: SPATIAL_CORE_111_rotation_interpolation_uses_quaternion_canonical_path."""
     rot = Rotation(_rotation_dataset_temporal(rep="matrix", angles_deg=(0.0, 120.0)))
     out = rot.param.at([0.5], validate=True)
-    assert get_rotation_rep(out.unsafe_data, owner="test") == "matrix"
-    mat = out.unsafe_data["rotation"].values[0]
+    assert get_rotation_rep(out.as_dataset(copy="none"), owner="test") == "matrix"
+    mat = out.as_dataset(copy="none")["rotation"].values[0]
     eye = np.eye(3, dtype=float)
     np.testing.assert_allclose(mat.T @ mat, eye, atol=1e-6)
     np.testing.assert_allclose(np.linalg.det(mat), 1.0, atol=1e-6)
@@ -825,11 +825,11 @@ def test_spatial_core_112_rotation_slerp_and_nearest_linear_boundaries_determini
     linear = rot.param.at([0.25], opts=RotationTemporalOptions(method="linear"), validate=True)
     slerp = rot.param.at([0.25], opts=RotationTemporalOptions(method="slerp"), validate=True)
     for out in (nearest, linear, slerp):
-        quat = out.as_quat(validate=True).unsafe_data["rotation"].values[0]
+        quat = out.as_quat(validate=True).as_dataset(copy="none")["rotation"].values[0]
         np.testing.assert_allclose(np.linalg.norm(quat), 1.0, atol=1e-6)
     assert not np.allclose(
-        linear.as_quat(validate=True).unsafe_data["rotation"].values,
-        slerp.as_quat(validate=True).unsafe_data["rotation"].values,
+        linear.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        slerp.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-5,
         rtol=0.0,
     )
@@ -841,8 +841,8 @@ def test_spatial_core_130_rotation_pose_interp_uses_specified_param_coord_as_pri
     out_time = rot.param.at([0.5], on="time_s", opts=RotationTemporalOptions(method="slerp"), validate=True)
     out_alt = rot.param.at([15.0], on="alt_time", opts=RotationTemporalOptions(method="slerp"), validate=True)
     np.testing.assert_allclose(
-        out_time.as_quat(validate=True).unsafe_data["rotation"].values,
-        out_alt.as_quat(validate=True).unsafe_data["rotation"].values,
+        out_time.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        out_alt.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-6,
     )
 
@@ -853,8 +853,8 @@ def test_spatial_core_136_rotation_param_default_uses_typed_preferred_interpolat
     out_default = rot.param.at([0.5], validate=True)
     out_slerp = rot.param.at([0.5], opts=RotationTemporalOptions(method="slerp"), validate=True)
     np.testing.assert_allclose(
-        out_default.as_quat(validate=True).unsafe_data["rotation"].values,
-        out_slerp.as_quat(validate=True).unsafe_data["rotation"].values,
+        out_default.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        out_slerp.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-6,
     )
 
@@ -865,8 +865,8 @@ def test_spatial_core_138_rotation_public_slerp_method_is_explicit_query_delegat
     via_method = rot.slerp([0.5], validate=True)
     via_param = rot.param.at([0.5], opts=RotationTemporalOptions(method="slerp"), validate=True)
     np.testing.assert_allclose(
-        via_method.as_quat(validate=True).unsafe_data["rotation"].values,
-        via_param.as_quat(validate=True).unsafe_data["rotation"].values,
+        via_method.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        via_param.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-6,
     )
 
@@ -879,8 +879,8 @@ def test_spatial_hard_157_typed_rotation_pose_defaults_do_not_change_plain_ao_pa
     ao_out = ao.param.at([0.5], opts=ParamEvalOptions(method="linear"), validate=True)
     rot_out = rot.param.at([0.5], validate=True)
     assert not np.allclose(
-        ao_out.unsafe_data["rotation"].values,
-        rot_out.as_quat(validate=True).unsafe_data["rotation"].values,
+        ao_out.as_dataset(copy="none")["rotation"].values,
+        rot_out.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-5,
         rtol=0.0,
     )
@@ -907,13 +907,13 @@ def test_spatial_hard_158_rotation_linear_mode_is_euclidean_while_slerp_is_manif
         core_dims=("quat",),
         param_coord="time_s",
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     rot = Rotation(ds)
     out_linear = rot.param.at([0.25], opts=RotationTemporalOptions(method="linear"), validate=True)
     out_slerp = rot.param.at([0.25], opts=RotationTemporalOptions(method="slerp"), validate=True)
     assert not np.allclose(
-        out_linear.as_quat(validate=True).unsafe_data["rotation"].values,
-        out_slerp.as_quat(validate=True).unsafe_data["rotation"].values,
+        out_linear.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        out_slerp.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-5,
         rtol=0.0,
     )
@@ -922,8 +922,8 @@ def test_spatial_hard_158_rotation_linear_mode_is_euclidean_while_slerp_is_manif
 def test_spatial_hard_159_rotation_temporal_rejects_auxiliary_payload_vars_without_silent_drop() -> None:
     """ID: SPATIAL_HARD_159_rotation_temporal_rejects_auxiliary_payload_vars_without_silent_drop."""
     rot = Rotation(_rotation_dataset_temporal(rep="matrix", angles_deg=(0.0, 120.0)))
-    base_var = str(next(iter(rot.unsafe_data.data_vars)))
-    rot.unsafe_data["aux"] = rot.unsafe_data[base_var].isel(row=0, col=0, drop=True).copy(deep=True)
+    base_var = str(next(iter(rot.as_dataset(copy="none").data_vars)))
+    rot.as_dataset(copy="none")["aux"] = rot.as_dataset(copy="none")[base_var].isel(row=0, col=0, drop=True).copy(deep=True)
 
     with pytest.raises(ValueError) as exc_info:
         rot.param.at([0.5], validate=True)

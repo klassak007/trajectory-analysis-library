@@ -12,6 +12,8 @@ from tal.frames import (
 )
 from tal.utils.frame_schema import get_frames
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..metadata import (
     EDGE_MOTION_CLASS_VALUES,
     FRAME_INERTIAL_STATUS_VALUES,
@@ -82,7 +84,7 @@ def _resolve_endpoint(graph: FrameGraph, value: Frame | str, *, owner: str, arg:
 
 
 def _resolve_source_frames(source, graph: FrameGraph, *, owner: str) -> tuple[Frame, Frame | None]:
-    parent_id, child_id = get_frames(source.unsafe_data)
+    parent_id, child_id = get_frames(analysis_object_dataset(source))
     if parent_id is None:
         raise ValueError(f"{owner}: source requires parent frame metadata.")
     src_parent = _resolve_endpoint(graph, parent_id, owner=owner, arg="source parent")
@@ -95,7 +97,7 @@ def _resolve_source_frames(source, graph: FrameGraph, *, owner: str) -> tuple[Fr
 
 
 def _operation_kind(source, *, owner: str) -> str:
-    kind = get_kinematics_kind(source.unsafe_data, owner=owner)
+    kind = get_kinematics_kind(analysis_object_dataset(source), owner=owner)
     if kind is None:
         raise ValueError(f"{owner}: source kinematics kind metadata is required.")
     if "velocity" in kind:
@@ -122,7 +124,7 @@ def _require_inertial_role_support(
     frame_status_fn: Callable[[Frame], object],
     owner: str,
 ) -> None:
-    for role in get_instantaneous_inertial(source.unsafe_data, owner=owner):
+    for role in get_instantaneous_inertial(analysis_object_dataset(source), owner=owner):
         target = src_parent if role == "parent" else src_child
         if target is None:
             raise ValueError(f"{owner}: inertial role {role!r} requires registered source child frame.")

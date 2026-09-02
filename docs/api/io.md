@@ -35,7 +35,7 @@ metadata and uses the same narrow materialization boundary. Other chunked payloa
 variables remain lazy until the requested storage or caller computation. The loader returns the class it was called on
 when the payload satisfies that class's invariants. A successful lazy load transfers
 the opened store's close ownership to the returned dataset; call
-`loaded.unsafe_data.close()` when the AO is no longer needed to release backend
+`loaded.close()` when the AO is no longer needed to release backend
 resources. A subclass-provided dataset close callback is composed with backend
 cleanup rather than replaced. If validation or materialization has already
 failed, a cleanup interruption cannot replace that active primary failure.

@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 from tal.frames import Frame
 from tal.utils.frame_schema import get_frames, set_frames
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..metadata import get_pose_rep, get_rotation_rep, set_expressed_in
 from ..policies.wrap import wrap_like
 from .frame_owner_common import clear_framing, dst_frame_id, require_source_parent, source_expressed_in_id
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def _finalize_same_relation(source, out_ds, *, expressed_in: str, validate: bool, owner: str):
-    parent, child = get_frames(source.unsafe_data)
+    parent, child = get_frames(analysis_object_dataset(source))
     ds = set_frames(out_ds, parent=parent, child=child, validate=False)
     ds = set_expressed_in(
         ds,
@@ -47,7 +49,7 @@ def position_express_in(
     if dst_id == src_expressed_in:
         return _finalize_same_relation(
             position,
-            position.unsafe_data,
+            analysis_object_dataset(position),
             expressed_in=dst_id,
             validate=validate,
             owner=owner,
@@ -67,7 +69,7 @@ def position_express_in(
     )
     return _finalize_same_relation(
         position,
-        rotated.unsafe_data,
+        analysis_object_dataset(rotated),
         expressed_in=dst_id,
         validate=validate,
         owner=owner,
@@ -90,11 +92,12 @@ def rotation_express_in(
     _ = require_source_parent(rotation, owner=owner)
     src_expressed_in = source_expressed_in_id(rotation, owner=owner)
     dst_id = dst_frame_id(dst, owner=owner)
-    src_rep = get_rotation_rep(rotation.unsafe_data, owner=owner)
+    source = analysis_object_dataset(rotation)
+    src_rep = get_rotation_rep(source, owner=owner)
     if dst_id == src_expressed_in:
         return _finalize_same_relation(
             rotation,
-            rotation.unsafe_data,
+            source,
             expressed_in=dst_id,
             validate=validate,
             owner=owner,
@@ -116,7 +119,7 @@ def rotation_express_in(
         out = out.as_matrix(validate=False)
     return _finalize_same_relation(
         rotation,
-        out.unsafe_data,
+        analysis_object_dataset(out),
         expressed_in=dst_id,
         validate=validate,
         owner=owner,
@@ -137,11 +140,12 @@ def pose_express_in(
     _ = require_source_parent(pose, owner=owner)
     src_expressed_in = source_expressed_in_id(pose, owner=owner)
     dst_id = dst_frame_id(dst, owner=owner)
-    src_rep = get_pose_rep(pose.unsafe_data, owner=owner)
+    source = analysis_object_dataset(pose)
+    src_rep = get_pose_rep(source, owner=owner)
     if dst_id == src_expressed_in:
         return _finalize_same_relation(
             pose,
-            pose.unsafe_data,
+            source,
             expressed_in=dst_id,
             validate=validate,
             owner=owner,
@@ -158,7 +162,7 @@ def pose_express_in(
         out = out.as_matrix(validate=False)
     return _finalize_same_relation(
         pose,
-        out.unsafe_data,
+        analysis_object_dataset(out),
         expressed_in=dst_id,
         validate=validate,
         owner=owner,

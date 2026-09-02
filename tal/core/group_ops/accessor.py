@@ -84,7 +84,7 @@ class GroupedView:
         ...     validate=True,
         ... )
         >>> out = ao.group.groupby("kind").materialize(opts=GroupMaterializeOptions(layout="padded"))
-        >>> out.unsafe_data.sizes["group_key"]
+        >>> out.as_dataset().sizes["group_key"]
         2
         """
         options = coerce_group_materialize_options(opts, owner="group.materialize")
@@ -137,7 +137,7 @@ class GroupedView:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.group.groupby("kind").padded().unsafe_data.sizes["sample"]
+        >>> ao.group.groupby("kind").padded().as_dataset().sizes["sample"]
         2
         """
         options = coerce_group_materialize_options(opts, owner="group.padded")
@@ -197,7 +197,7 @@ class GroupedView:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.group.groupby("kind").stacked().unsafe_data.sizes["group_member"]
+        >>> ao.group.groupby("kind").stacked().as_dataset().sizes["group_member"]
         4
         """
         options = coerce_group_materialize_options(opts, owner="group.stacked")
@@ -270,7 +270,7 @@ class GroupAccessor:
         ...     validate=True,
         ... )
         >>> grouped = ao.group.groupby("kind", opts=GroupByOptions(preserve_batch=False))
-        >>> grouped.mean(dim="sample").unsafe_data.sizes["group_key"]
+        >>> grouped.mean(dim="sample").as_dataset().sizes["group_key"]
         2
         """
         options = coerce_groupby_options(opts, owner="group.groupby")
@@ -336,7 +336,7 @@ class GroupAccessor:
         ...     validate=True,
         ... )
         >>> out = ao.group.groupby_bins("time", bins=[0.0, 1.0, 2.0], include_lowest=True).padded()
-        >>> out.unsafe_data.sizes["group_key"]
+        >>> out.as_dataset().sizes["group_key"]
         2
         """
         spec = GroupingBinSpec(

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..ao_internal import finalize_structural
 from ..ordered_dtypes import is_float64_exact_integer
 from ..param_engine import ParamMapOptions, build_param_map, normalize_query_grid
@@ -410,7 +411,12 @@ def apply_fill(
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
     mask = _nearest_tolerance_mask(context, grid=grid, query_dim=eval_opts.query_dim, tol=tol)
-    ds = _mask_numeric_sequence(out.unsafe_data, sequence_dim=context.sequence_dim, mask=mask, fill_value=fill_value)
+    ds = _mask_numeric_sequence(
+        analysis_object_dataset(out),
+        sequence_dim=context.sequence_dim,
+        mask=mask,
+        fill_value=fill_value,
+    )
     ds = _apply_fill_metadata(ds, context=context, mask=mask)
     return finalize_structural(out, ds, validate=validate)
 

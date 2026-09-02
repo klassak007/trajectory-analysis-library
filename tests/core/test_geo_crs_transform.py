@@ -20,7 +20,7 @@ def _lla_dataset(values: np.ndarray | None = None) -> xr.Dataset:
         {"position": (("sample", "lla"), values)},
         coords={"sample": np.arange(values.shape[0]), "lla": ["lat", "lon", "alt"]},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True).unsafe_data
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True).as_dataset(copy="none")
 
 
 def _lla_dataset_with_topology() -> xr.Dataset:
@@ -40,7 +40,7 @@ def _lla_dataset_with_topology() -> xr.Dataset:
         param_coord="time_s",
         sequence_size_coord="group_size",
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
 
 
 def _projected_dataset(*, height: bool = False) -> xr.Dataset:
@@ -50,7 +50,7 @@ def _projected_dataset(*, height: bool = False) -> xr.Dataset:
         {"position": (("sample", "projected"), values)},
         coords={"sample": [0], "projected": labels},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True).unsafe_data
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True).as_dataset(copy="none")
 
 
 def _install_crs_stub(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,7 +98,7 @@ def test_geo_core_g4_001_crs_metadata_roundtrips(monkeypatch: pytest.MonkeyPatch
     """ID: GEO_CORE_G4_001_crs_metadata_roundtrips."""
     _install_crs_stub(monkeypatch)
     projected = ProjectedPosition.from_projected(_projected_dataset(), crs="EPSG:32611")
-    geo = projected.unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo = projected.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo == {
         "kind": "projected_position",
         "crs": "EPSG:32611",
@@ -141,7 +141,7 @@ def test_geo_core_g4_projected_metadata_aliases_restamp_canonical_strings(
 
     projected = ProjectedPosition(ds)
 
-    geo = projected.unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo = projected.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo["crs"] == "EPSG:32611"
     assert geo["geodetic_crs"] == "EPSG:4326"
 
@@ -152,9 +152,9 @@ def test_geo_core_g4_002_epsg_4326_to_4979_transform_preserves_type(monkeypatch:
     lla = GeodeticPosition.from_lla(_lla_dataset(), opts=GeodeticOptions(crs="EPSG:4326"))
     out = lla.to_crs("EPSG:4979")
     assert isinstance(out, GeodeticPosition)
-    assert out.unsafe_data.attrs["tal"]["ext"]["geo"]["crs"] == "EPSG:4979"
-    _, _, _, core_dims = read_roles(out.unsafe_data)
-    assert list(out.unsafe_data[core_dims[0]].values) == ["lat", "lon", "alt"]
+    assert out.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["crs"] == "EPSG:4979"
+    _, _, _, core_dims = read_roles(out.as_dataset(copy="none"))
+    assert list(out.as_dataset(copy="none")[core_dims[0]].values) == ["lat", "lon", "alt"]
 
 
 def test_geo_core_g4_003_ecef_crs_transform_returns_cartesian_position(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,20 +162,20 @@ def test_geo_core_g4_003_ecef_crs_transform_returns_cartesian_position(monkeypat
     _install_crs_stub(monkeypatch)
     out = GeodeticPosition.from_lla(_lla_dataset()).to_crs("EPSG:4978")
     assert isinstance(out, Position)
-    assert list(out.unsafe_data["axis"].values) == ["x", "y", "z"]
-    assert out.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
+    assert list(out.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
+    assert out.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
 
 
 def test_geo_core_g4_004_crs_transform_preserves_topology_and_validity(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: GEO_CORE_G4_004_crs_transform_preserves_topology_and_validity."""
     _install_crs_stub(monkeypatch)
     out = GeodeticPosition.from_lla(_lla_dataset_with_topology()).to_crs("EPSG:32611")
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ("projected",)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
 
 
 def test_geo_core_g4_005_projected_destination_returns_projected_position(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,7 +183,7 @@ def test_geo_core_g4_005_projected_destination_returns_projected_position(monkey
     _install_crs_stub(monkeypatch)
     out = transform_crs(GeodeticPosition.from_lla(_lla_dataset()), dst="EPSG:32611")
     assert isinstance(out, ProjectedPosition)
-    assert list(out.unsafe_data["projected"].values) == ["easting", "northing", "height"]
+    assert list(out.as_dataset(copy="none")["projected"].values) == ["easting", "northing", "height"]
 
 
 def test_geo_core_g4_006_crs_axis_order_policy_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,7 +218,7 @@ def test_geo_core_g4_008_projected_height_semantics_are_stable(monkeypatch: pyte
     _install_crs_stub(monkeypatch)
     lla = GeodeticPosition.from_lla(_lla_dataset(values=np.asarray([[34.0, -118.0, 20.0]], dtype=float)))
     projected = lla.to_crs("EPSG:32611")
-    np.testing.assert_allclose(projected.unsafe_data["position"].sel(projected="height"), [20.0])
+    np.testing.assert_allclose(projected.as_dataset(copy="none")["position"].sel(projected="height"), [20.0])
     projected2d = ProjectedPosition.from_projected(_projected_dataset(), crs="EPSG:32611")
     with pytest.raises(ValueError, match="2D projected"):
         projected2d.to_crs("EPSG:4979")
@@ -227,7 +227,7 @@ def test_geo_core_g4_008_projected_height_semantics_are_stable(monkeypatch: pyte
 def test_geo_hard_g4_002_crs_metadata_conflict_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: GEO_HARD_G4_002_crs_metadata_conflict_fails_closed."""
     _install_crs_stub(monkeypatch)
-    ds = ProjectedPosition.from_projected(_projected_dataset(), crs="EPSG:32611").unsafe_data.copy(deep=True)
+    ds = ProjectedPosition.from_projected(_projected_dataset(), crs="EPSG:32611").as_dataset(copy="none").copy(deep=True)
     ds.attrs["tal"]["ext"]["geo"]["geodetic_crs"] = "EPSG:4979"
     with pytest.raises(ValueError, match="conflicts"):
         ProjectedPosition(ds)

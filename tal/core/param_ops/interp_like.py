@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import restore_and_finalize
 from ..orchestration.inputs import query_coord_from_other_input
 from ..orchestration.topology import (
@@ -139,7 +140,7 @@ def interp_like_param(
         return out
     return restore_and_finalize(
         context.ao,
-        out.unsafe_data,
+        analysis_object_dataset(out),
         plan=plan,
         validate=validate,
         owner="interp_like",

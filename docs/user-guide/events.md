@@ -105,8 +105,8 @@ also respected, so padded tails do not create false crossings or windows.
 
 - Inspect `mask.dims` and `mask.sizes`.
 - Inspect `events` and `intervals` directly.
-- Compare `masked.unsafe_data.sizes`, `stream.unsafe_data.sizes`, and
-  `around_stacked.unsafe_data.sizes` to confirm you chose the right layout.
+- Compare `masked.as_dataset().sizes`, `stream.as_dataset().sizes`, and
+  `around_stacked.as_dataset().sizes` to confirm you chose the right layout.
 
 ## See Also
 

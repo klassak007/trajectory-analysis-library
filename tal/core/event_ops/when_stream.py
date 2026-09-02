@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray, is_chunked_variable
 from ..param_engine.map_apply import gather_dataset_along_sequence
 from ..schema_read import read_roles
@@ -20,6 +21,7 @@ from .window_stack import StackedStreamResult, stack_segment_stream
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
+    from .resolve import EventEvalContext
 
 _STREAM_INDEX_META = ("orig_index", "stream_segment_index", "segment_start_index", "segment_end_index")
 _STREAM_TIME_META = ("segment_start_time", "segment_end_time")
@@ -249,6 +251,35 @@ def _has_chunked_stream_source(context: "EventEvalContext") -> bool:
     return False
 
 
+def _stacked_when_stream(
+    ao: "AnalysisObject",
+    condition: Condition,
+    *,
+    context: "EventEvalContext",
+    opts: WhenOptions,
+    validate: bool,
+    owner: str,
+) -> StackedStreamResult:
+    segments = evaluate_when_segments_layout(
+        ao,
+        condition,
+        opts=replace(opts, on_empty="empty"),
+        validate=validate,
+        owner=owner,
+    )
+    segments_ds = analysis_object_dataset(segments)
+    batch_dims, segment_dim, sequence_dim = _stream_source_dims(segments_ds, owner=owner)
+    if batch_dims != context.runtime.batch_dims:
+        raise ValueError(f"{owner}: when stream batch dims do not match context batch dims.")
+    return stack_segment_stream(
+        segments_ds,
+        batch_dims=batch_dims,
+        segment_dim=segment_dim,
+        sequence_dim=sequence_dim,
+        owner=owner,
+    )
+
+
 def evaluate_when_stream_layout(
     ao: "AnalysisObject",
     condition: Condition,
@@ -287,21 +318,12 @@ def evaluate_when_stream_layout(
         owner=owner,
         message="chunked stream extraction requires opts.max_segments for bounded output sizing.",
     )
-    segments = evaluate_when_segments_layout(
+    stacked = _stacked_when_stream(
         ao,
         condition,
-        opts=replace(opts, on_empty="empty"),
+        context=context,
+        opts=opts,
         validate=validate,
-        owner=owner,
-    )
-    batch_dims, segment_dim, sequence_dim = _stream_source_dims(segments.unsafe_data, owner=owner)
-    if batch_dims != context.runtime.batch_dims:
-        raise ValueError(f"{owner}: when stream batch dims do not match context batch dims.")
-    stacked = stack_segment_stream(
-        segments.unsafe_data,
-        batch_dims=batch_dims,
-        segment_dim=segment_dim,
-        sequence_dim=sequence_dim,
         owner=owner,
     )
     enforce_when_on_empty(
@@ -314,7 +336,7 @@ def evaluate_when_stream_layout(
     )
     repacked = _repacked_stream_dataset(
         stacked,
-        batch_dims=batch_dims,
+        batch_dims=context.runtime.batch_dims,
         sequence_size=int(context.clock.sizes[context.runtime.sequence_dim]),
         opts=opts,
         owner=owner,

@@ -60,8 +60,8 @@ def _numeric_ao() -> AnalysisObject:
 def test_time_core_t1_001_datetime64_param_coord_schema_validates() -> None:
     """ID: TIME_CORE_T1_001_datetime64_param_coord_schema_validates."""
     ao = _datetime_ao()
-    assert np.issubdtype(ao.unsafe_data.coords["time"].dtype, np.datetime64)
-    assert ao.unsafe_data.attrs["tal"]["core"]["param_coord"]["name"] == "time"
+    assert np.issubdtype(ao.as_dataset(copy="none").coords["time"].dtype, np.datetime64)
+    assert ao.as_dataset(copy="none").attrs["tal"]["core"]["param_coord"]["name"] == "time"
 
 
 def test_time_core_t1_002_numeric_param_behavior_remains_numeric() -> None:
@@ -84,7 +84,7 @@ def test_time_core_t1_004_datetime64_param_selection_accepts_datetime_queries() 
     q1 = pd.Timestamp("2026-01-01T00:00:18")
     np.testing.assert_array_equal(ao.param.index([q0, q1], on="time").values, [0, 2])
     selected = ao.param.sel(xr.DataArray([q0, q1], dims=("query",)), on="time", opts=ParamSelectOptions())
-    np.testing.assert_allclose(selected.unsafe_data["value"].values, [0.0, 40.0])
+    np.testing.assert_allclose(selected.as_dataset(copy="none")["value"].values, [0.0, 40.0])
 
 
 def test_time_core_t1_005_datetime64_param_interpolation_uses_local_deltas() -> None:
@@ -92,7 +92,7 @@ def test_time_core_t1_005_datetime64_param_interpolation_uses_local_deltas() -> 
     base = np.datetime64("2262-04-11T00:00:00.000000000", "ns")
     ao = _datetime_ao(times=base + np.asarray([0, 1, 2], dtype="timedelta64[ns]"), values=[0.0, 1.0, 2.0])
     out = ao.param.at([base + np.timedelta64(1, "ns")], on="time", opts=ParamEvalOptions(method="linear"))
-    assert float(out.unsafe_data["value"].item()) == 1.0
+    assert float(out.as_dataset(copy="none")["value"].item()) == 1.0
 
 
 def test_time_core_t1_006_datetime64_query_normalization_owner() -> None:
@@ -117,11 +117,11 @@ def test_time_core_t1_007_datetime64_sync_accepts_timedelta_tolerance() -> None:
         opts=ParamSyncOptions(join="outer", how="fill", tol=dt.timedelta(seconds=0)),
     )
     np.testing.assert_array_equal(
-        out[0].unsafe_data.coords["time"].values,
+        out[0].as_dataset(copy="none").coords["time"].values,
         _dt(["2026-01-01T00:00:00", "2026-01-01T00:00:05", "2026-01-01T00:00:10"]),
     )
-    np.testing.assert_allclose(out[0].unsafe_data["value"].values, [0.0, np.nan, 10.0])
-    np.testing.assert_allclose(out[1].unsafe_data["value"].values, [np.nan, 5.0, 10.0])
+    np.testing.assert_allclose(out[0].as_dataset(copy="none")["value"].values, [0.0, np.nan, 10.0])
+    np.testing.assert_allclose(out[1].as_dataset(copy="none")["value"].values, [np.nan, 5.0, 10.0])
 
 
 def test_time_core_t1_008_datetime64_entrypoints_share_param_kind() -> None:
@@ -132,10 +132,10 @@ def test_time_core_t1_008_datetime64_entrypoints_share_param_kind() -> None:
         values=[100.0, 200.0],
     )
     grid = [np.datetime64("2026-01-01T00:00:00", "ns"), np.datetime64("2026-01-01T00:00:20", "ns")]
-    np.testing.assert_allclose(source.param.resample_to(grid, on="time").unsafe_data["value"].values, [0.0, 40.0])
-    np.testing.assert_allclose(source.param.interp_like(target, on="time").unsafe_data["value"].values, [0.0, 40.0])
+    np.testing.assert_allclose(source.param.resample_to(grid, on="time").as_dataset(copy="none")["value"].values, [0.0, 40.0])
+    np.testing.assert_allclose(source.param.interp_like(target, on="time").as_dataset(copy="none")["value"].values, [0.0, 40.0])
     np.testing.assert_allclose(
-        synchronize([source], on="time", grid=grid, opts=ParamSyncOptions(join="override"))[0].unsafe_data["value"],
+        synchronize([source], on="time", grid=grid, opts=ParamSyncOptions(join="override"))[0].as_dataset(copy="none")["value"],
         [0.0, 40.0],
     )
 
@@ -241,9 +241,9 @@ def test_time_hard_t1_007_datetime64_outer_batch_sync_uses_nat_reindex_fill() ->
         on="time",
         opts=ParamSyncOptions(batch_join="outer", join="outer", how="nearest"),
     )
-    assert list(out_left.unsafe_data.coords["trial"].values) == ["a", "b"]
-    assert list(out_right.unsafe_data.coords["trial"].values) == ["a", "b"]
-    assert str(out_left.unsafe_data.coords["time"].dtype) == "datetime64[ns]"
-    assert str(out_right.unsafe_data.coords["time"].dtype) == "datetime64[ns]"
-    np.testing.assert_array_equal(out_left.unsafe_data.coords["valid"].sel(trial="b").values, [False, False])
-    np.testing.assert_array_equal(out_right.unsafe_data.coords["valid"].sel(trial="a").values, [False, False])
+    assert list(out_left.as_dataset(copy="none").coords["trial"].values) == ["a", "b"]
+    assert list(out_right.as_dataset(copy="none").coords["trial"].values) == ["a", "b"]
+    assert str(out_left.as_dataset(copy="none").coords["time"].dtype) == "datetime64[ns]"
+    assert str(out_right.as_dataset(copy="none").coords["time"].dtype) == "datetime64[ns]"
+    np.testing.assert_array_equal(out_left.as_dataset(copy="none").coords["valid"].sel(trial="b").values, [False, False])
+    np.testing.assert_array_equal(out_right.as_dataset(copy="none").coords["valid"].sel(trial="a").values, [False, False])

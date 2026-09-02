@@ -44,7 +44,7 @@ def _chunked_ao_series(*, values: list[float], time: list[float], chunks: int = 
 
 
 def _sequence_dim(ao: AnalysisObject) -> str:
-    roles = ao.unsafe_data.attrs["tal"]["core"]["roles"]
+    roles = ao.as_dataset(copy="none").attrs["tal"]["core"]["roles"]
     return str(roles["sequence_dim"])
 
 
@@ -58,15 +58,15 @@ def test_event_when_001_edges_enter_exit_all_selection_semantics() -> None:
     seq_all = _sequence_dim(out_all)
     seq_enter = _sequence_dim(out_enter)
     seq_exit = _sequence_dim(out_exit)
-    np.testing.assert_allclose(out_all.unsafe_data["time"].values, np.asarray([1.0, 2.0, 4.0, 4.0], dtype="float64"))
-    np.testing.assert_array_equal(out_all.unsafe_data["event_edge_code"].values, np.asarray([1, 2, 1, 2], dtype="int8"))
-    np.testing.assert_allclose(out_enter.unsafe_data["time"].values, np.asarray([1.0, 4.0], dtype="float64"))
-    np.testing.assert_array_equal(out_enter.unsafe_data["event_edge_code"].values, np.asarray([1, 1], dtype="int8"))
-    np.testing.assert_allclose(out_exit.unsafe_data["time"].values, np.asarray([2.0, 4.0], dtype="float64"))
-    np.testing.assert_array_equal(out_exit.unsafe_data["event_edge_code"].values, np.asarray([2, 2], dtype="int8"))
-    assert out_all.unsafe_data.sizes[seq_all] == 4
-    assert out_enter.unsafe_data.sizes[seq_enter] == 2
-    assert out_exit.unsafe_data.sizes[seq_exit] == 2
+    np.testing.assert_allclose(out_all.as_dataset(copy="none")["time"].values, np.asarray([1.0, 2.0, 4.0, 4.0], dtype="float64"))
+    np.testing.assert_array_equal(out_all.as_dataset(copy="none")["event_edge_code"].values, np.asarray([1, 2, 1, 2], dtype="int8"))
+    np.testing.assert_allclose(out_enter.as_dataset(copy="none")["time"].values, np.asarray([1.0, 4.0], dtype="float64"))
+    np.testing.assert_array_equal(out_enter.as_dataset(copy="none")["event_edge_code"].values, np.asarray([1, 1], dtype="int8"))
+    np.testing.assert_allclose(out_exit.as_dataset(copy="none")["time"].values, np.asarray([2.0, 4.0], dtype="float64"))
+    np.testing.assert_array_equal(out_exit.as_dataset(copy="none")["event_edge_code"].values, np.asarray([2, 2], dtype="int8"))
+    assert out_all.as_dataset(copy="none").sizes[seq_all] == 4
+    assert out_enter.as_dataset(copy="none").sizes[seq_enter] == 2
+    assert out_exit.as_dataset(copy="none").sizes[seq_exit] == 2
 
 
 def test_event_when_002_mode_all_first_firstn_last_semantics() -> None:
@@ -77,11 +77,11 @@ def test_event_when_002_mode_all_first_firstn_last_semantics() -> None:
     out_first = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(mode="first"))
     out_last = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(mode="last"))
     out_first_n = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(mode="first_n", max_events=2))
-    np.testing.assert_allclose(out_all.unsafe_data["time"].values, np.asarray([1.0, 2.0, 4.0, 4.0], dtype="float64"))
-    np.testing.assert_allclose(out_first.unsafe_data["time"].values, np.asarray([1.0], dtype="float64"))
-    np.testing.assert_allclose(out_last.unsafe_data["time"].values, np.asarray([4.0], dtype="float64"))
-    np.testing.assert_array_equal(out_last.unsafe_data["event_edge_code"].values, np.asarray([2], dtype="int8"))
-    np.testing.assert_allclose(out_first_n.unsafe_data["time"].values, np.asarray([1.0, 2.0], dtype="float64"))
+    np.testing.assert_allclose(out_all.as_dataset(copy="none")["time"].values, np.asarray([1.0, 2.0, 4.0, 4.0], dtype="float64"))
+    np.testing.assert_allclose(out_first.as_dataset(copy="none")["time"].values, np.asarray([1.0], dtype="float64"))
+    np.testing.assert_allclose(out_last.as_dataset(copy="none")["time"].values, np.asarray([4.0], dtype="float64"))
+    np.testing.assert_array_equal(out_last.as_dataset(copy="none")["event_edge_code"].values, np.asarray([2], dtype="int8"))
+    np.testing.assert_allclose(out_first_n.as_dataset(copy="none")["time"].values, np.asarray([1.0, 2.0], dtype="float64"))
     with pytest.raises(ValueError) as err:
         ao.events.at_boundaries(cond, opts=AtBoundariesOptions(mode="first_n"))
     assert "opts.mode='first_n' requires opts.max_events" in str(err.value)
@@ -93,7 +93,7 @@ def test_event_when_003_on_empty_empty_and_error_contract() -> None:
     cond = Condition.compare(Condition.var("value"), "gt", 1.0)
     out = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(on_empty="empty"))
     seq = _sequence_dim(out)
-    assert out.unsafe_data.sizes[seq] == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 0
     with pytest.raises(ValueError) as err:
         ao.events.at_boundaries(cond, opts=AtBoundariesOptions(on_empty="error"))
     assert "no selected boundaries" in str(err.value)
@@ -105,18 +105,18 @@ def test_event_when_004_when_attaches_interval_boundary_metadata_deterministical
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="all", mode="all"))
     seq = _sequence_dim(out)
-    assert "event_edge_code" in out.unsafe_data.coords
-    assert "event_sample_index_before" in out.unsafe_data.coords
-    assert "event_sample_index_after" in out.unsafe_data.coords
+    assert "event_edge_code" in out.as_dataset(copy="none").coords
+    assert "event_sample_index_before" in out.as_dataset(copy="none").coords
+    assert "event_sample_index_after" in out.as_dataset(copy="none").coords
     for name in ("event_edge_code", "event_sample_index_before", "event_sample_index_after"):
-        assert out.unsafe_data.coords[name].dims == (seq,)
-    np.testing.assert_array_equal(out.unsafe_data["event_edge_code"].values, np.asarray([1, 2, 1, 2], dtype="int8"))
+        assert out.as_dataset(copy="none").coords[name].dims == (seq,)
+    np.testing.assert_array_equal(out.as_dataset(copy="none")["event_edge_code"].values, np.asarray([1, 2, 1, 2], dtype="int8"))
     np.testing.assert_array_equal(
-        out.unsafe_data["event_sample_index_before"].values,
+        out.as_dataset(copy="none")["event_sample_index_before"].values,
         np.asarray([0, 2, 3, 4], dtype="int64"),
     )
     np.testing.assert_array_equal(
-        out.unsafe_data["event_sample_index_after"].values,
+        out.as_dataset(copy="none")["event_sample_index_after"].values,
         np.asarray([1, 3, 4, -1], dtype="int64"),
     )
 
@@ -137,8 +137,8 @@ def test_event_when_hard_002_chunked_with_explicit_max_events_allowed() -> None:
         opts=AtBoundariesOptions(mode="first_n", max_events=3),
     )
     seq = _sequence_dim(out)
-    assert out.unsafe_data.sizes[seq] == 3
-    assert hasattr(out.unsafe_data["value"].data, "chunks")
+    assert out.as_dataset(copy="none").sizes[seq] == 3
+    assert hasattr(out.as_dataset(copy="none")["value"].data, "chunks")
 
 
 def test_event_when_hard_003_grouped_empty_batch_when_returns_empty_with_on_empty_empty() -> None:
@@ -162,9 +162,9 @@ def test_event_when_hard_003_grouped_empty_batch_when_returns_empty_with_on_empt
     )
     out = ao.events.at_boundaries(Condition.compare(Condition.var("value"), "gt", 0.5), opts=AtBoundariesOptions(on_empty="empty"))
     seq = _sequence_dim(out)
-    assert out.unsafe_data.sizes["trial"] == 0
-    assert out.unsafe_data.sizes[seq] == 0
-    np.testing.assert_array_equal(out.unsafe_data.coords["trial"].values, np.asarray([], dtype="int64"))
+    assert out.as_dataset(copy="none").sizes["trial"] == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 0
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["trial"].values, np.asarray([], dtype="int64"))
 
 
 def test_event_when_hard_004_exit_first_n_not_truncated_before_filtering() -> None:
@@ -172,8 +172,8 @@ def test_event_when_hard_004_exit_first_n_not_truncated_before_filtering() -> No
     ao = _ao_series(values=[0.0, 1.0, 1.0, 0.0], time=[0.0, 1.0, 2.0, 3.0])
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="exit", mode="first_n", max_events=1))
-    np.testing.assert_allclose(out.unsafe_data["time"].values, np.asarray([2.0], dtype="float64"))
-    np.testing.assert_array_equal(out.unsafe_data["event_edge_code"].values, np.asarray([2], dtype="int8"))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["time"].values, np.asarray([2.0], dtype="float64"))
+    np.testing.assert_array_equal(out.as_dataset(copy="none")["event_edge_code"].values, np.asarray([2], dtype="int8"))
 
 
 def test_event_when_hard_005_mode_first_with_max_events_gt1_no_gufunc_dim_crash() -> None:
@@ -181,8 +181,8 @@ def test_event_when_hard_005_mode_first_with_max_events_gt1_no_gufunc_dim_crash(
     ao = _ao_series(values=[0.0, 1.0, 1.0, 0.0, 1.0], time=[0.0, 1.0, 2.0, 3.0, 4.0])
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(mode="first", max_events=2))
-    np.testing.assert_allclose(out.unsafe_data["time"].values, np.asarray([1.0], dtype="float64"))
-    np.testing.assert_array_equal(out.unsafe_data["event_edge_code"].values, np.asarray([1], dtype="int8"))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["time"].values, np.asarray([1.0], dtype="float64"))
+    np.testing.assert_array_equal(out.as_dataset(copy="none")["event_edge_code"].values, np.asarray([1], dtype="int8"))
 
 
 def test_event_when_hard_006_mode_last_with_max_events_gt1_no_gufunc_dim_crash_unchunked() -> None:
@@ -190,8 +190,8 @@ def test_event_when_hard_006_mode_last_with_max_events_gt1_no_gufunc_dim_crash_u
     ao = _ao_series(values=[0.0, 1.0, 1.0, 0.0, 1.0], time=[0.0, 1.0, 2.0, 3.0, 4.0])
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(mode="last", max_events=2))
-    np.testing.assert_allclose(out.unsafe_data["time"].values, np.asarray([4.0], dtype="float64"))
-    np.testing.assert_array_equal(out.unsafe_data["event_edge_code"].values, np.asarray([2], dtype="int8"))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["time"].values, np.asarray([4.0], dtype="float64"))
+    np.testing.assert_array_equal(out.as_dataset(copy="none")["event_edge_code"].values, np.asarray([2], dtype="int8"))
 
 
 def test_event_when_hard_007_chunked_last_mode_failfast_if_exact_last_not_supported() -> None:
@@ -208,8 +208,8 @@ def test_event_when_hard_008_chunked_edge_filtered_first_n_selection_stable() ->
     ao = _chunked_ao_series(values=[0.0, 1.0, 1.0, 0.0], time=[0.0, 1.0, 2.0, 3.0])
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="exit", mode="first_n", max_events=1))
-    np.testing.assert_allclose(out.unsafe_data["time"].values, np.asarray([2.0], dtype="float64"))
-    np.testing.assert_array_equal(out.unsafe_data["event_edge_code"].values, np.asarray([2], dtype="int8"))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["time"].values, np.asarray([2.0], dtype="float64"))
+    np.testing.assert_array_equal(out.as_dataset(copy="none")["event_edge_code"].values, np.asarray([2], dtype="int8"))
 
 
 def test_event_when_hard_009_on_empty_empty_fixed_modes_return_zero_length() -> None:
@@ -224,7 +224,7 @@ def test_event_when_hard_009_on_empty_empty_fixed_modes_return_zero_length() -> 
     for options in cases:
         out = ao.events.at_boundaries(cond, opts=options)
         seq = _sequence_dim(out)
-        assert out.unsafe_data.sizes[seq] == 0
+        assert out.as_dataset(copy="none").sizes[seq] == 0
 
 
 def test_event_hard_019_boundary_select_bounded_blockwise_selection_parity() -> None:
@@ -235,7 +235,7 @@ def test_event_hard_019_boundary_select_bounded_blockwise_selection_parity() -> 
     out_first = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="all", mode="first", max_events=3))
     out_last = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="all", mode="last", max_events=3))
     out_first_n = ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="all", mode="first_n", max_events=2))
-    np.testing.assert_allclose(out_all.unsafe_data["time"].values, np.asarray([1.0, 2.0, 4.0], dtype="float64"))
-    np.testing.assert_allclose(out_first.unsafe_data["time"].values, np.asarray([1.0], dtype="float64"))
-    np.testing.assert_allclose(out_last.unsafe_data["time"].values, np.asarray([4.0], dtype="float64"))
-    np.testing.assert_allclose(out_first_n.unsafe_data["time"].values, np.asarray([1.0, 2.0], dtype="float64"))
+    np.testing.assert_allclose(out_all.as_dataset(copy="none")["time"].values, np.asarray([1.0, 2.0, 4.0], dtype="float64"))
+    np.testing.assert_allclose(out_first.as_dataset(copy="none")["time"].values, np.asarray([1.0], dtype="float64"))
+    np.testing.assert_allclose(out_last.as_dataset(copy="none")["time"].values, np.asarray([4.0], dtype="float64"))
+    np.testing.assert_allclose(out_first_n.as_dataset(copy="none")["time"].values, np.asarray([1.0, 2.0], dtype="float64"))

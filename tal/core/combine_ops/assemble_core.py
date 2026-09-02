@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from .align import align_contexts
 from .finalize import finalize_combine_output
 from .metadata import shared_optional_name
@@ -273,7 +274,7 @@ def _base_finalize_source(
     source = contexts[0].ao
     if source.__class__ is AnalysisObject:
         return source
-    return AnalysisObject._from_validated(source.unsafe_data)
+    return AnalysisObject._from_validated(analysis_object_dataset(source))
 
 
 def assemble_core(

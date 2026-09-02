@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.context import resolve_dataset_contexts
 from tal.spatial import Position
 from tal.spatial.metadata import set_expressed_in, set_position_rep
@@ -289,7 +290,7 @@ def position_to_lla(position: Position, *, opts: GeodeticOptions | None = None, 
     """Convert a Position.geo source from ECEF to LLA."""
     owner = "geo.Position.geo.to_lla"
     source = position if isinstance(position, Position) else Position(position)
-    block = read_cartesian_geo_block_if_present(source.unsafe_data, system="ecef", owner=owner)
+    block = read_cartesian_geo_block_if_present(analysis_object_dataset(source), system="ecef", owner=owner)
     if opts is None and block is None:
         raise ValueError(f"{owner}: ECEF geo provenance is required when opts is None.")
     return from_ecef(source, opts=opts, validate=validate)
@@ -308,8 +309,9 @@ def ecef_to_enu(
     if effective_origin is None:
         raise ValueError(f"{owner}: origin is required for ENU conversion.")
     source = position if isinstance(position, Position) else Position(position)
-    block = read_geo_block(source.unsafe_data, owner=owner)
-    if block is not None and not is_cartesian_geo_system(source.unsafe_data, system="ecef", owner=owner):
+    source_ds = analysis_object_dataset(source)
+    block = read_geo_block(source_ds, owner=owner)
+    if block is not None and not is_cartesian_geo_system(source_ds, system="ecef", owner=owner):
         raise ValueError(f"{owner}: source Position must be canonical ECEF geo metadata.")
     if block is None and opts is None:
         raise ValueError(f"{owner}: ECEF geo provenance is required when opts is None.")
@@ -351,7 +353,7 @@ def geodetic_to_enu(
     if effective_origin is None:
         raise ValueError(f"{owner}: origin is required for ENU conversion.")
     preflight_origin = _preflight_geodetic_origin(position, effective_origin, owner=owner)
-    source_opts = options_from_geodetic_metadata(position.unsafe_data, owner=owner)
+    source_opts = options_from_geodetic_metadata(analysis_object_dataset(position), owner=owner)
     ecef_opts = _geo_opts_from_enu(enu_opts, owner=owner, source_opts=source_opts)
     ecef = to_ecef(position, opts=ecef_opts, validate=validate)
     return ecef_to_enu(ecef, origin=preflight_origin, opts=enu_opts, validate=validate)
@@ -368,7 +370,7 @@ def enu_to_ecef(
     owner = "geo.Position.geo.to_ecef"
     effective_origin, enu_opts = _resolve_enu_options(origin, opts, owner=owner)
     source = position if isinstance(position, Position) else Position(position)
-    if not is_cartesian_geo_system(source.unsafe_data, system="enu", owner=owner):
+    if not is_cartesian_geo_system(analysis_object_dataset(source), system="enu", owner=owner):
         raise ValueError(f"{owner}: source Position must have canonical ENU geo metadata.")
     ctx = _context(source, owner=owner)
     assert ctx.data is not None and ctx.var_name is not None

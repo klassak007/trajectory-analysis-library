@@ -3,6 +3,7 @@ from __future__ import annotations
 import xarray as xr
 
 from ...core.analysis_object import AnalysisObject
+from ...core.dataset_ownership import analysis_object_dataset
 from ...core.orchestration.inputs import coerce_operand
 from ..array import Array
 from ..finalize import ArrayFinalizeSpec, finalize_array_result
@@ -32,7 +33,7 @@ def _build_unary_finalize_spec(
 def _finalize_source_array(ao: AnalysisObject) -> Array:
     if type(ao) is Array:
         return ao
-    return Array._from_unvalidated(ao.unsafe_data)
+    return Array._from_unvalidated(analysis_object_dataset(ao))
 
 
 def coerce_unary_operand(

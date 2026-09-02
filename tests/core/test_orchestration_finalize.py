@@ -156,14 +156,14 @@ def test_orch_final_008_sequence_free_plan_clears_inherited_sequence_schema() ->
         owner="test.sequence_free",
     )
 
-    core = out.unsafe_data.attrs["tal"]["core"]
+    core = out.as_dataset(copy="none").attrs["tal"]["core"]
     assert core["roles"] == {"batch_dims": [], "core_dims": []}
     assert "param_coord" not in core
     assert "validity" not in core
 
 
-def test_orch_final_009_public_data_deep_copies_schema_once() -> None:
-    """ID: ORCH_FINAL_009_public_data_deep_copies_schema_once."""
+def test_orch_final_009_public_dataset_deep_copies_schema_once() -> None:
+    """ID: ORCH_FINAL_009_public_dataset_deep_copies_schema_once."""
     source = merge_schema(
         _source_dataset(),
         {"ext": {"probe": _CopyProbe(), "custom": {"values": [1, 2]}}},
@@ -172,7 +172,7 @@ def test_orch_final_009_public_data_deep_copies_schema_once() -> None:
     ao = AnalysisObject._from_validated(source)
     _CopyProbe.calls = 0
 
-    out = ao.data
+    out = ao.as_dataset()
     out.attrs["tal"]["ext"]["custom"]["values"].append(3)
 
     assert _CopyProbe.calls == 1

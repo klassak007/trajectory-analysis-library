@@ -205,7 +205,7 @@ def pinv(
     ...     core_dims=("row", "col"),
     ...     validate=True,
     ... ))
-    >>> pinv(A, opts=PInvOptions(rcond=1e-8)).unsafe_data["datavar"].values.tolist()
+    >>> pinv(A, opts=PInvOptions(rcond=1e-8)).as_dataset()["datavar"].values.tolist()
     [[[0.5, 0.0], [0.0, 0.25]]]
     """
     owner = "linalg.pinv"

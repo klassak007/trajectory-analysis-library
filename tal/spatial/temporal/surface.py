@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 
@@ -110,8 +111,8 @@ def _dispatch_temporal_kind(
 
 def _to_analysis_object(value, *, validate: bool) -> AnalysisObject:
     if validate:
-        return AnalysisObject._from_validated(value.unsafe_data)
-    return AnalysisObject._from_unvalidated(value.unsafe_data)
+        return AnalysisObject._from_validated(analysis_object_dataset(value))
+    return AnalysisObject._from_unvalidated(analysis_object_dataset(value))
 
 
 def _maybe_wrap_target(

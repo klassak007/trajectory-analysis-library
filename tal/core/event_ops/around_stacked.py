@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..dataset_ownership import analysis_object_dataset
 from .finalize import finalize_event_output
 from ..schema_read import read_roles
 from .around import evaluate_around_segments_windows
@@ -85,9 +86,10 @@ def evaluate_around_stacked_windows(
         validate=validate,
         owner=owner,
     )
-    event_dim, tau_dim = _around_dims(segments.unsafe_data, context=context, owner=owner)
+    segments_ds = analysis_object_dataset(segments)
+    event_dim, tau_dim = _around_dims(segments_ds, context=context, owner=owner)
     stacked = stack_event_windows(
-        segments.unsafe_data,
+        segments_ds,
         batch_dims=context.runtime.batch_dims,
         event_dim=event_dim,
         tau_dim=tau_dim,

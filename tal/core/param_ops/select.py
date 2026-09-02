@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..ao_internal import finalize_structural
 from ..param_engine import build_param_bounds_map
 from ..param_engine.map_apply import gather_along_sequence, gather_dataset_along_sequence
@@ -131,7 +132,7 @@ def _collapse_scalar_point(
     sequence_dim: str,
     validate: bool,
 ) -> "AnalysisObject":
-    if sequence_dim in out.unsafe_data.dims:
+    if sequence_dim in analysis_object_dataset(out).dims:
         return out.isel({sequence_dim: 0}, drop=True, validate=validate)
     return out
 

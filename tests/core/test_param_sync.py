@@ -224,9 +224,9 @@ def test_param_sync_011_join_outer_inner_domain_exact() -> None:
     outer = synchronize_param([a, b], opts=ParamSyncOptions(join="outer", how="nearest"))
     inner = synchronize_param([a, b], opts=ParamSyncOptions(join="inner", how="nearest"))
     domain = synchronize_param([a, b], opts=ParamSyncOptions(join="domain", how="nearest"))
-    np.testing.assert_allclose(outer[0].data.coords["tau"].values, [0.0, 1.0, 2.0, 3.0])
-    np.testing.assert_allclose(inner[0].data.coords["tau"].values, [1.0, 2.0])
-    np.testing.assert_allclose(domain[0].data.coords["tau"].values, [1.0, 2.0])
+    np.testing.assert_allclose(outer[0].as_dataset().coords["tau"].values, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_allclose(inner[0].as_dataset().coords["tau"].values, [1.0, 2.0])
+    np.testing.assert_allclose(domain[0].as_dataset().coords["tau"].values, [1.0, 2.0])
     with pytest.raises(ValueError) as err:
         synchronize_param([a, b], opts=ParamSyncOptions(join="exact", how="nearest"))
     assert "join='exact'" in str(err.value)
@@ -249,9 +249,9 @@ def test_param_sync_046_join_tolerance_edge_parity() -> None:
     outer = synchronize_param([left, right], opts=ParamSyncOptions(join="outer", how="nearest", tol=0.1))
     inner = synchronize_param([left, right], opts=ParamSyncOptions(join="inner", how="nearest", tol=0.1))
     domain = synchronize_param([left, right], opts=ParamSyncOptions(join="domain", how="nearest", tol=0.1))
-    np.testing.assert_allclose(outer[0].data.coords["tau"].values, [0.0, 1.0, 2.0, 3.0])
-    np.testing.assert_allclose(inner[0].data.coords["tau"].values, [0.0, 1.0])
-    np.testing.assert_allclose(domain[0].data.coords["tau"].values, [1.0, 2.0])
+    np.testing.assert_allclose(outer[0].as_dataset().coords["tau"].values, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_allclose(inner[0].as_dataset().coords["tau"].values, [0.0, 1.0])
+    np.testing.assert_allclose(domain[0].as_dataset().coords["tau"].values, [1.0, 2.0])
 
 
 def test_param_sync_047_join_exact_with_tolerance_accepts_near_equal_rows() -> None:
@@ -269,8 +269,8 @@ def test_param_sync_047_join_exact_with_tolerance_accepts_near_equal_rows() -> N
         param_coord="tau",
     )
     out = synchronize_param([left, right], opts=ParamSyncOptions(join="exact", how="nearest", tol=0.1))
-    np.testing.assert_allclose(out[0].data.coords["tau"].values, [0.0, 1.0, 2.0])
-    np.testing.assert_allclose(out[1].data.coords["tau"].values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out[0].as_dataset().coords["tau"].values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out[1].as_dataset().coords["tau"].values, [0.0, 1.0, 2.0])
 
 
 def test_param_sync_048_outer_join_keeps_last_kept_tolerance_points() -> None:
@@ -289,7 +289,7 @@ def test_param_sync_048_outer_join_keeps_last_kept_tolerance_points() -> None:
         [left, right],
         opts=ParamSyncOptions(join="outer", how="nearest", tol=0.4332844209688609),
     )
-    np.testing.assert_allclose(out[0].data.coords["tau"].values, [0.92260597, 2.03273864, 2.55788419])
+    np.testing.assert_allclose(out[0].as_dataset().coords["tau"].values, [0.92260597, 2.03273864, 2.55788419])
 
 
 def test_param_sync_012_how_fill_tolerance_mask_behavior() -> None:
@@ -300,7 +300,7 @@ def test_param_sync_012_how_fill_tolerance_mask_behavior() -> None:
         [a, b],
         opts=ParamSyncOptions(join="left", how="fill", tol=0.1, fill_value=-999.0),
     )
-    vals = out[1].data["value"].values
+    vals = out[1].as_dataset()["value"].values
     np.testing.assert_allclose(vals, [-999.0, 100.0, 200.0])
 
 
@@ -310,8 +310,8 @@ def test_param_sync_013_batch_join_inner_outer_exact() -> None:
     b = _ao_batch_b()
     inner = synchronize_param([a, b], opts=ParamSyncOptions(batch_join="inner", join="left", how="nearest"))
     outer = synchronize_param([a, b], opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"))
-    assert list(inner[0].data.coords["trial"].values) == ["b"]
-    assert list(outer[0].data.coords["trial"].values) == ["a", "b", "c"]
+    assert list(inner[0].as_dataset().coords["trial"].values) == ["b"]
+    assert list(outer[0].as_dataset().coords["trial"].values) == ["a", "b", "c"]
     with pytest.raises(ValueError) as err:
         synchronize_param([a, b], opts=ParamSyncOptions(batch_join="exact", join="left", how="nearest"))
     assert "batch_join='exact'" in str(err.value)
@@ -325,9 +325,9 @@ def test_param_sync_014_batch_join_and_join_composed() -> None:
         [a, b],
         opts=ParamSyncOptions(batch_join="outer", join="inner", how="nearest"),
     )
-    labels = list(out[0].data.coords["trial"].values)
+    labels = list(out[0].as_dataset().coords["trial"].values)
     assert labels == ["a", "b", "c"]
-    sizes = out[0].data.coords["group_size"]
+    sizes = out[0].as_dataset().coords["group_size"]
     assert int(sizes.sel(trial="a").item()) == 0
     assert int(sizes.sel(trial="c").item()) == 0
     assert int(sizes.sel(trial="b").item()) > 0
@@ -339,8 +339,8 @@ def test_param_sync_015_sample_invariant_batched_rows_do_not_crash() -> None:
     b = _ao_batch_sample_invariant(100.0)
     out = synchronize_param([a, b], opts=ParamSyncOptions(join="inner", how="nearest"))
     assert len(out) == 2
-    np.testing.assert_allclose(out[0].data.coords["phase"].sel(trial="a").values, [0.0, 1.0, 2.0])
-    np.testing.assert_allclose(out[1].data.coords["phase"].sel(trial="b").values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out[0].as_dataset().coords["phase"].sel(trial="a").values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out[1].as_dataset().coords["phase"].sel(trial="b").values, [0.0, 1.0, 2.0])
 
 
 def test_param_sync_016_invalid_sync_options_fail_fast() -> None:
@@ -366,11 +366,11 @@ def test_param_sync_017_fill_updates_valid_and_sequence_size() -> None:
         [a, b],
         opts=ParamSyncOptions(join="left", how="fill", tol=0.1, fill_value=-999.0),
     )
-    vals = out[1].data["value"].values
-    valid = out[1].data.coords["valid"].values
+    vals = out[1].as_dataset()["value"].values
+    valid = out[1].as_dataset().coords["valid"].values
     np.testing.assert_allclose(vals, [-999.0, 100.0, 200.0])
     np.testing.assert_array_equal(valid, [False, True, True])
-    assert "group_size" not in out[1].data.coords
+    assert "group_size" not in out[1].as_dataset().coords
 
 
 def test_param_sync_018_outer_batch_join_sample_invariant_missing_rows_invalid() -> None:
@@ -381,10 +381,10 @@ def test_param_sync_018_outer_batch_join_sample_invariant_missing_rows_invalid()
         [left, right],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )
-    assert "trial" in out_left.data.coords["valid"].dims
-    assert bool(out_left.data["value"].sel(trial="c").isnull().all().item()) is True
-    np.testing.assert_array_equal(out_left.data.coords["valid"].sel(trial="c").values, [False, False, False])
-    np.testing.assert_array_equal(out_right.data.coords["valid"].sel(trial="a").values, [False, False, False])
+    assert "trial" in out_left.as_dataset().coords["valid"].dims
+    assert bool(out_left.as_dataset()["value"].sel(trial="c").isnull().all().item()) is True
+    np.testing.assert_array_equal(out_left.as_dataset().coords["valid"].sel(trial="c").values, [False, False, False])
+    np.testing.assert_array_equal(out_right.as_dataset().coords["valid"].sel(trial="a").values, [False, False, False])
 
 
 def test_param_sync_019_fill_non_left_packed_drops_validity() -> None:
@@ -395,9 +395,9 @@ def test_param_sync_019_fill_non_left_packed_drops_validity() -> None:
         [a, b],
         opts=ParamSyncOptions(join="left", how="fill", tol=0.1, fill_value=-999.0),
     )
-    core = out[1].data.attrs["tal"]["core"]
+    core = out[1].as_dataset().attrs["tal"]["core"]
     assert "validity" not in core
-    assert "group_size" not in out[1].data.coords
+    assert "group_size" not in out[1].as_dataset().coords
 
 
 def test_param_sync_020_fill_left_packed_retains_validity() -> None:
@@ -408,10 +408,10 @@ def test_param_sync_020_fill_left_packed_retains_validity() -> None:
         [a, b],
         opts=ParamSyncOptions(join="right", how="fill", tol=0.1, fill_value=-999.0),
     )
-    core = out[0].data.attrs["tal"]["core"]
+    core = out[0].as_dataset().attrs["tal"]["core"]
     assert "validity" in core
-    np.testing.assert_array_equal(out[0].data.coords["valid"].values, [True, True, False])
-    assert int(out[0].data.coords["group_size"].item()) == 2
+    np.testing.assert_array_equal(out[0].as_dataset().coords["valid"].values, [True, True, False])
+    assert int(out[0].as_dataset().coords["group_size"].item()) == 2
 
 
 def test_param_sync_021_duplicate_batch_labels_fail_fast() -> None:
@@ -509,7 +509,7 @@ def test_param_sync_024_sync_query_dim_override_resolves_namespace_collision() -
         [ao],
         opts=ParamSyncOptions(join="left", how="nearest", query_dim="q_sync"),
     )[0]
-    np.testing.assert_allclose(out.data["value"].values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [0.0, 1.0, 2.0])
 
 
 def test_param_sync_025_null_batch_labels_single_input_outer_identity() -> None:
@@ -533,9 +533,9 @@ def test_param_sync_025_null_batch_labels_single_input_outer_identity() -> None:
         [ao],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )[0]
-    assert bool(np.isnat(out.data.coords["trial"].values[0]))
-    np.testing.assert_allclose(out.data["value"].values, [[1.0, 2.0]])
-    np.testing.assert_array_equal(out.data.coords["valid"].values, [[True, True]])
+    assert bool(np.isnat(out.as_dataset().coords["trial"].values[0]))
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [[1.0, 2.0]])
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, [[True, True]])
 
 
 def test_param_sync_026_null_batch_labels_single_input_inner_exact_identity() -> None:
@@ -563,8 +563,8 @@ def test_param_sync_026_null_batch_labels_single_input_inner_exact_identity() ->
         [ao],
         opts=ParamSyncOptions(batch_join="exact", join="left", how="nearest"),
     )[0]
-    np.testing.assert_allclose(out_inner.data["value"].values, [[1.0, 2.0]])
-    np.testing.assert_allclose(out_exact.data["value"].values, [[1.0, 2.0]])
+    np.testing.assert_allclose(out_inner.as_dataset()["value"].values, [[1.0, 2.0]])
+    np.testing.assert_allclose(out_exact.as_dataset()["value"].values, [[1.0, 2.0]])
 
 
 def test_param_sync_027_outer_nan_sample_invariant_validity_not_false_missing() -> None:
@@ -588,8 +588,8 @@ def test_param_sync_027_outer_nan_sample_invariant_validity_not_false_missing() 
         [ao],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )[0]
-    np.testing.assert_array_equal(out.data.coords["valid"].values, [[True, True]])
-    np.testing.assert_allclose(out.data["value"].values, [[1.0, 2.0]])
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, [[True, True]])
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [[1.0, 2.0]])
 
 
 def test_param_sync_028_outer_mixed_none_nonnull_domains_fail_deterministically() -> None:
@@ -639,9 +639,9 @@ def test_param_sync_029_outer_single_input_mixed_null_nonnull_identity() -> None
         [ao],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )[0]
-    _assert_nullable_trial_labels(out.data.coords["trial"].values)
-    np.testing.assert_allclose(out.data["value"].values, ao.data["value"].values)
-    np.testing.assert_array_equal(out.data.coords["valid"].values, np.ones((2, 2), dtype=bool))
+    _assert_nullable_trial_labels(out.as_dataset().coords["trial"].values)
+    np.testing.assert_allclose(out.as_dataset()["value"].values, ao.as_dataset()["value"].values)
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, np.ones((2, 2), dtype=bool))
 
 
 def test_param_sync_030_outer_multi_input_aligned_mixed_null_nonnull_allowed() -> None:
@@ -653,10 +653,10 @@ def test_param_sync_030_outer_multi_input_aligned_mixed_null_nonnull_allowed() -
         [left, right],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )
-    _assert_nullable_trial_labels(out_left.data.coords["trial"].values)
-    _assert_nullable_trial_labels(out_right.data.coords["trial"].values)
-    np.testing.assert_allclose(out_left.data["value"].values, left.data["value"].values)
-    np.testing.assert_allclose(out_right.data["value"].values, right.data["value"].values)
+    _assert_nullable_trial_labels(out_left.as_dataset().coords["trial"].values)
+    _assert_nullable_trial_labels(out_right.as_dataset().coords["trial"].values)
+    np.testing.assert_allclose(out_left.as_dataset()["value"].values, left.as_dataset()["value"].values)
+    np.testing.assert_allclose(out_right.as_dataset()["value"].values, right.as_dataset()["value"].values)
 
 
 def test_param_sync_031_inner_exact_mixed_null_representation_fail_tal_valueerror() -> None:
@@ -728,7 +728,7 @@ def test_param_sync_036_fill_value_ignored_when_how_not_fill() -> None:
         opts=ParamSyncOptions(join="left", how="interp", fill_value="bad"),  # type: ignore[arg-type]
     )
     assert len(out) == 2
-    np.testing.assert_allclose(out[0].data.coords["tau"].values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out[0].as_dataset().coords["tau"].values, [0.0, 1.0, 2.0])
 
 
 def test_param_sync_037_outer_permuted_mixed_null_nonnull_allowed() -> None:
@@ -739,8 +739,8 @@ def test_param_sync_037_outer_permuted_mixed_null_nonnull_allowed() -> None:
         [left, right],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )
-    _assert_nullable_trial_labels(out_left.data.coords["trial"].values)
-    _assert_nullable_trial_labels(out_right.data.coords["trial"].values)
+    _assert_nullable_trial_labels(out_left.as_dataset().coords["trial"].values)
+    _assert_nullable_trial_labels(out_right.as_dataset().coords["trial"].values)
 
 
 def test_param_sync_038_dask_sync_eval_path_no_chunked_indexer_error() -> None:
@@ -763,7 +763,7 @@ def test_param_sync_038_dask_sync_eval_path_no_chunked_indexer_error() -> None:
         param_coord="tau",
     )
     out = synchronize_param([ao], opts=ParamSyncOptions(join="left", how="nearest"))[0]
-    np.testing.assert_allclose(out.data["value"].values, [0.0, 10.0, 20.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [0.0, 10.0, 20.0])
 
 
 def test_param_sync_039_synchronize_param_input_type_checked() -> None:
@@ -773,10 +773,10 @@ def test_param_sync_039_synchronize_param_input_type_checked() -> None:
     assert "AnalysisObject, xr.Dataset, or xr.DataArray" in str(err.value)
 
     ao = _ao_sync_left()
-    out_ds = synchronize_param([ao.data], opts=ParamSyncOptions(join="left", how="nearest"))
+    out_ds = synchronize_param([ao.as_dataset()], opts=ParamSyncOptions(join="left", how="nearest"))
     assert len(out_ds) == 1
-    da_input = ao.data["value"].copy(deep=True)
-    da_input.attrs["tal"] = ao.data.attrs["tal"]
+    da_input = ao.as_dataset()["value"].copy(deep=True)
+    da_input.attrs["tal"] = ao.as_dataset().attrs["tal"]
     out_da = synchronize_param(
         [da_input],
         opts=ParamSyncOptions(join="left", how="nearest"),
@@ -790,7 +790,7 @@ def test_param_sync_045_synchronize_param_impostor_unsafe_data_rejected_typeerro
     class _Impostor:
         @property
         def unsafe_data(self) -> xr.Dataset:
-            return _ao_sync_left().unsafe_data
+            return _ao_sync_left().as_dataset(copy="none")
 
     with pytest.raises(TypeError) as err:
         synchronize_param([_Impostor()])  # type: ignore[list-item]
@@ -805,19 +805,19 @@ def test_param_sync_040_multi_batch_sync_supported() -> None:
         [left, right],
         opts=ParamSyncOptions(batch_join="inner", join="left", how="nearest"),
     )
-    assert {"trial", "sensor", "sample"} <= set(out_left.data["value"].dims)
-    assert {"trial", "sensor", "sample"} <= set(out_right.data["value"].dims)
-    assert list(out_left.data.coords["trial"].values) == ["b"]
-    assert list(out_right.data.coords["trial"].values) == ["b"]
-    assert list(out_left.data.coords["sensor"].values) == ["s0", "s1"]
+    assert {"trial", "sensor", "sample"} <= set(out_left.as_dataset()["value"].dims)
+    assert {"trial", "sensor", "sample"} <= set(out_right.as_dataset()["value"].dims)
+    assert list(out_left.as_dataset().coords["trial"].values) == ["b"]
+    assert list(out_right.as_dataset().coords["trial"].values) == ["b"]
+    assert list(out_left.as_dataset().coords["sensor"].values) == ["s0", "s1"]
     out_left_outer, out_right_outer = synchronize_param(
         [left, right],
         opts=ParamSyncOptions(batch_join="outer", join="left", how="nearest"),
     )
-    assert list(out_left_outer.data.coords["trial"].values) == ["a", "b", "c"]
-    assert list(out_right_outer.data.coords["trial"].values) == ["a", "b", "c"]
-    assert list(out_left_outer.data.coords["sensor"].values) == ["s0", "s1"]
-    assert list(out_right_outer.data.coords["sensor"].values) == ["s0", "s1"]
+    assert list(out_left_outer.as_dataset().coords["trial"].values) == ["a", "b", "c"]
+    assert list(out_right_outer.as_dataset().coords["trial"].values) == ["a", "b", "c"]
+    assert list(out_left_outer.as_dataset().coords["sensor"].values) == ["s0", "s1"]
+    assert list(out_right_outer.as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_param_sync_041_sync_module_option_validation_centralized_behavior_parity() -> None:
@@ -838,9 +838,9 @@ def test_param_sync_042_multi_batch_interp_like_uses_shared_flatten_contract() -
     left = _ao_multi_batch_sync(trial_labels=("a", "b"), sensor_labels=("s0", "s1"), offset=0.0)
     right = _ao_multi_batch_sync(trial_labels=("b", "a"), sensor_labels=("s1", "s0"), offset=50.0)
     out = left.param.interp_like(right, batch_join="inner")
-    assert set(out.data["value"].dims) == {"trial", "sensor", "sample"}
-    assert list(out.data.coords["trial"].values) == ["a", "b"]
-    assert list(out.data.coords["sensor"].values) == ["s0", "s1"]
+    assert set(out.as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
+    assert list(out.as_dataset().coords["trial"].values) == ["a", "b"]
+    assert list(out.as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_orch_topo_parity_001_sync_multi_batch_behavior_parity() -> None:
@@ -852,9 +852,9 @@ def test_orch_topo_parity_001_sync_multi_batch_behavior_parity() -> None:
         opts=ParamSyncOptions(batch_join="inner", join="left", how="nearest"),
     )
     assert len(out) == 2
-    assert set(out[0].data["value"].dims) == {"trial", "sensor", "sample"}
-    assert list(out[0].data.coords["trial"].values) == ["a", "b"]
-    assert list(out[0].data.coords["sensor"].values) == ["s0", "s1"]
+    assert set(out[0].as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
+    assert list(out[0].as_dataset().coords["trial"].values) == ["a", "b"]
+    assert list(out[0].as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_orch_finalize_parity_001_sync_identity_and_restored_paths_stable(
@@ -879,7 +879,7 @@ def test_orch_finalize_parity_001_sync_identity_and_restored_paths_stable(
 
     single = _ao_sync_left()
     out_single = synchronize_param([single], opts=ParamSyncOptions(join="left", how="nearest"))
-    np.testing.assert_allclose(out_single[0].data["value"].values, single.data["value"].values)
+    np.testing.assert_allclose(out_single[0].as_dataset()["value"].values, single.as_dataset()["value"].values)
 
     left = _ao_multi_batch_sync(trial_labels=("a", "b"), sensor_labels=("s0", "s1"), offset=0.0)
     right = _ao_multi_batch_sync(trial_labels=("b", "a"), sensor_labels=("s1", "s0"), offset=50.0)
@@ -888,7 +888,7 @@ def test_orch_finalize_parity_001_sync_identity_and_restored_paths_stable(
         opts=ParamSyncOptions(batch_join="inner", join="left", how="nearest"),
     )
     assert len(out_multi) == 2
-    assert set(out_multi[0].data["value"].dims) == {"trial", "sensor", "sample"}
+    assert set(out_multi[0].as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
     assert counts["finalize_like"] >= 1
     assert counts["restore_and_finalize"] >= 1
 
@@ -913,8 +913,8 @@ def test_param_sync_044_single_input_identity_fast_path(
     monkeypatch.setattr(sync_mod, "_sync_one", _boom_sync_one)
     out = synchronize_param([ao], opts=ParamSyncOptions(join="left", how="nearest"))
     assert len(out) == 1
-    np.testing.assert_allclose(out[0].data["value"].values, ao.data["value"].values)
-    np.testing.assert_array_equal(out[0].data.coords["valid"].values, [True, True, True])
+    np.testing.assert_allclose(out[0].as_dataset()["value"].values, ao.as_dataset()["value"].values)
+    np.testing.assert_array_equal(out[0].as_dataset().coords["valid"].values, [True, True, True])
 
 
 def test_param_sync_049_auto_join_chunked_inputs_without_grid_fails_fast() -> None:
@@ -966,7 +966,7 @@ def test_param_sync_050_explicit_grid_with_chunked_inputs_allowed() -> None:
         opts=ParamSyncOptions(join="outer", how="nearest"),
     )
     assert len(out) == 2
-    np.testing.assert_allclose(out[0].data.coords["tau"].values, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_allclose(out[0].as_dataset().coords["tau"].values, [0.0, 1.0, 2.0, 3.0])
 
 
 def test_param_sync_051_single_owner_chunked_precheck_is_sync_resolve_target_grid(
@@ -1014,8 +1014,8 @@ def test_param_sync_052_single_input_chunked_auto_join_allowed() -> None:
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=(), core_dims=(), param_coord="tau")
     out_outer = synchronize_param([ao], opts=ParamSyncOptions(join="outer", how="nearest"))[0]
     out_inner = synchronize_param([ao], opts=ParamSyncOptions(join="inner", how="nearest"))[0]
-    np.testing.assert_allclose(out_outer.data.coords["tau"].values, [0.0, 1.0, 2.0])
-    np.testing.assert_allclose(out_inner.data.coords["tau"].values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out_outer.as_dataset().coords["tau"].values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out_inner.as_dataset().coords["tau"].values, [0.0, 1.0, 2.0])
 
 
 def test_param_sync_053_autogrid_batched_join_is_row_local_and_has_no_cross_batch_bleed() -> None:
@@ -1044,12 +1044,12 @@ def test_param_sync_053_autogrid_batched_join_is_row_local_and_has_no_cross_batc
         [left, right],
         opts=ParamSyncOptions(batch_join="inner", join="domain", how="nearest"),
     )
-    phase = out_left.data.coords["phase"]
+    phase = out_left.as_dataset().coords["phase"]
     row_a = phase.sel(trial="a").values
     row_b = phase.sel(trial="b").values
     np.testing.assert_allclose(row_a[np.isfinite(row_a)], [1.0, 2.0])
     assert np.isfinite(row_b).sum() == 0
-    sizes = out_left.data.coords["group_size"]
+    sizes = out_left.as_dataset().coords["group_size"]
     assert int(sizes.sel(trial="a")) == 2
     assert int(sizes.sel(trial="b")) == 0
 
@@ -1080,12 +1080,12 @@ def test_param_sync_054_autogrid_sample_invariant_param_coord_broadcast_is_batch
         [left, right],
         opts=ParamSyncOptions(batch_join="inner", join="outer", how="nearest"),
     )
-    phase = out_left.data.coords["phase"]
+    phase = out_left.as_dataset().coords["phase"]
     row_a = phase.sel(trial="a").values
     row_b = phase.sel(trial="b").values
     np.testing.assert_allclose(row_a[np.isfinite(row_a)], [0.0, 1.0, 2.0, 3.0])
     np.testing.assert_allclose(row_b[np.isfinite(row_b)], [0.0, 1.0])
-    sizes = out_left.data.coords["group_size"]
+    sizes = out_left.as_dataset().coords["group_size"]
     assert int(sizes.sel(trial="a")) == 4
     assert int(sizes.sel(trial="b")) == 2
 
@@ -1116,12 +1116,12 @@ def test_param_sync_055_autogrid_join_width_and_nan_tail_packing_are_determinist
         [left, right],
         opts=ParamSyncOptions(batch_join="inner", join="outer", how="nearest"),
     )
-    phase = out_left.data.coords["phase"]
+    phase = out_left.as_dataset().coords["phase"]
     assert phase.shape == (2, 4)
     row_b = phase.sel(trial="b").values
     np.testing.assert_allclose(row_b[0], 0.0)
     assert np.isnan(row_b[1:]).all()
-    sizes = out_left.data.coords["group_size"]
+    sizes = out_left.as_dataset().coords["group_size"]
     assert int(sizes.sel(trial="a")) == 4
     assert int(sizes.sel(trial="b")) == 1
 
@@ -1148,9 +1148,9 @@ def test_param_sync_057_explicit_large_integer_grid_and_tolerance_are_exact() ->
         grid=grid,
         opts=ParamSyncOptions(join="override", how="fill", tol=np.uint64(1), fill_value=-1),
     )
-    np.testing.assert_array_equal(out.unsafe_data.coords["tau"].values, grid)
-    np.testing.assert_allclose(out.unsafe_data["value"].values, [20.0, 20.0])
-    np.testing.assert_array_equal(out.unsafe_data.coords["valid"].values, [True, True])
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["tau"].values, grid)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["value"].values, [20.0, 20.0])
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["valid"].values, [True, True])
 
 
 def test_param_sync_058_unsafe_mixed_grid_tolerance_fails_closed() -> None:

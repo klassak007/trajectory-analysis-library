@@ -101,7 +101,7 @@ class AnalysisObject:
     ...     core_dims=("axis",),
     ...     validate=True,
     ... )
-    >>> ao.unsafe_data.attrs["tal"]["core"]["roles"]["sequence_dim"]
+    >>> ao.as_dataset().attrs["tal"]["core"]["roles"]["sequence_dim"]
     'sample'
     """
 
@@ -216,40 +216,6 @@ class AnalysisObject:
         obj._bind_dataset(candidate)
         return obj
 
-    def _safe_public_dataset(self) -> xr.Dataset:
-        """Return an isolated public dataset copy.
-
-        This intentionally performs deep copying for mutation safety. Callers that
-        need direct in-place mutation should use ``unsafe_data`` explicitly.
-        """
-        self._assert_no_multiindex(self._data, owner="AnalysisObject.data")
-        return _dataset_ownership.deep_public_dataset(
-            self._data,
-            owner="AnalysisObject.data",
-        )
-
-    @property
-    def data(self) -> xr.Dataset:
-        """Return a mutation-safe deep copy of the underlying dataset.
-
-        Returns
-        -------
-        xr.Dataset
-            Resolved property value.
-        """
-        return self._safe_public_dataset()
-
-    @property
-    def unsafe_data(self) -> xr.Dataset:
-        """Return the internal dataset reference without protective copying.
-
-        Returns
-        -------
-        xr.Dataset
-            Resolved property value.
-        """
-        return _dataset_ownership.raw_dataset_reference(self._data)
-
     @property
     def param(self) -> "ParamAccessor":
         """Return the param accessor (``ao.param``).
@@ -283,7 +249,7 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> stacked = ao.combine.stack_core([ao], core_dim="copy", core_labels=("left", "right"))
-        >>> stacked.unsafe_data.sizes["copy"]
+        >>> stacked.as_dataset().sizes["copy"]
         2
         """
         from .combine_ops import CombineAccessor
@@ -305,13 +271,17 @@ class AnalysisObject:
         >>> from tal.core import AnalysisObject
         >>> from tal.core.event_ops import Condition
         >>> ao = AnalysisObject.from_data(
-        ...     xr.Dataset({"value": ("sample", [0.0, 2.0])}, coords={"sample": [0, 1]}),
+        ...     xr.Dataset(
+        ...         {"value": ("sample", [0.0, 2.0])},
+        ...         coords={"sample": [0, 1], "time": ("sample", [0.0, 1.0])},
+        ...     ),
         ...     sequence_dim="sample",
         ...     core_dims=(),
+        ...     param_coord="time",
         ...     validate=True,
         ... )
         >>> mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", 1.0))
-        >>> mask.tolist()
+        >>> mask.to_numpy().tolist()
         [False, True]
         """
         from .event_ops import EventsAccessor
@@ -370,27 +340,42 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> grouped = ao.group.groupby("kind")
-        >>> grouped.mean(dim="sample").unsafe_data.sizes["group_key"]
+        >>> grouped.mean(dim="sample").as_dataset().sizes["group_key"]
         2
         """
         from .group_ops import GroupAccessor
 
         return GroupAccessor(self)
 
-    def as_dataset(self) -> xr.Dataset:
-        """Return a mutation-safe deep copy of the underlying dataset.
+    def as_dataset(
+        self,
+        *,
+        copy: Literal["deep", "shallow", "none"] = "deep",
+    ) -> xr.Dataset:
+        """Return the underlying dataset with the requested ownership policy.
+
+        Parameters
+        ----------
+        copy
+            ``"deep"`` isolates eager buffers and metadata, ``"shallow"``
+            shares buffers while isolating wrappers and metadata, and ``"none"``
+            returns the exact backing Dataset.
 
         Returns
         -------
         xr.Dataset
-            Deep copy of the wrapped dataset, including coordinates, variables,
-            and TAL schema metadata.
+            Dataset exposed under the requested ownership policy.
+
+        Raises
+        ------
+        ValueError
+            If ``copy`` is invalid or the backing Dataset has a MultiIndex.
 
         Notes
         -----
-        Mutating the returned dataset does not mutate the AO. Use
-        :attr:`unsafe_data` only at internal boundaries that intentionally need
-        direct access to the backing object.
+        Deep and shallow lazy views remain non-owning and require the AO to stay
+        open until their lazy work completes. Mutating shared eager buffers from
+        a shallow view, or mutating a raw view, can mutate the AO.
 
         Examples
         --------
@@ -403,18 +388,28 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> snapshot = ao.as_dataset()
-        >>> snapshot is ao.unsafe_data
+        >>> snapshot is ao.as_dataset(copy="none")
         False
         """
-        return self._safe_public_dataset()
+        owner = "AnalysisObject.as_dataset"
+        mode = _dataset_ownership.coerce_dataset_copy_mode(copy, owner=owner)
+        self._assert_no_multiindex(self._data, owner=owner)
+        return _dataset_ownership.dataset_view(self._data, copy=mode, owner=owner)
 
-    def to_dataarray(self, *, name: str | None = None) -> xr.DataArray:
+    def to_dataarray(
+        self,
+        *,
+        name: str | None = None,
+        copy: Literal["deep", "shallow", "none"] = "deep",
+    ) -> xr.DataArray:
         """Convert a single-variable AO to ``xarray.DataArray``.
 
         Parameters
         ----------
         name
             Optional output variable name override.
+        copy
+            Ownership policy applied to the selected variable and coordinates.
 
         Returns
         -------
@@ -424,12 +419,15 @@ class AnalysisObject:
         Raises
         ------
         ValueError
-            If this AO contains multiple data variables.
+            If ``copy`` is invalid, this AO contains multiple data variables,
+            or the backing Dataset has a MultiIndex.
 
         Notes
         -----
         This helper is a strict single-variable boundary. Multi-variable payloads
-        remain datasets to avoid accidental data loss.
+        remain datasets to avoid accidental data loss. Dataset-level attrs,
+        including Dataset-level TAL schema, are not projected into the selected
+        variable's attrs. Every returned DataArray is a non-owning facade.
 
         Examples
         --------
@@ -444,13 +442,33 @@ class AnalysisObject:
         --------
         tal.core.dataset_utils.dataset_to_dataarray
         """
-        self._assert_no_multiindex(self._data, owner="AnalysisObject.to_dataarray")
+        owner = "AnalysisObject.to_dataarray"
+        mode = _dataset_ownership.coerce_dataset_copy_mode(copy, owner=owner)
+        self._assert_no_multiindex(self._data, owner=owner)
         return _dataset_ownership.dataset_to_dataarray_view(
             self._data,
             name=name,
-            copy="deep",
-            owner="AnalysisObject.to_dataarray",
+            copy=mode,
+            owner=owner,
         )
+
+    def close(self) -> None:
+        """Release resources owned by the backing Dataset.
+
+        Notes
+        -----
+        Calling this method repeatedly is safe. Deep and shallow public views
+        are non-owning and must complete lazy work before the AO is closed.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> ao = AnalysisObject(xr.Dataset({"value": ("sample", [1.0])}))
+        >>> ao.close()
+        >>> ao.close()
+        """
+        self._data.close()
 
     def _rewrap_dataset(self, ds: xr.Dataset, *, validate: bool) -> AnalysisObject:
         if validate:
@@ -502,7 +520,7 @@ class AnalysisObject:
 
         intent = resolve_broadcast_intent(mode=mode, owner="AnalysisObject.b")
         previous_alignment = read_alignment_intent(self, owner="AnalysisObject.b")
-        out = self.__class__._from_unvalidated(self.unsafe_data)
+        out = self.__class__._from_unvalidated(self._data)
         if previous_alignment is not None:
             set_alignment_intent(out, previous_alignment)
         set_broadcast_intent(out, intent)
@@ -578,7 +596,7 @@ class AnalysisObject:
                 f"existing={previous_alignment!r}, requested={intent!r}."
             )
         previous_broadcast = read_broadcast_intent(self, owner="AnalysisObject.a")
-        out = self.__class__._from_unvalidated(self.unsafe_data)
+        out = self.__class__._from_unvalidated(self._data)
         set_alignment_intent(out, previous_alignment if previous_alignment is not None else intent)
         if previous_broadcast is not None:
             set_broadcast_intent(out, previous_broadcast)
@@ -671,7 +689,7 @@ class AnalysisObject:
         ...     coords={"trial": ["t0"], "axis": ["x", "y", "z"]},
         ... )
         >>> ao = AnalysisObject.from_data(ds, batch_dims=("trial",), core_dims=("axis",), validate=True)
-        >>> read_roles(ao.unsafe_data)[1] is None
+        >>> read_roles(ao.as_dataset())[1] is None
         True
 
         See Also
@@ -748,7 +766,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.isel(sample=slice(0, 2)).unsafe_data.sizes["sample"]
+        >>> ao.isel(sample=slice(0, 2)).as_dataset().sizes["sample"]
         2
         """
         ds = self._data.isel(
@@ -807,7 +825,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.sel(trial="b").unsafe_data["value"].item()
+        >>> ao.sel(trial="b").as_dataset()["value"].item()
         2.0
         """
         ds = self._data.sel(
@@ -862,7 +880,8 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.where(ao.unsafe_data["value"] > 1.0, other=0.0).unsafe_data["value"].to_numpy().tolist()
+        >>> condition = ao.as_dataset()["value"] > 1.0
+        >>> ao.where(condition, other=0.0).as_dataset()["value"].to_numpy().tolist()
         [0.0, 2.0, 3.0]
         """
         if other is self._WHERE_OTHER_UNSET:
@@ -909,7 +928,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> "quality" in ao.drop_vars("quality").unsafe_data
+        >>> "quality" in ao.drop_vars("quality").as_dataset()
         False
         """
         ds = self._data.drop_vars(names, errors=errors)
@@ -955,7 +974,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> "step" in ao.rename({"sample": "step"}).unsafe_data.dims
+        >>> "step" in ao.rename({"sample": "step"}).as_dataset().dims
         True
         """
         ds = self._data.rename(name_dict=name_dict, **names)
@@ -1004,7 +1023,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.transpose("sample", "trial").unsafe_data["value"].dims
+        >>> ao.transpose("sample", "trial").as_dataset()["value"].dims
         ('sample', 'trial')
         """
         ds = self._data.transpose(
@@ -1146,8 +1165,8 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> out = ao.set_roles(sequence_dim=None, batch_dims=("trial",), core_dims=(), validate=True)
-        >>> read_roles(out.unsafe_data)[1]
-        None
+        >>> read_roles(out.as_dataset())[1] is None
+        True
 
         See Also
         --------
@@ -1199,7 +1218,7 @@ class AnalysisObject:
         ... )
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=(), validate=True)
         >>> out = ao.set_param_coord(name="time", validate=True)
-        >>> read_param_coord_name(out.unsafe_data)
+        >>> read_param_coord_name(out.as_dataset())
         'time'
 
         See Also
@@ -1261,7 +1280,7 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> out = ao.set_validity(sequence_size_coord="group_size", validate=True)
-        >>> read_sequence_size_coord_name(out.unsafe_data)
+        >>> read_sequence_size_coord_name(out.as_dataset())
         'group_size'
 
         See Also
@@ -1305,7 +1324,7 @@ class AnalysisObject:
         >>> ds = xr.Dataset({"value": ("axis", [1.0, 2.0, 3.0])}, coords={"axis": ["x", "y", "z"]})
         >>> ao = AnalysisObject.from_data(ds, core_dims=("axis",), validate=True)
         >>> out = ao.merge_schema({"core": {"roles": {"core_dims": ["axis"]}}}, validate=True)
-        >>> out.unsafe_data.attrs["tal"]["core"]["roles"]["core_dims"]
+        >>> out.as_dataset().attrs["tal"]["core"]["roles"]["core_dims"]
         ['axis']
 
         See Also

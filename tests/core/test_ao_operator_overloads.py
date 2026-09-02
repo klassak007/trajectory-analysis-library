@@ -49,32 +49,32 @@ def test_ao_op_001_arithmetic_operator_parity() -> None:
     left = _ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     right = _ao((np.arange(12, dtype=float).reshape(2, 2, 3) + 2.0) / 7.0)
 
-    xr.testing.assert_allclose((left + right).unsafe_data["x"], tal_ufuncs.add(left, right).unsafe_data["x"])
-    xr.testing.assert_allclose((left - right).unsafe_data["x"], tal_ufuncs.subtract(left, right).unsafe_data["x"])
-    xr.testing.assert_allclose((left * right).unsafe_data["x"], tal_ufuncs.multiply(left, right).unsafe_data["x"])
-    xr.testing.assert_allclose((left / right).unsafe_data["x"], tal_ufuncs.true_divide(left, right).unsafe_data["x"])
-    xr.testing.assert_allclose((left % 3).unsafe_data["x"], tal_ufuncs.mod(left, 3).unsafe_data["x"])
-    xr.testing.assert_allclose((left ** 2).unsafe_data["x"], tal_ufuncs.power(left, 2).unsafe_data["x"])
+    xr.testing.assert_allclose((left + right).as_dataset(copy="none")["x"], tal_ufuncs.add(left, right).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((left - right).as_dataset(copy="none")["x"], tal_ufuncs.subtract(left, right).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((left * right).as_dataset(copy="none")["x"], tal_ufuncs.multiply(left, right).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((left / right).as_dataset(copy="none")["x"], tal_ufuncs.true_divide(left, right).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((left % 3).as_dataset(copy="none")["x"], tal_ufuncs.mod(left, 3).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((left ** 2).as_dataset(copy="none")["x"], tal_ufuncs.power(left, 2).as_dataset(copy="none")["x"])
 
 
 def test_ao_op_002_unary_operator_parity() -> None:
     """ID: AO_OP_002_unary_operator_parity."""
     left = _ao(np.arange(12, dtype=float).reshape(2, 2, 3) - 6.0)
 
-    xr.testing.assert_allclose((-left).unsafe_data["x"], tal_ufuncs.negative(left).unsafe_data["x"])
-    xr.testing.assert_allclose((+left).unsafe_data["x"], tal_ufuncs.positive(left).unsafe_data["x"])
-    xr.testing.assert_allclose(abs(left).unsafe_data["x"], tal_ufuncs.absolute(left).unsafe_data["x"])
+    xr.testing.assert_allclose((-left).as_dataset(copy="none")["x"], tal_ufuncs.negative(left).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((+left).as_dataset(copy="none")["x"], tal_ufuncs.positive(left).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose(abs(left).as_dataset(copy="none")["x"], tal_ufuncs.absolute(left).as_dataset(copy="none")["x"])
 
 
 def test_ao_op_003_rbinary_operator_paths() -> None:
     """ID: AO_OP_003_rbinary_operator_paths."""
     ao = _ao(np.arange(12, dtype=float).reshape(2, 2, 3) + 1.0)
-    xr.testing.assert_allclose((2 + ao).unsafe_data["x"], tal_ufuncs.add(2, ao).unsafe_data["x"])
-    xr.testing.assert_allclose((2 - ao).unsafe_data["x"], tal_ufuncs.subtract(2, ao).unsafe_data["x"])
-    xr.testing.assert_allclose((2 * ao).unsafe_data["x"], tal_ufuncs.multiply(2, ao).unsafe_data["x"])
-    xr.testing.assert_allclose((2 / ao).unsafe_data["x"], tal_ufuncs.true_divide(2, ao).unsafe_data["x"])
-    xr.testing.assert_allclose((2 % ao).unsafe_data["x"], tal_ufuncs.mod(2, ao).unsafe_data["x"])
-    xr.testing.assert_allclose((2**ao).unsafe_data["x"], tal_ufuncs.power(2, ao).unsafe_data["x"])
+    xr.testing.assert_allclose((2 + ao).as_dataset(copy="none")["x"], tal_ufuncs.add(2, ao).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((2 - ao).as_dataset(copy="none")["x"], tal_ufuncs.subtract(2, ao).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((2 * ao).as_dataset(copy="none")["x"], tal_ufuncs.multiply(2, ao).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((2 / ao).as_dataset(copy="none")["x"], tal_ufuncs.true_divide(2, ao).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((2 % ao).as_dataset(copy="none")["x"], tal_ufuncs.mod(2, ao).as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose((2**ao).as_dataset(copy="none")["x"], tal_ufuncs.power(2, ao).as_dataset(copy="none")["x"])
 
 
 def test_ao_op_004_comparison_operators_return_condition() -> None:
@@ -110,7 +110,7 @@ def test_bcast_core_026_dunder_arithmetic_accepts_broadcast_intent() -> None:
     right = _ao((np.arange(12, dtype=float).reshape(2, 2, 3) + 1.0) / 3.0)
     out = left.b() + right
     expected = tal_ufuncs.add(left.b(), right)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected.unsafe_data["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected.as_dataset(copy="none")["x"])
 
 
 def test_dunder_arithmetic_semantic_default_without_b_helper() -> None:
@@ -118,7 +118,7 @@ def test_dunder_arithmetic_semantic_default_without_b_helper() -> None:
     right = _ao_missing_sequence_declared((np.arange(6, dtype=float).reshape(2, 3) + 1.0) / 4.0)
     out = left + right
     expected = tal_ufuncs.add(left, right)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected.unsafe_data["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected.as_dataset(copy="none")["x"])
 
 
 def test_dunder_arithmetic_accepts_alignment_intent() -> None:
@@ -126,4 +126,4 @@ def test_dunder_arithmetic_accepts_alignment_intent() -> None:
     right = _ao((np.arange(12, dtype=float).reshape(2, 2, 3) + 2.0) / 9.0)
     out = left.a(on="sequence", sequence_join="exact", batch_join="exact") + right
     expected = tal_ufuncs.add(left.a(on="sequence", sequence_join="exact", batch_join="exact"), right)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected.unsafe_data["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected.as_dataset(copy="none")["x"])

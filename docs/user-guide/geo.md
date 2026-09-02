@@ -25,7 +25,7 @@ ao = AnalysisObject.from_data(
 )
 
 lla = GeodeticPosition.from_lla(ao)
-geo_block = lla.unsafe_data.attrs["tal"]["ext"]["geo"]
+geo_block = lla.as_dataset().attrs["tal"]["ext"]["geo"]
 ```
 
 The payload uses public LLA label order: `lat`, `lon`, `alt`. ECEF conversion

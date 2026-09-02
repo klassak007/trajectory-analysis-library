@@ -311,7 +311,7 @@ def direction_to_sun(
     ... )
     >>> opts = SunDirectionOptions(iers=AstroIERSOptions(degraded_accuracy="ignore"))
     >>> sun = direction_to_sun(GeodeticPosition.from_lla(ao), time="2024-06-01T12:00:00", opts=opts)
-    >>> sorted(sun.unsafe_data.data_vars)
+    >>> sorted(sun.as_dataset().data_vars)
     ['altitude_deg', 'azimuth_deg', 'direction']
     """
     options = _coerce_options(opts, owner=_OWNER)

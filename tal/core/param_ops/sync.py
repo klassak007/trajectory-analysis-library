@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like, restore_and_finalize
 from ..orchestration.inputs import normalize_analysis_object_inputs
 from ..orchestration.lazy import require_unchunked_auto_grid_sources
@@ -120,11 +121,12 @@ def _sync_one(
             eval_opts=eval_opts,
             validate=validate,
         )
+    synced_ds = analysis_object_dataset(synced)
     if not batch_plan.enabled:
-        return finalize_like(src_ctx.ao, synced.unsafe_data, validate=validate, owner="synchronize_param")
+        return finalize_like(src_ctx.ao, synced_ds, validate=validate, owner="synchronize_param")
     return restore_and_finalize(
         src_ctx.ao,
-        synced.unsafe_data,
+        synced_ds,
         plan=batch_plan,
         validate=validate,
         owner="synchronize_param",
@@ -144,7 +146,7 @@ def _sync_identity_one(
         return out
     return restore_and_finalize(
         src_ctx.ao,
-        out.unsafe_data,
+        analysis_object_dataset(out),
         plan=batch_plan,
         validate=validate,
         owner="synchronize_param",
@@ -208,7 +210,7 @@ def synchronize_param(
     ...     validate=True,
     ... )
     >>> synced = synchronize_param([ao], on="time", grid=[0.0, 1.0], opts=ParamSyncOptions(join="override"))
-    >>> synced[0].unsafe_data["value"].values.tolist()
+    >>> synced[0].as_dataset()["value"].values.tolist()
     [0.0, 1.0]
     """
     if not aos:
@@ -306,7 +308,7 @@ def synchronize(
     ...     validate=True,
     ... )
     >>> out = synchronize([ao], on="time", grid=[0.0, 2.0], opts=ParamSyncOptions(join="override"))
-    >>> out[0].unsafe_data["value"].values.tolist()
+    >>> out[0].as_dataset()["value"].values.tolist()
     [0.0, 4.0]
     """
     if mode != "param":

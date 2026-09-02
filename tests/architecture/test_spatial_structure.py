@@ -332,7 +332,7 @@ def test_arch_spatial_019_pose_from_matrix_clears_components_registry_via_compon
     """ID: ARCH_SPATIAL_019_pose_from_matrix_clears_components_registry_via_component_owner."""
     pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
     assert "def _clear_component_registry_for_matrix_layout(" in pose_text
-    assert "clear_component_registry(source.unsafe_data, owner=owner)" in pose_text
+    assert "return clear_component_registry(" in pose_text
     assert "_clear_component_registry_for_matrix_layout(source, owner=owner)" in pose_text
     assert "merge_schema(" not in pose_text
     assert "tal.ext.components" not in pose_text
@@ -708,7 +708,8 @@ def test_arch_spatial_042_slice_b3_pose_matrix_output_clears_component_registry_
     pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
     assert "_components_to_matrix_dataset(" in pose_ops_text
     assert "ComponentRegistryOptions(registry={}, replace=True)" in pose_ops_text
-    assert "set_pose_rep(cleared.unsafe_data, rep=\"matrix\"" in pose_ops_text
+    assert "output = set_pose_rep(" in pose_ops_text
+    assert "rep=\"matrix\"" in pose_ops_text
 
 
 def test_spatial_doc_007_phase8_slice_b3_pose_conversion_compose_inverse_docs_and_api_entries_present() -> None:
@@ -2688,9 +2689,10 @@ def test_arch_spatial_146_rotation_temporal_single_payload_guard_prevents_silent
     text = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
     assert "def _require_single_payload_var(" in text
     assert "auxiliary payload vars are not supported" in text
-    assert "_require_single_payload_var(source.unsafe_data, owner=request.owner)" in text
+    assert "source_ds =" in text
+    assert "_require_single_payload_var(source_ds, owner=request.owner)" in text
     assert "var_name = _require_single_payload_var(context.ds" in text
-    src_guard_index = text.find("_require_single_payload_var(source.unsafe_data, owner=request.owner)")
+    src_guard_index = text.find("_require_single_payload_var(source_ds, owner=request.owner)")
     as_quat_index = text.find("quat_source = source.as_quat(validate=False)")
     ctx_guard_index = text.find("var_name = _require_single_payload_var(context.ds, owner=request.owner)")
     assert src_guard_index != -1

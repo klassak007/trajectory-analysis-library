@@ -194,7 +194,7 @@ def test_linalg_core_001_array_core_role_declaration_roundtrip() -> None:
     """ID: LINALG_CORE_001_array_core_role_declaration_roundtrip."""
     base = _matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="r", col="c")
     arr = Array(base).set_core_dims("r", "c")
-    declared, _, _, core_dims = xr_roles(arr.unsafe_data)
+    declared, _, _, core_dims = xr_roles(arr.as_dataset(copy="none"))
     assert declared
     assert core_dims == ("r", "c")
 
@@ -203,12 +203,12 @@ def test_linalg_hard_096_array_typed_lifecycle_parity() -> None:
     """ID: LINALG_HARD_096_array_typed_lifecycle_parity."""
     base = _vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis")
     from_ao = Array(base)
-    from_ds = Array(base.unsafe_data)
+    from_ds = Array(base.as_dataset(copy="none"))
 
     assert isinstance(from_ao, Array)
     assert isinstance(from_ds, Array)
-    xr.testing.assert_identical(from_ao.unsafe_data, from_ds.unsafe_data)
-    assert xr_roles(from_ao.unsafe_data) == xr_roles(from_ds.unsafe_data)
+    xr.testing.assert_identical(from_ao.as_dataset(copy="none"), from_ds.as_dataset(copy="none"))
+    assert xr_roles(from_ao.as_dataset(copy="none")) == xr_roles(from_ds.as_dataset(copy="none"))
 
 
 def test_linalg_hard_100_array_core_dims_init_options_parity() -> None:
@@ -216,7 +216,7 @@ def test_linalg_hard_100_array_core_dims_init_options_parity() -> None:
     base = _vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis")
     direct = Array(base, core_dims=("axis",))
     via_setter = Array(base).set_core_dims("axis")
-    xr.testing.assert_identical(direct.unsafe_data, via_setter.unsafe_data)
+    xr.testing.assert_identical(direct.as_dataset(copy="none"), via_setter.as_dataset(copy="none"))
 
     raw = xr.Dataset(
         {"x": (("sample", "axis"), np.arange(6, dtype=float).reshape(2, 3))},
@@ -230,8 +230,8 @@ def test_linalg_core_002_vector_matrix_core_shape_validation() -> None:
     """ID: LINALG_CORE_002_vector_matrix_core_shape_validation."""
     base = _matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="r", col="c")
     arr = Array(base)
-    assert xr_roles(arr.set_vector_axis("c").unsafe_data)[3] == ("c",)
-    assert xr_roles(arr.set_matrix_axes("r", "c").unsafe_data)[3] == ("r", "c")
+    assert xr_roles(arr.set_vector_axis("c").as_dataset(copy="none"))[3] == ("c",)
+    assert xr_roles(arr.set_matrix_axes("r", "c").as_dataset(copy="none"))[3] == ("r", "c")
     with pytest.raises(ValueError):
         arr.set_matrix_axes("r", "r")
     with pytest.raises(ValueError):
@@ -247,18 +247,18 @@ def test_linalg_core_003_matmul_strict_role_contraction() -> None:
     left = Array(_matrix_ao(left_vals, row="row", col="mid"))
     right = Array(_matrix_ao(right_vals, row="mid", col="out"))
     out = matmul(left, right)
-    expected = xr.dot(left.unsafe_data["x"], right.unsafe_data["x"], dim=["mid"]).rename("datavar")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
-    assert list(out.unsafe_data.data_vars) == ["datavar"]
-    assert not any(name.endswith("_matmul_x") for name in out.unsafe_data.data_vars)
-    assert xr_roles(out.unsafe_data)[3] == ("row", "out")
+    expected = xr.dot(left.as_dataset(copy="none")["x"], right.as_dataset(copy="none")["x"], dim=["mid"]).rename("datavar")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
+    assert list(out.as_dataset(copy="none").data_vars) == ["datavar"]
+    assert not any(name.endswith("_matmul_x") for name in out.as_dataset(copy="none").data_vars)
+    assert xr_roles(out.as_dataset(copy="none"))[3] == ("row", "out")
 
 
 def test_linalg_core_004_matmul_label_alignment_not_positional() -> None:
     """ID: LINALG_CORE_004_matmul_label_alignment_not_positional."""
     left = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="mid")
     right = _matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 3, 2), row="mid", col="out")
-    right_ds = right.unsafe_data.transpose("trial", "sample", "mid", "out")
+    right_ds = right.as_dataset(copy="none").transpose("trial", "sample", "mid", "out")
     right_ao = AnalysisObject.from_data(
         right_ds,
         sequence_dim="sample",
@@ -267,8 +267,8 @@ def test_linalg_core_004_matmul_label_alignment_not_positional() -> None:
         validate=True,
     )
     out = matmul(Array(left), Array(right_ao))
-    expected = xr.dot(left.unsafe_data["x"], right_ao.unsafe_data["x"], dim=["mid"]).rename("datavar")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
+    expected = xr.dot(left.as_dataset(copy="none")["x"], right_ao.as_dataset(copy="none")["x"], dim=["mid"]).rename("datavar")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
 
 
 def test_linalg_core_005_matmul_ambiguous_roles_fail_closed() -> None:
@@ -313,9 +313,9 @@ def test_linalg_core_006_core_role_aliases_parity() -> None:
     """ID: LINALG_CORE_006_core_role_aliases_parity."""
     base = _matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="r", col="c")
     arr = Array(base)
-    xr.testing.assert_identical(arr.set_core_dims("r", "c").unsafe_data, arr.as_core("r", "c").unsafe_data)
-    xr.testing.assert_identical(arr.set_vector_axis("c").unsafe_data, arr.axis("c").unsafe_data)
-    xr.testing.assert_identical(arr.set_matrix_axes("r", "c").unsafe_data, arr.rc("r", "c").unsafe_data)
+    xr.testing.assert_identical(arr.set_core_dims("r", "c").as_dataset(copy="none"), arr.as_core("r", "c").as_dataset(copy="none"))
+    xr.testing.assert_identical(arr.set_vector_axis("c").as_dataset(copy="none"), arr.axis("c").as_dataset(copy="none"))
+    xr.testing.assert_identical(arr.set_matrix_axes("r", "c").as_dataset(copy="none"), arr.rc("r", "c").as_dataset(copy="none"))
 
 
 def test_linalg_hard_001_operand_var_must_contain_declared_semantic_dims() -> None:
@@ -356,13 +356,13 @@ def test_linalg_hard_002_param_coord_and_validity_canonicalized_after_matmul() -
         col="out",
     )
     out = matmul(Array(left), Array(right))
-    assert read_param_coord_name(out.unsafe_data) == "tau"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
-    assert out.unsafe_data.coords["tau"].dims == ("trial", "sample")
-    assert out.unsafe_data.coords["sample_size"].dims == ("trial",)
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "tau"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
+    assert out.as_dataset(copy="none").coords["tau"].dims == ("trial", "sample")
+    assert out.as_dataset(copy="none").coords["sample_size"].dims == ("trial",)
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["tau"].values,
-        left.unsafe_data.coords["tau"].values,
+        out.as_dataset(copy="none").coords["tau"].values,
+        left.as_dataset(copy="none").coords["tau"].values,
     )
 
 
@@ -374,9 +374,9 @@ def test_linalg_hard_003_allow_vector_row_convention_option_enforced() -> None:
         _ = matmul(left, right, opts=MatmulOptions(allow_vector_row_convention=False))
 
     out = matmul(left, right, opts=MatmulOptions(allow_vector_row_convention=True))
-    expected = xr.dot(left.unsafe_data["x"], right.unsafe_data["x"], dim=["mid"]).rename("datavar")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
-    assert xr_roles(out.unsafe_data)[3] == ("out",)
+    expected = xr.dot(left.as_dataset(copy="none")["x"], right.as_dataset(copy="none")["x"], dim=["mid"]).rename("datavar")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
+    assert xr_roles(out.as_dataset(copy="none"))[3] == ("out",)
 
 
 def test_linalg_hard_004_set_matrix_axes_non_string_rejected_at_typed_boundary() -> None:
@@ -419,7 +419,7 @@ def test_linalg_hard_007_matmul_plain_ao_inputs_fallback_to_array() -> None:
     out = matmul(left_ao, right_ao)
     assert type(out) is Array
 
-    out_ds = matmul(left_ao.unsafe_data, right_ao.unsafe_data)
+    out_ds = matmul(left_ao.as_dataset(copy="none"), right_ao.as_dataset(copy="none"))
     assert type(out_ds) is Array
 
 
@@ -463,7 +463,7 @@ def test_linalg_hard_010_array_constructor_core_dims_accepts_declared_roles_inpu
         validate=True,
     )
     arr = Array(base, core_dims=("axis",))
-    assert xr_roles(arr.unsafe_data) == (True, "sample", (), ("axis",))
+    assert xr_roles(arr.as_dataset(copy="none")) == (True, "sample", (), ("axis",))
 
 
 def test_linalg_core_007_add_strict_core_dims_match() -> None:
@@ -471,11 +471,11 @@ def test_linalg_core_007_add_strict_core_dims_match() -> None:
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
     right = Array(_matrix_ao((np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 2.0) / 10.0, row="row", col="col"))
     out = add(left, right)
-    expected = (left.unsafe_data["x"] + right.unsafe_data["x"]).rename("datavar")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
-    assert list(out.unsafe_data.data_vars) == ["datavar"]
-    assert not any("_add_" in name for name in out.unsafe_data.data_vars)
-    assert xr_roles(out.unsafe_data)[3] == ("row", "col")
+    expected = (left.as_dataset(copy="none")["x"] + right.as_dataset(copy="none")["x"]).rename("datavar")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
+    assert list(out.as_dataset(copy="none").data_vars) == ["datavar"]
+    assert not any("_add_" in name for name in out.as_dataset(copy="none").data_vars)
+    assert xr_roles(out.as_dataset(copy="none"))[3] == ("row", "col")
 
 
 def test_linalg_core_008_sub_strict_core_dims_match() -> None:
@@ -483,18 +483,18 @@ def test_linalg_core_008_sub_strict_core_dims_match() -> None:
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
     right = Array(_matrix_ao((np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 5.0) / 7.0, row="row", col="col"))
     out = sub(left, right)
-    expected = (left.unsafe_data["x"] - right.unsafe_data["x"]).rename("datavar")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
-    assert list(out.unsafe_data.data_vars) == ["datavar"]
-    assert not any("_sub_" in name for name in out.unsafe_data.data_vars)
-    assert xr_roles(out.unsafe_data)[3] == ("row", "col")
+    expected = (left.as_dataset(copy="none")["x"] - right.as_dataset(copy="none")["x"]).rename("datavar")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
+    assert list(out.as_dataset(copy="none").data_vars) == ["datavar"]
+    assert not any("_sub_" in name for name in out.as_dataset(copy="none").data_vars)
+    assert xr_roles(out.as_dataset(copy="none"))[3] == ("row", "col")
 
 
 def test_linalg_core_009_add_sub_label_alignment_not_positional() -> None:
     """ID: LINALG_CORE_009_add_sub_label_alignment_not_positional."""
     left = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col")
     right = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 1.0, row="row", col="col")
-    right_ds = right.unsafe_data.transpose("trial", "sample", "row", "col")
+    right_ds = right.as_dataset(copy="none").transpose("trial", "sample", "row", "col")
     right_ao = AnalysisObject.from_data(
         right_ds,
         sequence_dim="sample",
@@ -504,22 +504,22 @@ def test_linalg_core_009_add_sub_label_alignment_not_positional() -> None:
     )
     add_out = add(Array(left), Array(right_ao))
     sub_out = sub(Array(left), Array(right_ao))
-    expected_add = (left.unsafe_data["x"] + right_ao.unsafe_data["x"]).rename("datavar")
-    expected_sub = (left.unsafe_data["x"] - right_ao.unsafe_data["x"]).rename("datavar")
-    xr.testing.assert_allclose(add_out.unsafe_data["datavar"], expected_add)
-    xr.testing.assert_allclose(sub_out.unsafe_data["datavar"], expected_sub)
+    expected_add = (left.as_dataset(copy="none")["x"] + right_ao.as_dataset(copy="none")["x"]).rename("datavar")
+    expected_sub = (left.as_dataset(copy="none")["x"] - right_ao.as_dataset(copy="none")["x"]).rename("datavar")
+    xr.testing.assert_allclose(add_out.as_dataset(copy="none")["datavar"], expected_add)
+    xr.testing.assert_allclose(sub_out.as_dataset(copy="none")["datavar"], expected_sub)
 
 
 def test_linalg_core_010_add_sub_alias_operator_parity() -> None:
     """ID: LINALG_CORE_010_add_sub_alias_operator_parity."""
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
     right = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 3.0, row="row", col="col"))
-    xr.testing.assert_identical(add(left, right).unsafe_data, (left + right).unsafe_data)
-    xr.testing.assert_identical(sub(left, right).unsafe_data, (left - right).unsafe_data)
+    xr.testing.assert_identical(add(left, right).as_dataset(copy="none"), (left + right).as_dataset(copy="none"))
+    xr.testing.assert_identical(sub(left, right).as_dataset(copy="none"), (left - right).as_dataset(copy="none"))
 
     left_ao = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col")
-    xr.testing.assert_identical(add(left_ao, right).unsafe_data, (left_ao + right).unsafe_data)
-    xr.testing.assert_identical(sub(left_ao, right).unsafe_data, (left_ao - right).unsafe_data)
+    xr.testing.assert_identical(add(left_ao, right).as_dataset(copy="none"), (left_ao + right).as_dataset(copy="none"))
+    xr.testing.assert_identical(sub(left_ao, right).as_dataset(copy="none"), (left_ao - right).as_dataset(copy="none"))
 
 
 def test_linalg_hard_011_add_sub_mismatched_core_dims_fail_closed() -> None:
@@ -537,7 +537,7 @@ def test_linalg_hard_012_add_sub_plain_ao_inputs_fallback_to_array() -> None:
     left_ao = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col")
     right_ao = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 2.0, row="row", col="col")
     out_add = add(left_ao, right_ao)
-    out_sub = sub(left_ao.unsafe_data, right_ao.unsafe_data)
+    out_sub = sub(left_ao.as_dataset(copy="none"), right_ao.as_dataset(copy="none"))
     assert type(out_add) is Array
     assert type(out_sub) is Array
 
@@ -592,9 +592,9 @@ def test_linalg_hard_015_add_sub_undeclared_operands_default_to_core_only_semant
     ao = AnalysisObject(raw)
     out_add = add(ao, ao)
     out_sub = sub(ao, ao)
-    xr.testing.assert_allclose(out_add.unsafe_data["datavar"], xr.ufuncs.add(raw["x"], raw["x"]))
-    xr.testing.assert_allclose(out_sub.unsafe_data["datavar"], xr.ufuncs.subtract(raw["x"], raw["x"]))
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out_add.unsafe_data)
+    xr.testing.assert_allclose(out_add.as_dataset(copy="none")["datavar"], xr.ufuncs.add(raw["x"], raw["x"]))
+    xr.testing.assert_allclose(out_sub.as_dataset(copy="none")["datavar"], xr.ufuncs.subtract(raw["x"], raw["x"]))
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out_add.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim is None
     assert batch_dims == ()
@@ -632,7 +632,7 @@ def test_topo_core_012_unary_operation_class_topology_preservation_parity() -> N
     )
     matrix = Array(_matrix_ao(values, row="row", col="col"))
     out = inv(matrix)
-    _, sequence_dim, batch_dims, _ = read_roles(out.unsafe_data)
+    _, sequence_dim, batch_dims, _ = read_roles(out.as_dataset(copy="none"))
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
 
@@ -663,8 +663,8 @@ def test_topo_core_014_linalg_require_declared_roles_false_binary_undeclared_sup
     assert plan.sequence_dim is None
     assert plan.batch_dims == ()
     assert len(plan.operands) == 2
-    xr.testing.assert_identical(plan.operands[0].data, left.unsafe_data["x"])
-    xr.testing.assert_identical(plan.operands[1].data, right.unsafe_data["x"])
+    xr.testing.assert_identical(plan.operands[0].data, left.as_dataset(copy="none")["x"])
+    xr.testing.assert_identical(plan.operands[1].data, right.as_dataset(copy="none")["x"])
 
 
 def test_topo_hard_009_linalg_strict_exact_rejects_core_label_mismatch_before_kernel() -> None:
@@ -674,7 +674,7 @@ def test_topo_hard_009_linalg_strict_exact_rejects_core_label_mismatch_before_ke
         (np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 5.0) / 11.0,
         row="row",
         col="col",
-    ).unsafe_data.assign_coords(row=np.asarray([10, 11, 12], dtype=np.int64))
+    ).as_dataset(copy="none").assign_coords(row=np.asarray([10, 11, 12], dtype=np.int64))
     right = AnalysisObject.from_data(
         right_ds,
         sequence_dim="sample",
@@ -693,7 +693,7 @@ def test_topo_hard_010_linalg_elementwise_no_silent_inner_core_alignment_under_s
         (np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 3.0) / 7.0,
         row="row",
         col="col",
-    ).unsafe_data.assign_coords(row=np.asarray([1, 2, 3], dtype=np.int64))
+    ).as_dataset(copy="none").assign_coords(row=np.asarray([1, 2, 3], dtype=np.int64))
     right = Array(
         AnalysisObject.from_data(
             right_ds,
@@ -734,8 +734,8 @@ def test_bcast_core_007_linalg_optin_broadcast_path_uses_shared_core_policy() ->
         )
     )
     out = add(left.b(), right)
-    expected = left.unsafe_data["x"] + right.unsafe_data["x"]
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected.rename("datavar"))
+    expected = left.as_dataset(copy="none")["x"] + right.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected.rename("datavar"))
 
 
 def test_bcast_core_028_semantic_default_enabled_for_approved_ordinary_elementwise_families() -> None:
@@ -749,8 +749,8 @@ def test_bcast_core_028_semantic_default_enabled_for_approved_ordinary_elementwi
         )
     )
     out = add(left, right)
-    expected = left.unsafe_data["x"] + right.unsafe_data["x"]
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected.rename("datavar"))
+    expected = left.as_dataset(copy="none")["x"] + right.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected.rename("datavar"))
 
 
 def test_bcast_core_032_b_helper_remains_valid_on_semantic_default_families() -> None:
@@ -765,7 +765,7 @@ def test_bcast_core_032_b_helper_remains_valid_on_semantic_default_families() ->
     )
     out_default = add(left, right)
     out_optin = add(left.b(), right)
-    xr.testing.assert_identical(out_default.unsafe_data, out_optin.unsafe_data)
+    xr.testing.assert_identical(out_default.as_dataset(copy="none"), out_optin.as_dataset(copy="none"))
 
 
 def test_bcast_core_033_unary_default_path_preserves_topology_without_synthetic_materialization() -> None:
@@ -840,7 +840,7 @@ def test_bcast_core_034_sequence_exact_and_batch_exact_defaults_remain_determini
         (np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 1.0) / 5.0,
         row="row",
         col="col",
-    ).unsafe_data.assign_coords(sample=np.asarray([10, 11], dtype=np.int64))
+    ).as_dataset(copy="none").assign_coords(sample=np.asarray([10, 11], dtype=np.int64))
     right = Array(
         AnalysisObject.from_data(
             right_ds,
@@ -908,7 +908,7 @@ def test_bcast_hard_022_topology_mismatch_still_fails_fast_under_semantic_defaul
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
     right = Array(
         AnalysisObject.from_data(
-            _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col").unsafe_data.rename(
+            _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col").as_dataset(copy="none").rename(
                 {"sample": "time"}
             ),
             sequence_dim="time",
@@ -934,7 +934,7 @@ def test_bcast_hard_025_owner_prefixed_boundaries_preserved_after_default_flip()
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
     right = Array(
         AnalysisObject.from_data(
-            _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col").unsafe_data.rename(
+            _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col").as_dataset(copy="none").rename(
                 {"sample": "time"}
             ),
             sequence_dim="time",
@@ -954,9 +954,9 @@ def test_bcast_core_042_numpy_named_core_policy_supports_scalar_and_matching_nam
     with pytest.raises(ValueError, match="core_dims cardinality"):
         _ = add(left, right)
     out = add(left.a(core_policy="numpy_named"), right)
-    expected = left.unsafe_data["x"] + right.unsafe_data["x"]
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected.rename("datavar"))
-    assert xr_roles(out.unsafe_data)[3] == ("axis",)
+    expected = left.as_dataset(copy="none")["x"] + right.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected.rename("datavar"))
+    assert xr_roles(out.as_dataset(copy="none"))[3] == ("axis",)
 
 
 def test_bcast_core_044_conflicting_intent_merge_fails_closed() -> None:

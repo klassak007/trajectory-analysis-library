@@ -455,7 +455,7 @@ def solve(
     ...     core_dims=("row",),
     ...     validate=True,
     ... ))
-    >>> solve(A, b, opts=SolveOptions(method="solve")).unsafe_data["datavar"].values.tolist()
+    >>> solve(A, b, opts=SolveOptions(method="solve")).as_dataset()["datavar"].values.tolist()
     [[4.0, 5.0]]
     """
     owner = "linalg.solve"

@@ -74,7 +74,9 @@ docs = [
     "sphinx-autodoc-typehints>=3.0,<4.0",
 ]
 test = [
+    "import-linter>=2.14",
     "pytest>=8.4",
+    "ruff>=0.16.5",
     "tal[astro,docs,frames,geo,viz]",
 ]
 dev = [
@@ -82,6 +84,11 @@ dev = [
     "tal[notebooks,test]",
 ]
 full = ["tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]"]
+
+[tool.pytest.ini_options]
+markers = [
+    "phase_guard(owner): temporary architecture guard owned by an active contract or slice",
+]
 
 # Packaging: only ship the `tal` Python package (exclude non-package top-level dirs like `contracts/`).
 [tool.setuptools.packages.find]

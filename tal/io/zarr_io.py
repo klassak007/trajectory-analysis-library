@@ -5,6 +5,7 @@ from typing import Any
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.schema_validate import validate_schema, validate_schema_structure
 
 from .adapter_cleanup import suppress_cleanup_during_active_error
@@ -71,7 +72,7 @@ def _transfer_zarr_close_ownership(
     *,
     source: xr.Dataset,
 ) -> "AnalysisObject":
-    target = ao.unsafe_data
+    target = analysis_object_dataset(ao)
     if target is source:
         return ao
     target_close = getattr(target, "_close", None)
@@ -114,7 +115,7 @@ def write_analysis_object_zarr(
     options = coerce_zarr_write_options(opts, owner=owner)
     if not isinstance(store, str) or not store:
         raise TypeError(f"{owner}: store must be a non-empty string path.")
-    ds = _validate_zarr_write_dataset(ao.unsafe_data, owner=owner)
+    ds = _validate_zarr_write_dataset(analysis_object_dataset(ao), owner=owner)
     try:
         return ds.to_zarr(store, **_zarr_write_kwargs(options))
     except Exception as exc:  # pragma: no cover - backend-specific failure envelope.

@@ -154,7 +154,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
         >>> opts = GeodeticOptions(longitude_wrap="[0, 360)")
         >>> lla = GeodeticPosition.from_lla(ao, opts=opts)
-        >>> lla.unsafe_data.attrs["tal"]["ext"]["geo"]["longitude_wrap"]
+        >>> lla.as_dataset().attrs["tal"]["ext"]["geo"]["longitude_wrap"]
         '[0, 360)'
         """
         from .conversion import from_lla
@@ -221,7 +221,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> opts = GeodeticOptions(longitude_wrap="[0, 360)")
         >>> lla = GeodeticPosition.from_ecef(Position(ao), opts=opts)
-        >>> list(lla.unsafe_data["lla"].values)
+        >>> list(lla.as_dataset()["lla"].values)
         ['lat', 'lon', 'alt']
         """
         from .conversion import from_ecef
@@ -282,7 +282,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
         >>> opts = GeodeticOptions(longitude_wrap="[0, 360)")
         >>> ecef = GeodeticPosition.from_lla(ao).to_ecef(opts=opts)
-        >>> list(ecef.unsafe_data["axis"].values)
+        >>> list(ecef.as_dataset()["axis"].values)
         ['x', 'y', 'z']
         """
         from .conversion import to_ecef
@@ -346,7 +346,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
         >>> opts = ENUOptions(output_frame="site_enu")
         >>> enu = GeodeticPosition.from_lla(ao).to_enu(LocalOrigin(45.0, -75.0, 100.0), opts=opts)
-        >>> list(enu.unsafe_data["axis"].values)
+        >>> list(enu.as_dataset()["axis"].values)
         ['x', 'y', 'z']
         """
         from .local import geodetic_to_enu
@@ -402,7 +402,7 @@ class GeodeticPosition(TypedAnalysisObject):
         ... )
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
         >>> projected = GeodeticPosition.from_lla(ao).to_crs("EPSG:32611")
-        >>> list(projected.unsafe_data["projected"].values)
+        >>> list(projected.as_dataset()["projected"].values)
         ['easting', 'northing', 'height']
         """
         from .crs_transform import transform_crs
@@ -463,7 +463,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
         >>> opts = GeodesicOptions(include_altitude=True)
         >>> out = GeodeticPosition.from_lla(ao).distance_to(GeodeticPosition.from_lla(ao), opts=opts)
-        >>> tuple(out.unsafe_data.attrs["tal"]["core"]["roles"]["core_dims"])
+        >>> tuple(out.as_dataset().attrs["tal"]["core"]["roles"]["core_dims"])
         ()
         """
         from .distance import distance_to
@@ -524,7 +524,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
         >>> opts = GeodesicOptions(include_altitude=True)
         >>> out = GeodeticPosition.from_lla(ao).initial_bearing_to(GeodeticPosition.from_lla(ao), opts=opts)
-        >>> "initial_bearing_deg" in out.unsafe_data
+        >>> "initial_bearing_deg" in out.as_dataset()
         True
         """
         from .distance import initial_bearing_to
@@ -586,7 +586,7 @@ class GeodeticPosition(TypedAnalysisObject):
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
         >>> opts = GeodesicOptions(include_altitude=True)
         >>> out = GeodeticPosition.from_lla(ao).final_bearing_to(GeodeticPosition.from_lla(ao), opts=opts)
-        >>> "final_bearing_deg" in out.unsafe_data
+        >>> "final_bearing_deg" in out.as_dataset()
         True
         """
         from .distance import final_bearing_to

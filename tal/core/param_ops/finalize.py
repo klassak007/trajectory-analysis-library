@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..ao_internal import finalize_structural
 from ..orchestration.finalize import transfer_dataset_attrs
 from ..validity_finalize import assign_sequence_size_from_valid_mask
@@ -80,7 +81,7 @@ def finalize_param_output(
         )
     out = finalize_structural(context.ao, ds_out, validate=validate)
     if not trajectory:
-        core = out.unsafe_data.attrs.get("tal", {}).get("core", {})
+        core = analysis_object_dataset(out).attrs.get("tal", {}).get("core", {})
         if isinstance(core, dict) and "validity" in core:
             out = out.set_validity(sequence_size_coord=None, validate=validate)
     return out

@@ -47,7 +47,7 @@ def _pose_from_translation_and_quat(translation: np.ndarray, quat: np.ndarray) -
 
 
 def _with_sample_and_param(value, *, sample: list[int], param_name: str, param: list[float]):
-    ds = value.unsafe_data.assign_coords(sample=sample, **{param_name: ("sample", param)})
+    ds = value.as_dataset(copy="none").assign_coords(sample=sample, **{param_name: ("sample", param)})
     return value.__class__(ds).set_param_coord(name=param_name, validate=False)
 
 
@@ -71,9 +71,9 @@ def test_spatial_core_075_position_to_frame_identity_parent_eq_dst_deterministic
 
     out = position.to_frame("world", edge_pose_fn=resolver, opts=PathSolveOptions(graph=graph), validate=True)
     assert calls["count"] == 0
-    assert get_frames(out.unsafe_data) == ("world", "tool")
-    assert get_position_rep(out.unsafe_data, owner="test") == "cart"
-    np.testing.assert_allclose(out.unsafe_data["position"].values, position.unsafe_data["position"].values, atol=1e-9, rtol=0.0)
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "tool")
+    assert get_position_rep(out.as_dataset(copy="none"), owner="test") == "cart"
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values, position.as_dataset(copy="none")["position"].values, atol=1e-9, rtol=0.0)
 
 
 def test_spatial_core_076_position_to_frame_chain_matches_c1_plus_apply_reference() -> None:
@@ -113,8 +113,8 @@ def test_spatial_core_076_position_to_frame_chain_matches_c1_plus_apply_referenc
         out = position.to_frame("world", edge_pose_fn=resolver, opts=opts, validate=True)
         reference_pose = solve_pose_path_transform("sensor", "world", edge_pose_fn=resolver, opts=opts)
         reference = reference_pose.apply(position, validate=True)
-    assert get_frames(out.unsafe_data) == ("world", "probe")
-    np.testing.assert_allclose(out.unsafe_data["position"].values, reference.unsafe_data["position"].values, atol=1e-6, rtol=0.0)
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "probe")
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values, reference.as_dataset(copy="none")["position"].values, atol=1e-6, rtol=0.0)
 
 
 def test_spatial_core_077_rotation_class_solve_path_transform_wrapper_parity_with_c1_function_api() -> None:
@@ -132,11 +132,11 @@ def test_spatial_core_077_rotation_class_solve_path_transform_wrapper_parity_wit
         opts = PathSolveOptions(graph=graph)
         out_class = Rotation.solve_path_transform(sensor, world, edge_rotation_fn=resolver, opts=opts, validate=True)
         out_func = solve_rotation_path_transform(sensor, world, edge_rotation_fn=resolver, opts=opts)
-    assert get_rotation_rep(out_class.unsafe_data, owner="test") == "quat"
-    assert get_frames(out_class.unsafe_data) == get_frames(out_func.unsafe_data)
+    assert get_rotation_rep(out_class.as_dataset(copy="none"), owner="test") == "quat"
+    assert get_frames(out_class.as_dataset(copy="none")) == get_frames(out_func.as_dataset(copy="none"))
     np.testing.assert_allclose(
-        out_class.as_matrix(validate=True).unsafe_data["rotation"].values,
-        out_func.as_matrix(validate=True).unsafe_data["rotation"].values,
+        out_class.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values,
+        out_func.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-6,
         rtol=0.0,
     )
@@ -163,11 +163,11 @@ def test_spatial_core_078_pose_class_solve_path_transform_wrapper_parity_with_c1
         opts = PathSolveOptions(graph=graph)
         out_class = Pose.solve_path_transform(sensor, world, edge_pose_fn=resolver, opts=opts, validate=True)
         out_func = solve_pose_path_transform(sensor, world, edge_pose_fn=resolver, opts=opts)
-    assert get_pose_rep(out_class.unsafe_data, owner="test") == "components"
-    assert get_frames(out_class.unsafe_data) == get_frames(out_func.unsafe_data)
+    assert get_pose_rep(out_class.as_dataset(copy="none"), owner="test") == "components"
+    assert get_frames(out_class.as_dataset(copy="none")) == get_frames(out_func.as_dataset(copy="none"))
     np.testing.assert_allclose(
-        out_class.as_matrix(validate=True).unsafe_data["pose_matrix"].values,
-        out_func.as_matrix(validate=True).unsafe_data["pose_matrix"].values,
+        out_class.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values,
+        out_func.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values,
         atol=1e-6,
         rtol=0.0,
     )
@@ -200,9 +200,9 @@ def test_spatial_core_079_position_to_frame_accepts_frame_and_string_dst_with_ex
         opts = PathSolveOptions(graph=graph)
         out_frame = position.to_frame(world, edge_pose_fn=resolver, opts=opts, validate=True)
         out_str = position.to_frame("world", edge_pose_fn=resolver, opts=opts, validate=True)
-    np.testing.assert_allclose(out_frame.unsafe_data["position"].values, out_str.unsafe_data["position"].values, atol=1e-6, rtol=0.0)
-    assert get_frames(out_frame.unsafe_data) == ("world", "probe")
-    assert get_frames(out_str.unsafe_data) == ("world", "probe")
+    np.testing.assert_allclose(out_frame.as_dataset(copy="none")["position"].values, out_str.as_dataset(copy="none")["position"].values, atol=1e-6, rtol=0.0)
+    assert get_frames(out_frame.as_dataset(copy="none")) == ("world", "probe")
+    assert get_frames(out_str.as_dataset(copy="none")) == ("world", "probe")
 
 
 def test_bcast_hard_041_path_solve_and_frame_api_behavior_unchanged() -> None:
@@ -247,8 +247,8 @@ def test_bcast_hard_041_path_solve_and_frame_api_behavior_unchanged() -> None:
             opts=opts,
             validate=True,
         )
-    np.testing.assert_allclose(out_plain.unsafe_data["position"].values, out_intent.unsafe_data["position"].values, atol=1e-6, rtol=0.0)
-    assert get_frames(out_plain.unsafe_data) == get_frames(out_intent.unsafe_data)
+    np.testing.assert_allclose(out_plain.as_dataset(copy="none")["position"].values, out_intent.as_dataset(copy="none")["position"].values, atol=1e-6, rtol=0.0)
+    assert get_frames(out_plain.as_dataset(copy="none")) == get_frames(out_intent.as_dataset(copy="none"))
 
 
 def test_spatial_hard_087_position_to_frame_rejects_unframed_input_without_parent_fail_closed() -> None:
@@ -333,7 +333,7 @@ def test_spatial_hard_092_position_to_frame_dask_lazy_kernel_failure_preserves_c
             validate=True,
         )
     with pytest.raises(ValueError) as exc_info:
-        out.unsafe_data["position"].compute()
+        out.as_dataset(copy="none")["position"].compute()
     message = str(exc_info.value)
     assert "spatial.position.to_frame" in message
     assert "spatial.pose.apply" not in message
@@ -430,11 +430,11 @@ def test_spatial_core_c5_001_express_in_changes_representation_without_changing_
             edge_rotation_fn=lambda child, parent: edge_map[(child.id, parent.id)],
             opts=PathSolveOptions(graph=graph),
         )
-    assert get_frames(out.unsafe_data) == ("sensor", "probe")
-    assert get_expressed_in(out.unsafe_data, owner="test") == "world"
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
-    expected = basis_m @ position.unsafe_data["position"].values[0]
-    np.testing.assert_allclose(out.unsafe_data["position"].values[0], expected, atol=1e-6, rtol=0.0)
+    assert get_frames(out.as_dataset(copy="none")) == ("sensor", "probe")
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "world"
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
+    expected = basis_m @ position.as_dataset(copy="none")["position"].values[0]
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values[0], expected, atol=1e-6, rtol=0.0)
 
 
 def test_spatial_hard_c5_006_express_in_identity_short_circuit_uses_resolved_expressed_in_not_parent() -> None:
@@ -457,7 +457,7 @@ def test_spatial_hard_c5_006_express_in_identity_short_circuit_uses_resolved_exp
         )
         source = Position(
             set_expressed_in(
-                base.unsafe_data,
+                base.as_dataset(copy="none"),
                 expressed_in="map",
                 validate=False,
                 owner="test",
@@ -477,10 +477,10 @@ def test_spatial_hard_c5_006_express_in_identity_short_circuit_uses_resolved_exp
         validate=True,
     )
     assert calls["count"] == 0
-    assert get_expressed_in(out_identity.unsafe_data, owner="test") == "map"
+    assert get_expressed_in(out_identity.as_dataset(copy="none"), owner="test") == "map"
     np.testing.assert_allclose(
-        out_identity.unsafe_data["position"].values,
-        source.unsafe_data["position"].values,
+        out_identity.as_dataset(copy="none")["position"].values,
+        source.as_dataset(copy="none")["position"].values,
         atol=1e-9,
         rtol=0.0,
     )
@@ -492,7 +492,7 @@ def test_spatial_hard_c5_006_express_in_identity_short_circuit_uses_resolved_exp
         validate=True,
     )
     assert calls["count"] > 0
-    assert get_expressed_in(out_non_identity.unsafe_data, owner="test") == "sensor"
+    assert get_expressed_in(out_non_identity.as_dataset(copy="none"), owner="test") == "sensor"
 
 
 def test_spatial_core_c5_003_to_frame_and_express_in_semantics_are_distinct() -> None:
@@ -535,9 +535,9 @@ def test_spatial_core_c5_003_to_frame_and_express_in_semantics_are_distinct() ->
             opts=opts,
             validate=True,
         )
-    assert get_frames(rel_changed.unsafe_data) == ("world", "probe")
-    assert get_frames(rep_changed.unsafe_data) == ("sensor", "probe")
-    assert get_expressed_in(rep_changed.unsafe_data, owner="test") == "world"
+    assert get_frames(rel_changed.as_dataset(copy="none")) == ("world", "probe")
+    assert get_frames(rep_changed.as_dataset(copy="none")) == ("sensor", "probe")
+    assert get_expressed_in(rep_changed.as_dataset(copy="none"), owner="test") == "world"
 
 
 def test_spatial_core_c5_004_configuration_express_in_supports_third_frame_representation_with_path_support() -> None:
@@ -571,12 +571,12 @@ def test_spatial_core_c5_004_configuration_express_in_supports_third_frame_repre
             edge_rotation_fn=lambda child, parent: edge_map[(child.id, parent.id)],
             opts=PathSolveOptions(graph=graph),
         )
-    assert get_frames(out.unsafe_data) == ("camera", "sensor")
-    assert get_expressed_in(out.unsafe_data, owner="test") == "world"
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
-    src_m = rotation.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    assert get_frames(out.as_dataset(copy="none")) == ("camera", "sensor")
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "world"
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
+    src_m = rotation.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     expected = basis_m.T @ src_m @ basis_m
-    out_m = out.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    out_m = out.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     np.testing.assert_allclose(out_m, expected, atol=1e-6, rtol=0.0)
 
 
@@ -619,18 +619,18 @@ def test_spatial_core_c5_006_pose_express_in_rotates_translation_without_origin_
             edge_pose_fn=lambda child, parent: edge_map[(child.id, parent.id)],
             opts=opts,
         )
-    basis_m = basis.as_matrix(validate=True).unsafe_data["pose_matrix"].values[0]
-    src_m = pose.as_matrix(validate=True).unsafe_data["pose_matrix"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values[0]
+    src_m = pose.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values[0]
     basis_r = basis_m[:3, :3]
     src_r = src_m[:3, :3]
     src_t = src_m[:3, 3]
     expected = np.eye(4, dtype=float)
     expected[:3, :3] = basis_r.T @ src_r @ basis_r
     expected[:3, 3] = basis_r @ src_t
-    out_m = out.as_matrix(validate=True).unsafe_data["pose_matrix"].values[0]
+    out_m = out.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values[0]
     np.testing.assert_allclose(out_m, expected, atol=1e-6, rtol=0.0)
-    assert get_frames(out.unsafe_data) == ("camera", "tool")
-    assert get_expressed_in(out.unsafe_data, owner="test") == "world"
+    assert get_frames(out.as_dataset(copy="none")) == ("camera", "tool")
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "world"
 
 
 def test_spatial_core_c8_001_frame_aware_ops_default_to_sequence_alignment_with_exact_join() -> None:
@@ -691,8 +691,8 @@ def test_spatial_core_c8_002_frame_aware_ops_support_explicit_param_alignment_wh
             opts=opts,
             validate=True,
         )
-    np.testing.assert_allclose(out.unsafe_data["position"].values[0], np.asarray([0.5, 1.0, 0.0]), atol=1e-6, rtol=0.0)
-    assert get_frames(out.unsafe_data) == ("world", "probe")
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values[0], np.asarray([0.5, 1.0, 0.0]), atol=1e-6, rtol=0.0)
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "probe")
 
 
 def test_spatial_core_c8_003_output_frame_metadata_derived_from_operation_not_alignment_side_effects() -> None:
@@ -723,8 +723,8 @@ def test_spatial_core_c8_003_output_frame_metadata_derived_from_operation_not_al
             opts=opts,
             validate=True,
         )
-    assert get_frames(out_sequence.unsafe_data) == ("sensor", "probe")
-    assert get_frames(out_param.unsafe_data) == ("sensor", "probe")
-    assert get_expressed_in(out_sequence.unsafe_data, owner="test") == "world"
-    assert get_expressed_in(out_param.unsafe_data, owner="test") == "world"
-    np.testing.assert_allclose(out_sequence.unsafe_data["position"].values, out_param.unsafe_data["position"].values, atol=1e-6, rtol=0.0)
+    assert get_frames(out_sequence.as_dataset(copy="none")) == ("sensor", "probe")
+    assert get_frames(out_param.as_dataset(copy="none")) == ("sensor", "probe")
+    assert get_expressed_in(out_sequence.as_dataset(copy="none"), owner="test") == "world"
+    assert get_expressed_in(out_param.as_dataset(copy="none"), owner="test") == "world"
+    np.testing.assert_allclose(out_sequence.as_dataset(copy="none")["position"].values, out_param.as_dataset(copy="none")["position"].values, atol=1e-6, rtol=0.0)

@@ -261,7 +261,7 @@ class EventsAccessor:
         ...     validate=True,
         ... )
         >>> out = ao.events.at_boundaries(Condition.compare(Condition.var("value"), "gt", 1.5), opts=AtBoundariesOptions(edges="enter"))
-        >>> out.unsafe_data["value"].values.tolist()
+        >>> out.as_dataset()["value"].values.tolist()
         [2.0]
         """
         options = coerce_at_boundaries_options(opts, owner="events.at_boundaries")
@@ -317,7 +317,7 @@ class EventsAccessor:
         ...     validate=True,
         ... )
         >>> out = ao.events.when(Condition.compare(Condition.var("value"), "gt", 1.5), opts=WhenOptions(layout="mask"))
-        >>> out.unsafe_data["value"].isnull().values.tolist()
+        >>> out.as_dataset()["value"].isnull().values.tolist()
         [True, False, False, True]
         """
         options = coerce_when_options(opts, owner="events.when")
@@ -373,7 +373,7 @@ class EventsAccessor:
         ...     validate=True,
         ... )
         >>> out = ao.events.around(Condition.compare(Condition.var("value"), "gt", 1.5), opts=AroundOptions(pre=0.0, post=0.0, dt=1.0))
-        >>> out.unsafe_data.sizes["event"]
+        >>> out.as_dataset().sizes["event"]
         1
         """
         options = coerce_around_options(opts, owner="events.around")

@@ -501,7 +501,7 @@ def read_ros_logs(
     ...     ao = read_ros_logs("robot_run.mcap", opts=opts)
     ... except (ImportError, ValueError, FileNotFoundError):
     ...     ao = None
-    >>> ao is None or "translation_x" in ao.unsafe_data.data_vars
+    >>> ao is None or "translation_x" in ao.as_dataset().data_vars
     True
     """
     owner = "tal.io.read_ros_logs"

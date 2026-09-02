@@ -44,7 +44,7 @@ def _position_dataset(
         core_dims=("axis",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _as_dataarray_with_schema(ds: xr.Dataset, *, var_name: str = "position") -> xr.DataArray:
@@ -88,7 +88,7 @@ def _position_temporal_dataset(
             param_coord="time_s" if include_param else None,
             sequence_size_coord="group_size",
             validate=not nonnumeric_param,
-        ).unsafe_data.copy(deep=True)
+        ).as_dataset(copy="none").copy(deep=True)
     values = np.asarray(
         [
             [1.0, 2.0, 3.0],
@@ -122,7 +122,7 @@ def _position_temporal_dataset(
         param_coord="time_s" if include_param else None,
         sequence_size_coord="group_size",
         validate=not nonnumeric_param,
-    ).unsafe_data.copy(deep=True)
+    ).as_dataset(copy="none").copy(deep=True)
 
 
 def test_spatial_core_001_position_constructor_accepts_ao_dataset_dataarray_deterministically() -> None:
@@ -138,9 +138,9 @@ def test_spatial_core_001_position_constructor_accepts_ao_dataset_dataarray_dete
     assert isinstance(from_ao, Position)
     assert isinstance(from_ds, Position)
     assert isinstance(from_da, Position)
-    assert get_position_rep(from_ao.unsafe_data, owner="test") == "cart"
-    assert get_position_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_position_rep(from_da.unsafe_data, owner="test") == "cart"
+    assert get_position_rep(from_ao.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_position_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_position_rep(from_da.as_dataset(copy="none"), owner="test") == "cart"
 
 
 def test_spatial_core_002_position_type_routing_rewrap_behavior_deterministic() -> None:
@@ -153,8 +153,8 @@ def test_spatial_core_002_position_type_routing_rewrap_behavior_deterministic() 
     assert isinstance(tagged, Position)
     assert isinstance(delta, Position)
     assert isinstance(out, Position)
-    assert get_position_intent(delta.unsafe_data, owner="test") == "delta"
-    assert get_position_intent(out.unsafe_data, owner="test") is None
+    assert get_position_intent(delta.as_dataset(copy="none"), owner="test") == "delta"
+    assert get_position_intent(out.as_dataset(copy="none"), owner="test") is None
 
 
 def test_spatial_core_011_position_single_type_no_translation_class_semantics_locked() -> None:
@@ -170,7 +170,7 @@ def test_spatial_core_012_position_frame_state_inference_policy_deterministic() 
     left = frame_retag(Position(_position_dataset(var_name="left")), parent="world", child="A", validate=True)
     right_unframed = Position(_position_dataset(var_name="right"))
     out_one_framed = left + right_unframed
-    assert get_frames(out_one_framed.unsafe_data) == ("world", "A")
+    assert get_frames(out_one_framed.as_dataset(copy="none")) == ("world", "A")
 
     right_chain = frame_retag(
         Position(_position_dataset(var_name="right_chain")),
@@ -179,11 +179,11 @@ def test_spatial_core_012_position_frame_state_inference_policy_deterministic() 
         validate=True,
     )
     out_chain = left + right_chain
-    assert get_frames(out_chain.unsafe_data) == ("world", "B")
+    assert get_frames(out_chain.as_dataset(copy="none")) == ("world", "B")
 
     unframed_delta = Position(_position_dataset(var_name="delta")).as_delta(validate=True)
     out_unframed = Position(_position_dataset(var_name="point")) + unframed_delta
-    assert get_frames(out_unframed.unsafe_data) == (None, None)
+    assert get_frames(out_unframed.as_dataset(copy="none")) == (None, None)
 
 
 def test_spatial_hard_001_position_constructor_type_mismatch_fail_closed() -> None:
@@ -237,7 +237,7 @@ def test_spatial_core_013_position_constructor_accepts_forward_compatible_spatia
 
     pos = Position(ds)
     assert isinstance(pos, Position)
-    assert get_position_intent(pos.unsafe_data, owner="test") == "delta"
+    assert get_position_intent(pos.as_dataset(copy="none"), owner="test") == "delta"
 
 
 def test_spatial_core_175_position_norm_magnitude_topology_and_metadata_preserved() -> None:
@@ -248,16 +248,16 @@ def test_spatial_core_175_position_norm_magnitude_topology_and_metadata_preserve
 
     assert isinstance(out_norm, Array)
     assert isinstance(out_mag, Array)
-    assert tuple(out_norm.unsafe_data.data_vars) == ("datavar",)
+    assert tuple(out_norm.as_dataset(copy="none").data_vars) == ("datavar",)
 
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out_norm.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out_norm.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ()
-    assert read_param_coord_name(out_norm.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out_norm.unsafe_data) == "group_size"
-    xr.testing.assert_identical(out_norm.unsafe_data, out_mag.unsafe_data)
+    assert read_param_coord_name(out_norm.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out_norm.as_dataset(copy="none")) == "group_size"
+    xr.testing.assert_identical(out_norm.as_dataset(copy="none"), out_mag.as_dataset(copy="none"))
 
 
 def test_spatial_core_176_position_norm_value_parity_and_ord_passthrough() -> None:
@@ -278,9 +278,9 @@ def test_spatial_core_176_position_norm_value_parity_and_ord_passthrough() -> No
     expected_l2 = np.asarray([5.0, 3.0], dtype="float64")
     expected_l1 = np.asarray([7.0, 5.0], dtype="float64")
 
-    np.testing.assert_allclose(out_l2.unsafe_data["datavar"].values, expected_l2)
-    np.testing.assert_allclose(out_l1.unsafe_data["datavar"].values, expected_l1)
-    xr.testing.assert_identical(out_l2.unsafe_data, pos.magnitude().unsafe_data)
+    np.testing.assert_allclose(out_l2.as_dataset(copy="none")["datavar"].values, expected_l2)
+    np.testing.assert_allclose(out_l1.as_dataset(copy="none")["datavar"].values, expected_l1)
+    xr.testing.assert_identical(out_l2.as_dataset(copy="none"), pos.magnitude().as_dataset(copy="none"))
 
 
 def test_spatial_hard_011_position_constructor_rejects_non_string_spatial_roles_keys() -> None:
@@ -326,9 +326,9 @@ def test_spatial_core_103_temporal_vector_like_explicit_query_grid_interpolation
     pos = Position(_position_temporal_dataset())
     out = pos.param.at([0.25, 0.75])
     assert isinstance(out, Position)
-    assert "sample" in out.unsafe_data["position"].dims
-    assert "axis" in out.unsafe_data["position"].dims
-    assert out.unsafe_data.sizes["sample"] == 2
+    assert "sample" in out.as_dataset(copy="none")["position"].dims
+    assert "axis" in out.as_dataset(copy="none")["position"].dims
+    assert out.as_dataset(copy="none").sizes["sample"] == 2
 
 
 def test_spatial_core_104_temporal_vector_like_resample_boundary_preserves_roles_frames_kind() -> None:
@@ -336,18 +336,18 @@ def test_spatial_core_104_temporal_vector_like_resample_boundary_preserves_roles
     pos = frame_retag(Position(_position_temporal_dataset()), parent="world", child="body", validate=True)
     out = pos.param.resample_to([0.0, 0.5, 1.0])
     assert isinstance(out, Position)
-    assert get_frames(out.unsafe_data) == ("world", "body")
-    assert "sample" in out.unsafe_data["position"].dims
-    assert "axis" in out.unsafe_data["position"].dims
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "body")
+    assert "sample" in out.as_dataset(copy="none")["position"].dims
+    assert "axis" in out.as_dataset(copy="none")["position"].dims
 
 
 def test_spatial_core_106_temporal_vector_like_valid_mask_and_query_validity_propagation_truthful() -> None:
     """ID: SPATIAL_CORE_106_temporal_vector_like_valid_mask_and_query_validity_propagation_truthful."""
     pos = Position(_position_temporal_dataset(batched=True))
     out = pos.param.resample_to(xr.DataArray([0.0, 0.5], dims=("sample",)))
-    assert "valid" in out.unsafe_data.coords
-    np.testing.assert_array_equal(out.unsafe_data.coords["group_size"].values, [2, 2])
-    np.testing.assert_array_equal(out.unsafe_data.coords["valid"].sel(trial="t0").values, [True, True])
+    assert "valid" in out.as_dataset(copy="none").coords
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["group_size"].values, [2, 2])
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["valid"].sel(trial="t0").values, [True, True])
 
 
 def test_spatial_core_108_temporal_vector_like_dask_lazy_boundary_preserved() -> None:
@@ -368,15 +368,15 @@ def test_spatial_core_108_temporal_vector_like_dask_lazy_boundary_preserved() ->
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), param_coord="time_s")
     out = Position(ao).param.at([0.25, 0.75])
     assert isinstance(out, Position)
-    assert getattr(out.unsafe_data["position"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none")["position"].data, "chunks", None) is not None
 
 
 def test_spatial_core_109_temporal_vector_like_param_and_sequence_size_metadata_preserved() -> None:
     """ID: SPATIAL_CORE_109_temporal_vector_like_param_and_sequence_size_metadata_preserved."""
     pos = Position(_position_temporal_dataset(batched=True))
     out = pos.param.resample_to([0.25, 0.75])
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "group_size"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "group_size"
 
 
 def test_spatial_hard_124_temporal_vector_like_rejects_missing_or_nonnumeric_param_coord() -> None:
@@ -406,7 +406,7 @@ def test_spatial_hard_126_temporal_vector_like_rejects_query_dim_collision_with_
 def test_spatial_hard_127_temporal_vector_like_rejects_non_numeric_sequence_payloads_for_interp() -> None:
     """ID: SPATIAL_HARD_127_temporal_vector_like_rejects_non_numeric_sequence_payloads_for_interp."""
     pos = Position(_position_temporal_dataset())
-    pos.unsafe_data["label"] = xr.DataArray(["a", "b", "c"], dims=("sample",))
+    pos.as_dataset(copy="none")["label"] = xr.DataArray(["a", "b", "c"], dims=("sample",))
     with pytest.raises(TypeError, match="non-numeric sequence variable"):
         pos.param.at([0.5])
 
@@ -452,9 +452,9 @@ def test_spatial_core_119_kinematics_derivative_baseline_velocity_from_position_
     pos = Position(_position_temporal_dataset())
     out = pos.differentiate(validate=True)
     assert isinstance(out, LinearVelocity)
-    assert out.unsafe_data.sizes["sample"] == pos.unsafe_data.sizes["sample"]
+    assert out.as_dataset(copy="none").sizes["sample"] == pos.as_dataset(copy="none").sizes["sample"]
     np.testing.assert_allclose(
-        out.unsafe_data["position"].values,
+        out.as_dataset(copy="none")["position"].values,
         np.asarray([[6.0, 6.0, 6.0], [6.0, 6.0, 6.0], [6.0, 6.0, 6.0]], dtype="float64"),
     )
 

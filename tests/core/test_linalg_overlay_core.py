@@ -81,7 +81,7 @@ def _vector3_leaf(*, offset: float = 0.0, axis_labels: tuple[object, ...] = ("x"
 
 
 def _core_dims(ao: AnalysisObject) -> tuple[str, ...]:
-    return read_roles(validate_schema_if_needed(ao.unsafe_data))[3]
+    return read_roles(validate_schema_if_needed(ao.as_dataset(copy="none")))[3]
 
 
 def test_linalg_core_028_overlay_core_functional_and_method_parity() -> None:
@@ -93,7 +93,7 @@ def test_linalg_core_028_overlay_core_functional_and_method_parity() -> None:
     out_method = base.overlay_core([patch], opts=opts, validate=True)
     assert type(out_fn) is Array
     assert type(out_method) is Array
-    xr.testing.assert_identical(out_fn.unsafe_data, out_method.unsafe_data)
+    xr.testing.assert_identical(out_fn.as_dataset(copy="none"), out_method.as_dataset(copy="none"))
 
 
 def test_linalg_hard_082_overlay_core_plain_ao_base_fallback_to_array() -> None:
@@ -146,7 +146,7 @@ def test_linalg_hard_084_overlay_core_vector_matrix_vector3_base_types_remain_va
         validate=True,
     )
     assert type(vector3_out) is Vector3
-    assert vector3_out.unsafe_data.coords["axis"].values.tolist() == ["x", "y", "z"]
+    assert vector3_out.as_dataset(copy="none").coords["axis"].values.tolist() == ["x", "y", "z"]
 
 
 def test_linalg_hard_085_overlay_core_opts_required_signature_alignment() -> None:
@@ -164,9 +164,9 @@ def test_linalg_hard_086_overlay_core_nan_and_integer_semantics_preserved_throug
     base_nan = Array(_vector_leaf(offset=0.0, axis_labels=("a", float("nan"), "c")))
     patch_nan = _vector_leaf(offset=100.0, axis_labels=(float("nan"),))
     out_nan = overlay_core(base_nan, [patch_nan], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
-    expected_nan = base_nan.unsafe_data["x"].copy(deep=True)
-    expected_nan.loc[{"axis": [patch_nan.unsafe_data.get_index("axis")[0]]}] = patch_nan.unsafe_data["x"]
-    xr.testing.assert_allclose(out_nan.unsafe_data["x"], expected_nan)
+    expected_nan = base_nan.as_dataset(copy="none")["x"].copy(deep=True)
+    expected_nan.loc[{"axis": [patch_nan.as_dataset(copy="none").get_index("axis")[0]]}] = patch_nan.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out_nan.as_dataset(copy="none")["x"], expected_nan)
 
     base_int = Array(
         AnalysisObject.from_data(
@@ -199,8 +199,8 @@ def test_linalg_hard_086_overlay_core_nan_and_integer_semantics_preserved_throug
         validate=True,
     )
     out_int = overlay_core(base_int, [patch_int], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
-    assert out_int.unsafe_data["x"].dtype.kind in {"i", "u"}
-    assert np.all(out_int.unsafe_data["x"].sel(axis="c").data == 77)
+    assert out_int.as_dataset(copy="none")["x"].dtype.kind in {"i", "u"}
+    assert np.all(out_int.as_dataset(copy="none")["x"].sel(axis="c").data == 77)
 
 
 def test_linalg_hard_087_overlay_core_mixed_nan_scalar_types_canonicalized_through_linalg_boundary() -> None:
@@ -209,6 +209,6 @@ def test_linalg_hard_087_overlay_core_mixed_nan_scalar_types_canonicalized_throu
     patch = _vector_leaf(offset=100.0, axis_labels=(float("nan"),))
     out = overlay_core(base, [patch], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
     assert type(out) is Array
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected[{"axis": 0}] = patch.unsafe_data["x"].isel(axis=0)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected[{"axis": 0}] = patch.as_dataset(copy="none")["x"].isel(axis=0)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)

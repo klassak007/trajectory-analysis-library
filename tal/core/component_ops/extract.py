@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..schema import merge_schema
@@ -50,7 +51,7 @@ def _attach_source_schema(
     *,
     source: AnalysisObject,
 ) -> xr.Dataset:
-    tal = source.unsafe_data.attrs.get("tal")
+    tal = analysis_object_dataset(source).attrs.get("tal")
     if not isinstance(tal, Mapping):
         return ds_out
     return merge_schema(ds_out, patch=dict(tal), validate=False)
@@ -107,7 +108,7 @@ def extract_components(
     ...     validate=True,
     ... ).components.define(opts=ComponentRegistryOptions({"xy": ComponentSpec("axis", ("x", "y"))}))
     >>> parts = extract_components(ao, opts=ComponentExtractOptions(names=("xy",)))
-    >>> parts["xy"].unsafe_data["vec"].sizes["axis"]
+    >>> parts["xy"].as_dataset()["vec"].sizes["axis"]
     2
     """
     owner = "components.extract"
@@ -115,12 +116,13 @@ def extract_components(
     options = coerce_component_extract_options(opts, owner=owner)
     registry = read_components(source)
     names = _resolve_component_names(registry, names=options.names, owner=owner)
+    source_ds = analysis_object_dataset(source)
     out: dict[str, AnalysisObject] = {}
     for name in names:
         spec = registry[name]
-        var_name = select_component_var(source.unsafe_data, spec=spec, component_name=name, owner=owner)
+        var_name = select_component_var(source_ds, spec=spec, component_name=name, owner=owner)
         ds_out = _extract_component_dataset(
-            source.unsafe_data,
+            source_ds,
             spec=spec,
             var_name=var_name,
         )

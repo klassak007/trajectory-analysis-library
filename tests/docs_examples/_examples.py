@@ -176,7 +176,7 @@ def _identity_pose() -> Pose:
 def example_core_ao_from_data() -> None:
     ds = xr.Dataset({"value": (("trial", "axis"), np.array([[1.0, 2.0, 3.0]]))}, coords={"trial": ["t0"], "axis": ["x", "y", "z"]})
     ao = AnalysisObject.from_data(ds, batch_dims=("trial",), core_dims=("axis",), validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.as_dataset(copy="none"))
     assert declared
     assert sequence_dim is None
     assert batch_dims == ("trial",)
@@ -196,7 +196,7 @@ def example_core_ao_set_roles() -> None:
         validate=True,
     )
     out = ao.set_roles(sequence_dim=None, batch_dims=("trial",), core_dims=(), validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared
     assert sequence_dim is None
     assert batch_dims == ("trial",)
@@ -218,19 +218,19 @@ def example_core_ao_xarray_methods() -> None:
         validate=True,
     )
     selected = ao.isel(sample=slice(0, 2)).sel(trial="a")
-    masked = ao.where(ao.unsafe_data["value"] > 2.0)
+    masked = ao.where(ao.as_dataset(copy="none")["value"] > 2.0)
     renamed = ao.rename({"sample": "step"})
     dropped = ao.drop_vars("quality")
     transposed = ao.transpose("sample", "trial")
     validated = ao.validate_schema()
     ds_copy = ao.as_dataset()
-    assert selected.unsafe_data.sizes["sample"] == 2
-    assert bool(np.isnan(masked.unsafe_data["value"].values).any())
-    assert "step" in renamed.unsafe_data.dims
-    assert "quality" not in dropped.unsafe_data.data_vars
-    assert transposed.unsafe_data["value"].dims == ("sample", "trial")
-    assert ds_copy is not ao.unsafe_data
-    assert validated.unsafe_data.identical(ao.unsafe_data)
+    assert selected.as_dataset(copy="none").sizes["sample"] == 2
+    assert bool(np.isnan(masked.as_dataset(copy="none")["value"].values).any())
+    assert "step" in renamed.as_dataset(copy="none").dims
+    assert "quality" not in dropped.as_dataset(copy="none").data_vars
+    assert transposed.as_dataset(copy="none")["value"].dims == ("sample", "trial")
+    assert ds_copy is not ao.as_dataset(copy="none")
+    assert validated.as_dataset(copy="none").identical(ao.as_dataset(copy="none"))
 
 
 def example_core_ao_reducers() -> None:
@@ -254,23 +254,23 @@ def example_core_ao_reducers() -> None:
         core_dims=(),
         validate=True,
     )
-    np.testing.assert_allclose(ao.mean(dim="sample").unsafe_data["value"], np.array([1.5, 3.5]))
-    np.testing.assert_allclose(ao.sum(dim="sample").unsafe_data["value"], np.array([3.0, 7.0]))
-    np.testing.assert_allclose(ao.std(dim="sample").unsafe_data["value"], np.array([0.5, 0.5]))
-    np.testing.assert_allclose(ao.var(dim="sample").unsafe_data["value"], np.array([0.25, 0.25]))
-    np.testing.assert_allclose(ao.median(dim="sample").unsafe_data["value"], np.array([1.5, 3.5]))
-    np.testing.assert_allclose(ao.min(dim="sample").unsafe_data["value"], np.array([1.0, 3.0]))
-    np.testing.assert_allclose(ao.max(dim="sample").unsafe_data["value"], np.array([2.0, 4.0]))
-    np.testing.assert_allclose(ao.count(dim="sample").unsafe_data["value"], np.array([2, 2]))
-    np.testing.assert_array_equal(bool_ao.any(dim="sample").unsafe_data["flag"], np.array([True, True]))
-    np.testing.assert_array_equal(bool_ao.all(dim="sample").unsafe_data["flag"], np.array([False, True]))
+    np.testing.assert_allclose(ao.mean(dim="sample").as_dataset(copy="none")["value"], np.array([1.5, 3.5]))
+    np.testing.assert_allclose(ao.sum(dim="sample").as_dataset(copy="none")["value"], np.array([3.0, 7.0]))
+    np.testing.assert_allclose(ao.std(dim="sample").as_dataset(copy="none")["value"], np.array([0.5, 0.5]))
+    np.testing.assert_allclose(ao.var(dim="sample").as_dataset(copy="none")["value"], np.array([0.25, 0.25]))
+    np.testing.assert_allclose(ao.median(dim="sample").as_dataset(copy="none")["value"], np.array([1.5, 3.5]))
+    np.testing.assert_allclose(ao.min(dim="sample").as_dataset(copy="none")["value"], np.array([1.0, 3.0]))
+    np.testing.assert_allclose(ao.max(dim="sample").as_dataset(copy="none")["value"], np.array([2.0, 4.0]))
+    np.testing.assert_allclose(ao.count(dim="sample").as_dataset(copy="none")["value"], np.array([2, 2]))
+    np.testing.assert_array_equal(bool_ao.any(dim="sample").as_dataset(copy="none")["flag"], np.array([True, True]))
+    np.testing.assert_array_equal(bool_ao.all(dim="sample").as_dataset(copy="none")["flag"], np.array([False, True]))
 
 
 def example_core_param_at() -> None:
     ao = _make_signal_ao()
     out = ao.param.at([0.5, 1.5], on="time")
-    assert out.unsafe_data.sizes["sample"] == 2
-    values = out.unsafe_data["value"].isel(trial=0).values
+    assert out.as_dataset(copy="none").sizes["sample"] == 2
+    values = out.as_dataset(copy="none")["value"].isel(trial=0).values
     np.testing.assert_allclose(values, np.array([0.5, 1.5]), atol=1e-8)
 
 
@@ -278,10 +278,10 @@ def example_core_param_interp_like() -> None:
     src = _make_signal_ao(n_samples=5, t_end=4.0)
     dst = _make_signal_ao(n_samples=3, t_end=4.0)
     out = src.param.interp_like(dst, on="time", batch_join="inner")
-    assert out.unsafe_data.sizes["sample"] == dst.unsafe_data.sizes["sample"]
+    assert out.as_dataset(copy="none").sizes["sample"] == dst.as_dataset(copy="none").sizes["sample"]
     np.testing.assert_allclose(
-        out.unsafe_data.coords["time"].values,
-        dst.unsafe_data.coords["time"].values,
+        out.as_dataset(copy="none").coords["time"].values,
+        dst.as_dataset(copy="none").coords["time"].values,
     )
 
 
@@ -289,16 +289,16 @@ def example_core_event_when() -> None:
     ao = _make_signal_ao()
     cond = Condition.compare(Condition.var("value"), "gt", 2.0)
     out = ao.events.when(cond, opts=WhenOptions(layout="mask"))
-    assert out.unsafe_data["value"].dims == ao.unsafe_data["value"].dims
-    assert bool(np.isnan(out.unsafe_data["value"].values).any())
+    assert out.as_dataset(copy="none")["value"].dims == ao.as_dataset(copy="none")["value"].dims
+    assert bool(np.isnan(out.as_dataset(copy="none")["value"].values).any())
 
 
 def example_core_group_groupby() -> None:
     ao = _make_signal_ao()
     grouped = ao.group.groupby("outcome", opts=GroupByOptions(preserve_batch=False))
     out = grouped.mean(dim="sample")
-    assert "group_key" in out.unsafe_data.dims
-    assert out.unsafe_data.sizes["group_key"] == 2
+    assert "group_key" in out.as_dataset(copy="none").dims
+    assert out.as_dataset(copy="none").sizes["group_key"] == 2
 
 
 def example_core_combine_concat_sequence() -> None:
@@ -326,7 +326,7 @@ def example_core_combine_concat_sequence() -> None:
     left = make_with_sample_offset(0)
     right = make_with_sample_offset(3)
     out = concat_sequence([left, right], opts=SequenceConcatOptions(overlap="error"), validate=True)
-    assert out.unsafe_data.sizes["sample"] == 6
+    assert out.as_dataset(copy="none").sizes["sample"] == 6
 
 
 def example_core_combine_core_layouts() -> None:
@@ -343,10 +343,10 @@ def example_core_combine_core_layouts() -> None:
     stacked = x.combine.stack_core([y], core_dim="axis", core_labels=("x", "y"), output_var="vec")
     assembled = x.combine.assemble_core([y], core_dims=("axis",), core_labels=(("x", "y"),), output_var="vec")
     blocked = x.combine.block_core([[y]], row_dim="row", col_dim="col", output_var="block")
-    assert stacked.unsafe_data["vec"].dims == ("axis", "sample")
-    assert assembled.unsafe_data.sizes["axis"] == 2
-    assert blocked.unsafe_data.sizes["row"] == 2
-    assert blocked.unsafe_data.sizes["col"] == 1
+    assert stacked.as_dataset(copy="none")["vec"].dims == ("axis", "sample")
+    assert assembled.as_dataset(copy="none").sizes["axis"] == 2
+    assert blocked.as_dataset(copy="none").sizes["row"] == 2
+    assert blocked.as_dataset(copy="none").sizes["col"] == 1
 
 
 def example_core_component_registry() -> None:
@@ -404,27 +404,27 @@ def example_core_param_surface() -> None:
         np.asarray([0, 2]),
     )
     np.testing.assert_allclose(
-        ao.param.sel([0.2, 1.8], on="time", opts=ParamSelectOptions(method="nearest")).unsafe_data["value"],
+        ao.param.sel([0.2, 1.8], on="time", opts=ParamSelectOptions(method="nearest")).as_dataset(copy="none")["value"],
         np.asarray([0.0, 4.0]),
     )
     np.testing.assert_allclose(
-        ao.param.at([0.5, 1.5], on="time", opts=ParamEvalOptions(method="linear")).unsafe_data["value"],
+        ao.param.at([0.5, 1.5], on="time", opts=ParamEvalOptions(method="linear")).as_dataset(copy="none")["value"],
         np.asarray([0.5, 2.5]),
     )
     np.testing.assert_allclose(
-        ao.param.resample_to([0.0, 0.5, 1.0], on="time", opts=ParamEvalOptions(method="linear")).unsafe_data["value"],
+        ao.param.resample_to([0.0, 0.5, 1.0], on="time", opts=ParamEvalOptions(method="linear")).as_dataset(copy="none")["value"],
         np.asarray([0.0, 0.5, 1.0]),
     )
     np.testing.assert_allclose(
-        ao.param.interp_like(target, on="time", opts=ParamEvalOptions(method="linear")).unsafe_data["value"],
+        ao.param.interp_like(target, on="time", opts=ParamEvalOptions(method="linear")).as_dataset(copy="none")["value"],
         np.asarray([0.0, 4.0]),
     )
     np.testing.assert_allclose(
-        synchronize_param([ao], on="time", grid=[0.0, 1.0], opts=ParamSyncOptions(join="override"))[0].unsafe_data["value"],
+        synchronize_param([ao], on="time", grid=[0.0, 1.0], opts=ParamSyncOptions(join="override"))[0].as_dataset(copy="none")["value"],
         np.asarray([0.0, 1.0]),
     )
     np.testing.assert_allclose(
-        synchronize([ao], on="time", grid=[0.0, 2.0], opts=ParamSyncOptions(join="override"))[0].unsafe_data["value"],
+        synchronize([ao], on="time", grid=[0.0, 2.0], opts=ParamSyncOptions(join="override"))[0].as_dataset(copy="none")["value"],
         np.asarray([0.0, 4.0]),
     )
     dt_grid = np.asarray(["2026-01-01T00:00:00", "2026-01-01T00:00:10", "2026-01-01T00:00:20"], dtype="datetime64[ns]")
@@ -441,11 +441,11 @@ def example_core_param_surface() -> None:
     tol: ParamSyncTolerance = np.timedelta64(0, "s")
     np.testing.assert_array_equal(dt_ao.param.index([dt_grid[0], dt_grid[2]], on="time").values, [0, 2])
     np.testing.assert_allclose(
-        dt_ao.param.at([dt_grid[0] + np.timedelta64(5, "s")], on="time").unsafe_data["value"],
+        dt_ao.param.at([dt_grid[0] + np.timedelta64(5, "s")], on="time").as_dataset(copy="none")["value"],
         np.asarray([5.0]),
     )
     np.testing.assert_allclose(
-        synchronize_param([dt_ao], on="time", grid=[dt_grid[0], dt_grid[2]], opts=ParamSyncOptions(join="override", tol=tol))[0].unsafe_data["value"],
+        synchronize_param([dt_ao], on="time", grid=[dt_grid[0], dt_grid[2]], opts=ParamSyncOptions(join="override", tol=tol))[0].as_dataset(copy="none")["value"],
         np.asarray([0.0, 40.0]),
     )
 
@@ -468,13 +468,13 @@ def example_core_event_surface() -> None:
     assert ao.events.events(cond)["edge_code"].values.tolist() == [1, 2]
     assert ao.events.intervals(cond).sizes["segment"] == 1
     np.testing.assert_allclose(
-        ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="enter")).unsafe_data["value"],
+        ao.events.at_boundaries(cond, opts=AtBoundariesOptions(edges="enter")).as_dataset(copy="none")["value"],
         np.asarray([2.0]),
     )
     masked = ao.events.when(cond, opts=WhenOptions(layout="mask"))
-    assert masked.unsafe_data["value"].isnull().values.tolist() == [True, False, False, True]
+    assert masked.as_dataset(copy="none")["value"].isnull().values.tolist() == [True, False, False, True]
     around = ao.events.around(cond, opts=AroundOptions(pre=0.0, post=0.0, dt=1.0))
-    assert around.unsafe_data.sizes["event"] == 1
+    assert around.as_dataset(copy="none").sizes["event"] == 1
 
 
 def example_core_group_surface() -> None:
@@ -494,19 +494,19 @@ def example_core_group_surface() -> None:
         validate=True,
     )
     grouped = ao.group.groupby("kind", opts=GroupByOptions(preserve_batch=False))
-    assert grouped.materialize(opts=GroupMaterializeOptions(layout="padded")).unsafe_data.sizes["group_key"] == 2
-    assert grouped.padded().unsafe_data.sizes["sample"] == 2
-    assert grouped.stacked().unsafe_data.sizes["group_member"] == 4
-    assert grouped.mean(dim="sample").unsafe_data["value"].sel(group_key="sim").item() == 1.5
-    assert grouped.sum(dim="sample").unsafe_data["value"].sel(group_key="robot").item() == 7.0
-    assert grouped.std(dim="sample").unsafe_data["value"].sel(group_key="sim").item() == 0.5
-    assert grouped.var(dim="sample").unsafe_data["value"].sel(group_key="sim").item() == 0.25
-    assert grouped.median(dim="sample").unsafe_data["value"].sel(group_key="robot").item() == 3.5
-    assert grouped.min(dim="sample").unsafe_data["value"].sel(group_key="sim").item() == 1.0
-    assert grouped.max(dim="sample").unsafe_data["value"].sel(group_key="robot").item() == 4.0
-    assert grouped.count(dim="sample").unsafe_data["value"].sel(group_key="sim").item() == 2
-    assert bool(grouped.any(dim="sample").unsafe_data["flag"].sel(group_key="robot").item()) is True
-    assert bool(grouped.all(dim="sample").unsafe_data["flag"].sel(group_key="robot").item()) is True
+    assert grouped.materialize(opts=GroupMaterializeOptions(layout="padded")).as_dataset(copy="none").sizes["group_key"] == 2
+    assert grouped.padded().as_dataset(copy="none").sizes["sample"] == 2
+    assert grouped.stacked().as_dataset(copy="none").sizes["group_member"] == 4
+    assert grouped.mean(dim="sample").as_dataset(copy="none")["value"].sel(group_key="sim").item() == 1.5
+    assert grouped.sum(dim="sample").as_dataset(copy="none")["value"].sel(group_key="robot").item() == 7.0
+    assert grouped.std(dim="sample").as_dataset(copy="none")["value"].sel(group_key="sim").item() == 0.5
+    assert grouped.var(dim="sample").as_dataset(copy="none")["value"].sel(group_key="sim").item() == 0.25
+    assert grouped.median(dim="sample").as_dataset(copy="none")["value"].sel(group_key="robot").item() == 3.5
+    assert grouped.min(dim="sample").as_dataset(copy="none")["value"].sel(group_key="sim").item() == 1.0
+    assert grouped.max(dim="sample").as_dataset(copy="none")["value"].sel(group_key="robot").item() == 4.0
+    assert grouped.count(dim="sample").as_dataset(copy="none")["value"].sel(group_key="sim").item() == 2
+    assert bool(grouped.any(dim="sample").as_dataset(copy="none")["flag"].sel(group_key="robot").item()) is True
+    assert bool(grouped.all(dim="sample").as_dataset(copy="none")["flag"].sel(group_key="robot").item()) is True
     binned_source = AnalysisObject.from_data(
         xr.Dataset(
             {"value": ("sample", np.asarray([1.0, 2.0, 3.0], dtype=float))},
@@ -516,7 +516,7 @@ def example_core_group_surface() -> None:
         core_dims=(),
         validate=True,
     )
-    assert binned_source.group.groupby_bins("time", bins=[0.0, 1.0, 2.0], include_lowest=True).padded().unsafe_data.sizes["group_key"] == 2
+    assert binned_source.group.groupby_bins("time", bins=[0.0, 1.0, 2.0], include_lowest=True).padded().as_dataset(copy="none").sizes["group_key"] == 2
 
 
 def example_core_combine_surface() -> None:
@@ -551,13 +551,13 @@ def example_core_combine_surface() -> None:
     x = scalar("value", 1.0)
     y = scalar("value", 2.0)
     batched = concat_batch([x, y], opts=BatchConcatOptions(batch_dim="run", batch_labels=("a", "b")))
-    assert tuple(batched.unsafe_data.coords["run"].values.tolist()) == ("a", "b")
+    assert tuple(batched.as_dataset(copy="none").coords["run"].values.tolist()) == ("a", "b")
     sequenced = x.combine.concat_sequence([scalar("value", 2.0, sample=1)], opts=SequenceConcatOptions(overlap="error"))
-    assert sequenced.unsafe_data.sizes["sample"] == 2
+    assert sequenced.as_dataset(copy="none").sizes["sample"] == 2
     left = scalar("x", 1.0)
     right = scalar("y", 2.0)
-    assert sorted(merge([left, right], opts=MergeOptions()).unsafe_data.data_vars) == ["x", "y"]
-    assert sorted(left.combine.merge([right], opts=MergeOptions()).unsafe_data.data_vars) == ["x", "y"]
+    assert sorted(merge([left, right], opts=MergeOptions()).as_dataset(copy="none").data_vars) == ["x", "y"]
+    assert sorted(left.combine.merge([right], opts=MergeOptions()).as_dataset(copy="none").data_vars) == ["x", "y"]
     outer_left = AnalysisObject.from_data(
         xr.Dataset({"value": ("sample", np.asarray([1.0, 2.0], dtype=float))}, coords={"sample": [0, 1]}),
         sequence_dim="sample",
@@ -570,13 +570,13 @@ def example_core_combine_surface() -> None:
         core_dims=(),
         validate=True,
     )
-    assert [item.unsafe_data.sizes["sample"] for item in align_many([outer_left, outer_right], opts=AlignOptions(sequence_join="outer"))] == [3, 3]
+    assert [item.as_dataset(copy="none").sizes["sample"] for item in align_many([outer_left, outer_right], opts=AlignOptions(sequence_join="outer"))] == [3, 3]
     a, b = align_pair(x, y, opts=AlignOptions())
-    assert (a.unsafe_data.sizes["sample"], b.unsafe_data.sizes["sample"]) == (1, 1)
-    assert outer_left.combine.align([outer_right], opts=AlignOptions(sequence_join="outer"))[0].unsafe_data.sizes["sample"] == 3
-    assert assemble_core([x, y], core_dims=("axis",), core_labels=(("x", "y"),)).unsafe_data.sizes["axis"] == 2
-    assert stack_core([x, y], core_dim="axis", core_labels=("x", "y")).unsafe_data.sizes["axis"] == 2
-    assert block_core([[x], [y]], row_dim="row", col_dim="col").unsafe_data.sizes["row"] == 2
+    assert (a.as_dataset(copy="none").sizes["sample"], b.as_dataset(copy="none").sizes["sample"]) == (1, 1)
+    assert outer_left.combine.align([outer_right], opts=AlignOptions(sequence_join="outer"))[0].as_dataset(copy="none").sizes["sample"] == 3
+    assert assemble_core([x, y], core_dims=("axis",), core_labels=(("x", "y"),)).as_dataset(copy="none").sizes["axis"] == 2
+    assert stack_core([x, y], core_dim="axis", core_labels=("x", "y")).as_dataset(copy="none").sizes["axis"] == 2
+    assert block_core([[x], [y]], row_dim="row", col_dim="col").as_dataset(copy="none").sizes["row"] == 2
     vx = AnalysisObject.from_data(
         xr.Dataset({"v": (("sample", "axis"), np.asarray([[1.0]], dtype=float))}, coords={"sample": [0], "axis": ["x"]}),
         sequence_dim="sample",
@@ -589,8 +589,8 @@ def example_core_combine_surface() -> None:
         core_dims=("axis",),
         validate=True,
     )
-    assert concat_core([vx, vy], opts=CoreConcatOptions(core_dim="axis")).unsafe_data.sizes["axis"] == 2
-    assert vx.combine.concat_core([vy], opts=CoreConcatOptions(core_dim="axis")).unsafe_data.sizes["axis"] == 2
+    assert concat_core([vx, vy], opts=CoreConcatOptions(core_dim="axis")).as_dataset(copy="none").sizes["axis"] == 2
+    assert vx.combine.concat_core([vy], opts=CoreConcatOptions(core_dim="axis")).as_dataset(copy="none").sizes["axis"] == 2
     parts = decompose_core(
         concat_core([vx, vy], opts=CoreConcatOptions(core_dim="axis")),
         opts=CoreDecomposeOptions(core_dims=("axis",), key_mode="label"),
@@ -603,7 +603,7 @@ def example_core_combine_surface() -> None:
         validate=True,
     )
     overlaid = overlay_core(concat_core([vx, vy], opts=CoreConcatOptions(core_dim="axis")), patch, opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace"))
-    assert overlaid.unsafe_data["v"].sel(axis="y").item() == 9.0
+    assert overlaid.as_dataset(copy="none")["v"].sel(axis="y").item() == 9.0
 
 
 def example_core_component_surface() -> None:
@@ -633,7 +633,7 @@ def example_core_component_surface() -> None:
     )
     assert read_components(tagged)["xy"].labels == ("x", "y")
     parts = extract_components(tagged, opts=ComponentExtractOptions(names=("xy",)))
-    assert parts["xy"].unsafe_data["vec"].sizes["axis"] == 2
+    assert parts["xy"].as_dataset(copy="none")["vec"].sizes["axis"] == 2
     patch = AnalysisObject.from_data(
         xr.Dataset({"vec": (("sample", "axis"), np.asarray([[9.0, 8.0]], dtype=float))}, coords={"sample": [0], "axis": ["x", "y"]}),
         sequence_dim="sample",
@@ -641,7 +641,7 @@ def example_core_component_surface() -> None:
         validate=True,
     )
     patched = patch_components(tagged, {"xy": patch}, opts=ComponentPatchOptions(on_overlap="replace"))
-    assert patched.unsafe_data["vec"].sel(axis="x").item() == 9.0
+    assert patched.as_dataset(copy="none")["vec"].sel(axis="x").item() == 9.0
     x = AnalysisObject.from_data(
         xr.Dataset({"vec": (("sample", "axis"), np.asarray([[1.0]], dtype=float))}, coords={"sample": [0], "axis": ["x"]}),
         sequence_dim="sample",
@@ -656,8 +656,8 @@ def example_core_component_surface() -> None:
     )
     opts = ComponentComposeOptions({"x": ComponentSpec("axis", ("x",)), "y": ComponentSpec("axis", ("y",))})
     composed = compose_components({"x": x, "y": y}, opts=opts)
-    assert composed.unsafe_data["vec"].sel(axis="y").item() == 2.0
-    assert x.components.compose({"x": x, "y": y}, opts=opts).unsafe_data.sizes["axis"] == 2
+    assert composed.as_dataset(copy="none")["vec"].sel(axis="y").item() == 2.0
+    assert x.components.compose({"x": x, "y": y}, opts=opts).as_dataset(copy="none").sizes["axis"] == 2
 
 
 def example_linalg_add() -> None:
@@ -678,7 +678,7 @@ def example_linalg_add() -> None:
         )
     )
     out = add(left, right)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([[5.0, 7.0, 9.0]]))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([[5.0, 7.0, 9.0]]))
 
 
 def example_linalg_sub() -> None:
@@ -699,46 +699,46 @@ def example_linalg_sub() -> None:
         )
     )
     out = sub(left, right)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([[3.0, 3.0, 3.0]]))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([[3.0, 3.0, 3.0]]))
 
 
 def example_linalg_dot() -> None:
     left = _make_vector(np.array([[1.0, 2.0, 3.0]]), dim="axis", labels=("x", "y", "z"))
     right = _make_vector(np.array([[4.0, 5.0, 6.0]]), dim="axis", labels=("x", "y", "z"))
     out = dot(left, right)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([32.0]))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([32.0]))
 
 
 def example_linalg_norm() -> None:
     left = _make_vector(np.array([[3.0, 4.0, 0.0]]), dim="axis", labels=("x", "y", "z"))
     out = norm(left)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([5.0]))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([5.0]))
 
 
 def example_linalg_matmul() -> None:
     A = _make_matrix(np.array([[[2.0, 0.0], [0.0, 3.0]]]))
     v = _make_vector(np.array([[4.0, 5.0]]), dim="col", labels=("c0", "c1"))
     out = matmul(A, v)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([[8.0, 15.0]]))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([[8.0, 15.0]]))
 
 
 def example_linalg_solve() -> None:
     A = _make_matrix(np.array([[[2.0, 0.0], [0.0, 3.0]]]))
     b = _make_vector(np.array([[8.0, 15.0]]), dim="row", labels=("r0", "r1"))
     out = solve(A, b)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([[4.0, 5.0]]), atol=1e-8)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([[4.0, 5.0]]), atol=1e-8)
 
 
 def example_linalg_inv() -> None:
     A = _make_matrix(np.array([[[2.0, 0.0], [0.0, 4.0]]]))
     out = inv(A)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([[[0.5, 0.0], [0.0, 0.25]]]), atol=1e-8)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([[[0.5, 0.0], [0.0, 0.25]]]), atol=1e-8)
 
 
 def example_linalg_pinv() -> None:
     A = _make_matrix(np.array([[[2.0, 0.0], [0.0, 4.0]]]))
     out = pinv(A)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, np.array([[[0.5, 0.0], [0.0, 0.25]]]), atol=1e-8)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, np.array([[[0.5, 0.0], [0.0, 0.25]]]), atol=1e-8)
 
 
 def example_linalg_vector3_from_xyz() -> None:
@@ -753,9 +753,9 @@ def example_linalg_vector3_from_xyz() -> None:
         validate=True,
     )
     out = Vector3.from_xyz(x, 0.0, 1.0, axis="axis", output_var="vec3")
-    assert out.unsafe_data.sizes["axis"] == 3
-    assert tuple(out.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
-    np.testing.assert_allclose(out.unsafe_data["vec3"].sel(axis="x").values, np.array([1.0, 2.0]))
+    assert out.as_dataset(copy="none").sizes["axis"] == 3
+    assert tuple(out.as_dataset(copy="none").coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(out.as_dataset(copy="none")["vec3"].sel(axis="x").values, np.array([1.0, 2.0]))
 
 
 def example_linalg_array_core_dims() -> None:
@@ -772,11 +772,11 @@ def example_linalg_array_core_dims() -> None:
     )
     vector = arr.set_core_dims("row").set_vector_axis("row")
     matrix = arr.set_matrix_axes("row", "col")
-    assert read_roles(vector.unsafe_data)[3] == ("row",)
-    assert read_roles(arr.as_core("row").unsafe_data)[3] == ("row",)
-    assert read_roles(arr.axis("row").unsafe_data)[3] == ("row",)
-    assert read_roles(matrix.unsafe_data)[3] == ("row", "col")
-    assert read_roles(arr.rc("row", "col").unsafe_data)[3] == ("row", "col")
+    assert read_roles(vector.as_dataset(copy="none"))[3] == ("row",)
+    assert read_roles(arr.as_core("row").as_dataset(copy="none"))[3] == ("row",)
+    assert read_roles(arr.axis("row").as_dataset(copy="none"))[3] == ("row",)
+    assert read_roles(matrix.as_dataset(copy="none"))[3] == ("row", "col")
+    assert read_roles(arr.rc("row", "col").as_dataset(copy="none"))[3] == ("row", "col")
 
 
 def example_spatial_position_to_frame() -> None:
@@ -797,23 +797,23 @@ def example_spatial_position_to_frame() -> None:
 
     out = position.to_frame("world", edge_pose_fn=edge_pose, opts=PathSolveOptions(graph=graph), validate=True)
     assert calls["n"] == 0
-    assert get_frames(out.unsafe_data) == ("world", "sensor")
-    np.testing.assert_allclose(out.unsafe_data["position"].values, position.unsafe_data["position"].values, atol=1e-9)
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "sensor")
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values, position.as_dataset(copy="none")["position"].values, atol=1e-9)
 
 
 def example_spatial_position_basic() -> None:
     position = _make_position(np.asarray([[1.0, 2.0, 3.0]], dtype=float))
     delta = position.as_delta(validate=True)
     assert isinstance(delta, Position)
-    assert delta.unsafe_data["position"].shape == (1, 3)
+    assert delta.as_dataset(copy="none")["position"].shape == (1, 3)
 
 
 def example_spatial_rotation_to_rep() -> None:
     rotation = _make_rotation(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
     as_matrix = rotation.to_rep("matrix", validate=True)
     back = as_matrix.to_rep("quat", validate=True)
-    assert as_matrix.unsafe_data["rotation"].shape == (1, 3, 3)
-    assert tuple(back.unsafe_data.coords["quat"].to_numpy().tolist()) == ("x", "y", "z", "w")
+    assert as_matrix.as_dataset(copy="none")["rotation"].shape == (1, 3, 3)
+    assert tuple(back.as_dataset(copy="none").coords["quat"].to_numpy().tolist()) == ("x", "y", "z", "w")
 
 
 def example_spatial_rotation_basic() -> None:
@@ -824,11 +824,11 @@ def example_spatial_rotation_basic() -> None:
     composed = rotation.compose(rotation, validate=True)
     inverse = rotation.inverse(validate=True)
     applied = rotation.apply(position, validate=True)
-    assert as_matrix.unsafe_data["rotation"].shape[-2:] == (3, 3)
-    assert tuple(back.unsafe_data.coords["quat"].to_numpy().tolist()) == ("x", "y", "z", "w")
+    assert as_matrix.as_dataset(copy="none")["rotation"].shape[-2:] == (3, 3)
+    assert tuple(back.as_dataset(copy="none").coords["quat"].to_numpy().tolist()) == ("x", "y", "z", "w")
     assert isinstance(composed, Rotation)
     assert isinstance(inverse, Rotation)
-    np.testing.assert_allclose(applied.unsafe_data["position"].values, position.unsafe_data["position"].values)
+    np.testing.assert_allclose(applied.as_dataset(copy="none")["position"].values, position.as_dataset(copy="none")["position"].values)
 
 
 def example_spatial_pose_from_components() -> None:
@@ -837,7 +837,7 @@ def example_spatial_pose_from_components() -> None:
         _make_position(np.asarray([[1.0, 2.0, 3.0]], dtype=float)),
         validate=True,
     )
-    assert sorted(pose.unsafe_data.data_vars) == ["position", "rotation"]
+    assert sorted(pose.as_dataset(copy="none").data_vars) == ["position", "rotation"]
 
 
 def example_spatial_pose_basic() -> None:
@@ -851,9 +851,9 @@ def example_spatial_pose_basic() -> None:
     applied = pose.apply(_make_position(np.asarray([[1.0, 0.0, 0.0]], dtype=float)), validate=True)
     assert isinstance(position, Position)
     assert isinstance(rotation, Rotation)
-    assert matrix.unsafe_data["pose_matrix"].shape[-2:] == (4, 4)
-    assert sorted(components.unsafe_data.data_vars) == ["position", "rotation"]
-    assert as_matrix.unsafe_data["pose_matrix"].shape[-2:] == (4, 4)
+    assert matrix.as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
+    assert sorted(components.as_dataset(copy="none").data_vars) == ["position", "rotation"]
+    assert as_matrix.as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
     assert isinstance(composed, Pose)
     assert isinstance(inverse, Pose)
     assert isinstance(applied, Position)
@@ -874,7 +874,7 @@ def example_spatial_path_solve_pose() -> None:
 
     out = solve_pose_path_transform(sensor, world, edge_pose_fn=resolver, opts=PathSolveOptions(graph=graph))
     assert isinstance(out, Pose)
-    assert out.as_matrix(validate=True).unsafe_data["pose_matrix"].shape[-2:] == (4, 4)
+    assert out.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
 
 
 def example_spatial_velocity_components() -> None:
@@ -885,8 +885,8 @@ def example_spatial_velocity_components() -> None:
     )
     vector6 = velocity.to_rep("vector6", validate=True)
     components = vector6.as_components(validate=True)
-    assert velocity.as_vector6(validate=True).unsafe_data["velocity"].shape[-1] == 6
-    assert sorted(components.as_components(validate=True).unsafe_data.data_vars) == ["angular_velocity", "linear_velocity"]
+    assert velocity.as_vector6(validate=True).as_dataset(copy="none")["velocity"].shape[-1] == 6
+    assert sorted(components.as_components(validate=True).as_dataset(copy="none").data_vars) == ["angular_velocity", "linear_velocity"]
     assert isinstance(components.linear(validate=True), LinearVelocity)
     assert isinstance(components.angular(validate=True), AngularVelocity)
 
@@ -899,8 +899,8 @@ def example_spatial_acceleration_components() -> None:
     )
     vector6 = acceleration.to_rep("vector6", validate=True)
     components = vector6.as_components(validate=True)
-    assert acceleration.as_vector6(validate=True).unsafe_data["acceleration"].shape[-1] == 6
-    assert sorted(components.as_components(validate=True).unsafe_data.data_vars) == ["angular_acceleration", "linear_acceleration"]
+    assert acceleration.as_vector6(validate=True).as_dataset(copy="none")["acceleration"].shape[-1] == 6
+    assert sorted(components.as_components(validate=True).as_dataset(copy="none").data_vars) == ["angular_acceleration", "linear_acceleration"]
     assert isinstance(components.linear(validate=True), LinearAcceleration)
     assert isinstance(components.angular(validate=True), AngularAcceleration)
 
@@ -952,10 +952,10 @@ def example_geo_geodetic_from_lla() -> None:
     opts = GeodeticOptions(longitude_wrap="[0, 360)")
     with patch("tal.geo.options.normalize_supported_crs", lambda value, expected, owner: expected):
         lla = GeodeticPosition.from_lla(ao, opts=opts)
-    geo = lla.unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo = lla.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo["kind"] == "geodetic_position"
     assert geo["longitude_wrap"] == "[0, 360)"
-    assert list(lla.unsafe_data["lla"].values) == ["lat", "lon", "alt"]
+    assert list(lla.as_dataset(copy="none")["lla"].values) == ["lat", "lon", "alt"]
 
 
 def example_geo_geodetic_conversion() -> None:
@@ -982,11 +982,11 @@ def example_geo_geodetic_conversion() -> None:
         ecef = lla.to_ecef(opts=opts)
         roundtrip = GeodeticPosition.from_ecef(ecef, opts=opts)
         via_module = geo_from_ecef(ecef, opts=opts)
-    assert list(ecef.unsafe_data["axis"].values) == ["x", "y", "z"]
-    assert list(roundtrip.unsafe_data["lla"].values) == ["lat", "lon", "alt"]
-    assert roundtrip.unsafe_data.attrs["tal"]["ext"]["geo"]["longitude_wrap"] == "[0, 360)"
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
-    np.testing.assert_allclose(via_module.unsafe_data["position"], lla.unsafe_data["position"])
+    assert list(ecef.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
+    assert list(roundtrip.as_dataset(copy="none")["lla"].values) == ["lat", "lon", "alt"]
+    assert roundtrip.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["longitude_wrap"] == "[0, 360)"
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
+    np.testing.assert_allclose(via_module.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
 def example_geo_enu_conversion() -> None:
@@ -1018,12 +1018,12 @@ def example_geo_enu_conversion() -> None:
         enu_from_ecef = ecef.geo.to_enu(origin=origin)
         ecef_roundtrip = enu.geo.to_ecef()
         lla_roundtrip = ecef.geo.to_lla()
-    assert list(enu.unsafe_data["axis"].values) == ["x", "y", "z"]
-    assert enu.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "enu"
-    assert enu.unsafe_data.attrs["tal"]["ext"]["geo"]["origin"]["storage"] == "inline"
-    np.testing.assert_allclose(enu.unsafe_data["position"], enu_from_ecef.unsafe_data["position"])
-    np.testing.assert_allclose(ecef_roundtrip.unsafe_data["position"], ecef.unsafe_data["position"])
-    np.testing.assert_allclose(lla_roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+    assert list(enu.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
+    assert enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["cartesian_system"] == "enu"
+    assert enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["origin"]["storage"] == "inline"
+    np.testing.assert_allclose(enu.as_dataset(copy="none")["position"], enu_from_ecef.as_dataset(copy="none")["position"])
+    np.testing.assert_allclose(ecef_roundtrip.as_dataset(copy="none")["position"], ecef.as_dataset(copy="none")["position"])
+    np.testing.assert_allclose(lla_roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
 def example_geo_distance_bearing() -> None:
@@ -1044,9 +1044,9 @@ def example_geo_distance_bearing() -> None:
         lla = GeodeticPosition.from_lla(ao)
         distance = lla.distance_to(lla)
         bearing = lla.initial_bearing_to(lla)
-    assert tuple(distance.unsafe_data.attrs["tal"]["core"]["roles"]["core_dims"]) == ()
-    assert "distance_m" in distance.unsafe_data.data_vars
-    assert "initial_bearing_deg" in bearing.unsafe_data.data_vars
+    assert tuple(distance.as_dataset(copy="none").attrs["tal"]["core"]["roles"]["core_dims"]) == ()
+    assert "distance_m" in distance.as_dataset(copy="none").data_vars
+    assert "initial_bearing_deg" in bearing.as_dataset(copy="none").data_vars
 
 
 def example_geo_interpolation() -> None:
@@ -1072,7 +1072,7 @@ def example_geo_interpolation() -> None:
     assert isinstance(out, GeodeticPosition)
     assert isinstance(nearest, GeodeticPosition)
     assert isinstance(like, GeodeticPosition)
-    assert out.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"] == "geodetic_position"
+    assert out.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["kind"] == "geodetic_position"
 
 
 def example_geo_crs_transform() -> None:
@@ -1128,8 +1128,8 @@ def example_geo_crs_transform() -> None:
     assert isinstance(projected_input, ProjectedPosition)
     assert isinstance(direct, Position)
     assert isinstance(roundtrip, GeodeticPosition)
-    assert list(projected.unsafe_data["projected"].values) == ["easting", "northing", "height"]
-    assert projected.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"] == "projected_position"
+    assert list(projected.as_dataset(copy="none")["projected"].values) == ["easting", "northing", "height"]
+    assert projected.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["kind"] == "projected_position"
 
 
 def example_astro_options() -> None:
@@ -1155,9 +1155,9 @@ def example_astro_topocentric_direction() -> None:
     )
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
     direction = TopocentricDirection(ao)
-    astro = direction.unsafe_data.attrs["tal"]["ext"]["astro"]
+    astro = direction.as_dataset(copy="none").attrs["tal"]["ext"]["astro"]
     assert astro["kind"] == "topocentric_direction"
-    assert set(direction.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
+    assert set(direction.as_dataset(copy="none").data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
 
 
 def example_astro_direction_to_vector3() -> None:
@@ -1168,8 +1168,8 @@ def example_astro_direction_to_vector3() -> None:
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
     vector = TopocentricDirection(ao).to_vector3(axis="axis", output_var="sun")
     assert isinstance(vector, Vector3)
-    assert tuple(vector.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
-    np.testing.assert_allclose(vector.unsafe_data["sun"].to_numpy(), np.asarray([[2.0, 3.0, 4.0]]))
+    assert tuple(vector.as_dataset(copy="none").coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(vector.as_dataset(copy="none")["sun"].to_numpy(), np.asarray([[2.0, 3.0, 4.0]]))
 
 
 def example_astro_sun_options() -> None:
@@ -1188,8 +1188,8 @@ def example_astro_sun_direction() -> None:
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla_axis",), validate=True)
     opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
     sun = direction_to_sun(GeodeticPosition.from_lla(ao), time="2024-06-01T12:00:00", opts=opts)
-    assert set(sun.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
-    np.testing.assert_allclose(np.linalg.norm(sun.unsafe_data["direction"].values, axis=-1), 1.0, atol=1e-12)
+    assert set(sun.as_dataset(copy="none").data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
+    np.testing.assert_allclose(np.linalg.norm(sun.as_dataset(copy="none")["direction"].values, axis=-1), 1.0, atol=1e-12)
 
 
 def example_io_read_csv_logs() -> None:
@@ -1197,8 +1197,8 @@ def example_io_read_csv_logs() -> None:
         path = Path(tmpdir) / "run.csv"
         path.write_text("time,value\n0.0,1.0\n1.0,2.0\n", encoding="utf-8")
         out = read_csv_logs(str(path), opts=CsvIngestOptions(time_col="time"))
-    assert "value" in out.unsafe_data.data_vars
-    assert out.unsafe_data.sizes["sample"] == 2
+    assert "value" in out.as_dataset(copy="none").data_vars
+    assert out.as_dataset(copy="none").sizes["sample"] == 2
 
 
 def example_io_roundtrip_surface() -> None:
@@ -1231,17 +1231,17 @@ def example_io_roundtrip_surface() -> None:
             opts=AOZarrReadOptions(chunks={}),
         )
         try:
-            assert getattr(loaded_zarr.unsafe_data["value"].data, "chunks", None) is not None
-            loaded_values = loaded_zarr.unsafe_data["value"].compute().values.tolist()
+            assert getattr(loaded_zarr.as_dataset(copy="none")["value"].data, "chunks", None) is not None
+            loaded_values = loaded_zarr.as_dataset(copy="none")["value"].compute().values.tolist()
         finally:
-            loaded_zarr.unsafe_data.close()
+            loaded_zarr.close()
         exported = write_csv_logs(ao, str(root / "logs"), opts=CsvExportOptions(float_format="%.1f"))
         log_path = root / "run.csv"
         log_path.write_text("time,value\n0.0,1.0\n1.0,2.0\n", encoding="utf-8")
         ingested = read_csv_logs(str(log_path), opts=CsvIngestOptions(time_col="time"))
     assert loaded_values == [[1.0, 2.0]]
     assert len(exported) == 1
-    assert ingested.unsafe_data.coords["trial"].values.tolist() == ["run"]
+    assert ingested.as_dataset(copy="none").coords["trial"].values.tolist() == ["run"]
 
 
 def example_io_ros_optional_surface() -> None:
@@ -1252,7 +1252,7 @@ def example_io_ros_optional_surface() -> None:
         ao = read_ros_logs("robot_run.mcap", opts=opts)
     except (ImportError, ValueError, FileNotFoundError):
         ao = None
-    assert ao is None or "translation_x" in ao.unsafe_data.data_vars
+    assert ao is None or "translation_x" in ao.as_dataset(copy="none").data_vars
 
 
 def example_frames_find_path() -> None:
@@ -1412,7 +1412,7 @@ def example_core_schema_ufuncs() -> None:
     merged = merge_schema(ds, {"version": 1, "core": {"roles": {"sequence_dim": "sample", "batch_dims": [], "core_dims": []}}})
     assert merged.attrs["tal"]["core"]["roles"]["sequence_dim"] == "sample"
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=(), validate=True)
-    np.testing.assert_allclose(ufuncs.add(ao, 1.0).unsafe_data["value"], np.asarray([2.0, 3.0]))
+    np.testing.assert_allclose(ufuncs.add(ao, 1.0).as_dataset(copy="none")["value"], np.asarray([2.0, 3.0]))
 
 
 def example_linalg_layout_surface() -> None:
@@ -1435,7 +1435,7 @@ def example_linalg_layout_surface() -> None:
         )
     )
     concatenated = Array.concat_core([x, y], opts=CoreConcatOptions(core_dim="axis"))
-    assert concatenated.unsafe_data.sizes["axis"] == 2
+    assert concatenated.as_dataset(copy="none").sizes["axis"] == 2
     assert sorted(concatenated.decompose_core(opts=CoreDecomposeOptions(core_dims=("axis",), key_mode="label"))) == [("x",), ("y",)]
     patch = Array(
         AnalysisObject.from_data(
@@ -1445,7 +1445,7 @@ def example_linalg_layout_surface() -> None:
             validate=True,
         )
     )
-    assert concatenated.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).unsafe_data["v"].sel(axis="y").item() == 9.0
+    assert concatenated.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).as_dataset(copy="none")["v"].sel(axis="y").item() == 9.0
 
 
 def example_utils_frame_bind() -> None:
@@ -1455,7 +1455,7 @@ def example_utils_frame_bind() -> None:
         core_dims=(),
         validate=True,
     )
-    tagged = AnalysisObject._from_unvalidated(set_frames(ao.unsafe_data, parent="world", child="sensor", validate=False))
+    tagged = AnalysisObject._from_unvalidated(set_frames(ao.as_dataset(copy="none"), parent="world", child="sensor", validate=False))
     graph = FrameGraph()
     parent, child = frame_bind(tagged, graph=graph, create_missing=True, on_conflict="error")
     assert (parent.id if parent is not None else None, child.id if child is not None else None) == ("world", "sensor")

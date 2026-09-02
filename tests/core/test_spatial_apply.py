@@ -87,7 +87,7 @@ def _rotation_matrix(values: np.ndarray, *, sequence_dim: str = "sample") -> Rot
         core_dims=("row", "col"),
         validate=True,
     )
-    ds = set_rotation_rep(ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    ds = set_rotation_rep(ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
     return Rotation(ds)
 
 
@@ -194,7 +194,7 @@ def test_spatial_core_053_rotation_apply_position_local_same_context_determinist
     out = rot.apply(pos, validate=True)
 
     np.testing.assert_allclose(
-        out.unsafe_data["position"].values,
+        out.as_dataset(copy="none")["position"].values,
         np.asarray([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]], dtype=float),
         atol=1e-6,
     )
@@ -210,7 +210,7 @@ def test_spatial_core_054_pose_apply_position_local_same_context_deterministic()
     out = pose.apply(target, validate=True)
 
     np.testing.assert_allclose(
-        out.unsafe_data["position"].values,
+        out.as_dataset(copy="none")["position"].values,
         np.asarray([[1.0, 3.0, 3.0], [3.0, 1.0, 1.0]], dtype=float),
         atol=1e-6,
     )
@@ -226,12 +226,12 @@ def test_spatial_core_055_rotation_apply_linear_and_angular_kinematics_determini
     angular_out = rot.apply(angular, validate=True)
 
     np.testing.assert_allclose(
-        linear_out.unsafe_data["linear_velocity"].values,
+        linear_out.as_dataset(copy="none")["linear_velocity"].values,
         np.asarray([[0.0, 1.0, 0.0], [1.0, 2.0, 0.0]], dtype=float),
         atol=1e-6,
     )
     np.testing.assert_allclose(
-        angular_out.unsafe_data["angular_velocity"].values,
+        angular_out.as_dataset(copy="none")["angular_velocity"].values,
         np.asarray([[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=float),
         atol=1e-6,
     )
@@ -260,10 +260,10 @@ def test_spatial_core_056_pose_apply_spatial_velocity_and_acceleration_determini
     vel_expected = rotation.apply(vel, validate=True)
     acc_expected = rotation.apply(acc, validate=True)
 
-    np.testing.assert_allclose(vel_out.linear().unsafe_data["linear_velocity"].values, vel_expected.linear().unsafe_data["linear_velocity"].values)
-    np.testing.assert_allclose(vel_out.angular().unsafe_data["angular_velocity"].values, vel_expected.angular().unsafe_data["angular_velocity"].values)
-    np.testing.assert_allclose(acc_out.linear().unsafe_data["linear_acceleration"].values, acc_expected.linear().unsafe_data["linear_acceleration"].values)
-    np.testing.assert_allclose(acc_out.angular().unsafe_data["angular_acceleration"].values, acc_expected.angular().unsafe_data["angular_acceleration"].values)
+    np.testing.assert_allclose(vel_out.linear().as_dataset(copy="none")["linear_velocity"].values, vel_expected.linear().as_dataset(copy="none")["linear_velocity"].values)
+    np.testing.assert_allclose(vel_out.angular().as_dataset(copy="none")["angular_velocity"].values, vel_expected.angular().as_dataset(copy="none")["angular_velocity"].values)
+    np.testing.assert_allclose(acc_out.linear().as_dataset(copy="none")["linear_acceleration"].values, acc_expected.linear().as_dataset(copy="none")["linear_acceleration"].values)
+    np.testing.assert_allclose(acc_out.angular().as_dataset(copy="none")["angular_acceleration"].values, acc_expected.angular().as_dataset(copy="none")["angular_acceleration"].values)
 
 
 def test_spatial_core_057_apply_mixed_rep_transform_executes_canonical_path_and_preserves_target_policy() -> None:
@@ -281,7 +281,7 @@ def test_spatial_core_057_apply_mixed_rep_transform_executes_canonical_path_and_
     pos = _position(np.asarray([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=float))
     out_rot = rot_matrix.apply(pos, validate=True)
     assert isinstance(out_rot, Position)
-    assert get_position_rep(out_rot.unsafe_data, owner="test") == "cart"
+    assert get_position_rep(out_rot.as_dataset(copy="none"), owner="test") == "cart"
 
     pose_matrix = _pose_matrix(
         np.asarray(
@@ -294,7 +294,7 @@ def test_spatial_core_057_apply_mixed_rep_transform_executes_canonical_path_and_
     )
     out_pose = pose_matrix.apply(pos, validate=True)
     assert isinstance(out_pose, Position)
-    assert get_position_rep(out_pose.unsafe_data, owner="test") == "cart"
+    assert get_position_rep(out_pose.as_dataset(copy="none"), owner="test") == "cart"
 
 
 def test_spatial_core_067_rotation_pose_apply_accept_vector6_spatial_targets_via_canonical_components_path() -> None:
@@ -320,25 +320,25 @@ def test_spatial_core_067_rotation_pose_apply_accept_vector6_spatial_targets_via
     rot_acc = rot.apply(acc_vec6, validate=True)
     pose_acc = pose.apply(acc_vec6, validate=True)
 
-    assert get_velocity_rep(rot_vel.unsafe_data, owner="test") == "vector6"
-    assert get_velocity_rep(pose_vel.unsafe_data, owner="test") == "vector6"
-    assert get_acceleration_rep(rot_acc.unsafe_data, owner="test") == "vector6"
-    assert get_acceleration_rep(pose_acc.unsafe_data, owner="test") == "vector6"
+    assert get_velocity_rep(rot_vel.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_velocity_rep(pose_vel.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_acceleration_rep(rot_acc.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_acceleration_rep(pose_acc.as_dataset(copy="none"), owner="test") == "vector6"
 
-    vel_var = next(iter(rot_vel.unsafe_data.data_vars))
-    acc_var = next(iter(rot_acc.unsafe_data.data_vars))
+    vel_var = next(iter(rot_vel.as_dataset(copy="none").data_vars))
+    acc_var = next(iter(rot_acc.as_dataset(copy="none").data_vars))
     assert vel_var == "velocity"
     assert acc_var == "acceleration"
-    assert "datavar" not in rot_vel.unsafe_data.data_vars
-    assert "datavar" not in rot_acc.unsafe_data.data_vars
+    assert "datavar" not in rot_vel.as_dataset(copy="none").data_vars
+    assert "datavar" not in rot_acc.as_dataset(copy="none").data_vars
     rot_vel_expected = rot.apply(vel_vec6.as_components(validate=True), validate=True).as_vector6(validate=True)
     pose_vel_expected = pose.apply(vel_vec6.as_components(validate=True), validate=True).as_vector6(validate=True)
     rot_acc_expected = rot.apply(acc_vec6.as_components(validate=True), validate=True).as_vector6(validate=True)
     pose_acc_expected = pose.apply(acc_vec6.as_components(validate=True), validate=True).as_vector6(validate=True)
-    np.testing.assert_allclose(rot_vel.unsafe_data[vel_var].values, rot_vel_expected.unsafe_data[vel_var].values, atol=1e-6)
-    np.testing.assert_allclose(pose_vel.unsafe_data[vel_var].values, pose_vel_expected.unsafe_data[vel_var].values, atol=1e-6)
-    np.testing.assert_allclose(rot_acc.unsafe_data[acc_var].values, rot_acc_expected.unsafe_data[acc_var].values, atol=1e-6)
-    np.testing.assert_allclose(pose_acc.unsafe_data[acc_var].values, pose_acc_expected.unsafe_data[acc_var].values, atol=1e-6)
+    np.testing.assert_allclose(rot_vel.as_dataset(copy="none")[vel_var].values, rot_vel_expected.as_dataset(copy="none")[vel_var].values, atol=1e-6)
+    np.testing.assert_allclose(pose_vel.as_dataset(copy="none")[vel_var].values, pose_vel_expected.as_dataset(copy="none")[vel_var].values, atol=1e-6)
+    np.testing.assert_allclose(rot_acc.as_dataset(copy="none")[acc_var].values, rot_acc_expected.as_dataset(copy="none")[acc_var].values, atol=1e-6)
+    np.testing.assert_allclose(pose_acc.as_dataset(copy="none")[acc_var].values, pose_acc_expected.as_dataset(copy="none")[acc_var].values, atol=1e-6)
 
 
 def test_spatial_core_058_apply_frame_policy_one_framed_inherits_and_tip_tail_chain_deterministic() -> None:
@@ -348,14 +348,14 @@ def test_spatial_core_058_apply_frame_policy_one_framed_inherits_and_tip_tail_ch
 
     transform_framed = frame_retag(rot, parent="world", child="body", validate=True)
     one_framed = transform_framed.apply(pos, validate=True)
-    assert get_frames(one_framed.unsafe_data) == ("world", "body")
+    assert get_frames(one_framed.as_dataset(copy="none")) == ("world", "body")
 
     target_framed = frame_retag(pos, parent="body", child="tip", validate=True)
     target_only = rot.apply(target_framed, validate=True)
-    assert get_frames(target_only.unsafe_data) == ("body", "tip")
+    assert get_frames(target_only.as_dataset(copy="none")) == ("body", "tip")
 
     tip_tail = transform_framed.apply(target_framed, validate=True)
-    assert get_frames(tip_tail.unsafe_data) == ("world", "tip")
+    assert get_frames(tip_tail.as_dataset(copy="none")) == ("world", "tip")
 
 
 def test_spatial_core_059_pose_apply_pose_inverse_roundtrip_identity_for_position() -> None:
@@ -368,7 +368,7 @@ def test_spatial_core_059_pose_apply_pose_inverse_roundtrip_identity_for_positio
 
     forward = pose.apply(target, validate=True)
     backward = pose.inverse(validate=True).apply(forward, validate=True)
-    np.testing.assert_allclose(backward.unsafe_data["position"].values, target.unsafe_data["position"].values, atol=1e-6)
+    np.testing.assert_allclose(backward.as_dataset(copy="none")["position"].values, target.as_dataset(copy="none")["position"].values, atol=1e-6)
 
 
 def test_spatial_core_060_apply_exact_non_core_alignment_behavior_deterministic() -> None:
@@ -377,7 +377,7 @@ def test_spatial_core_060_apply_exact_non_core_alignment_behavior_deterministic(
     pos = _position(values)
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]], dtype=float))
     out = rot.apply(pos, validate=True)
-    np.testing.assert_allclose(out.unsafe_data["position"].values, values)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values, values)
 
 
 def test_spatial_hard_056_rotation_apply_rejects_unsupported_target_type_fail_closed() -> None:
@@ -417,7 +417,7 @@ def test_spatial_hard_060_apply_extra_unmatched_non_core_dims_fail_closed() -> N
     """ID: SPATIAL_HARD_060_apply_extra_unmatched_non_core_dims_fail_closed."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
     pos = _position(np.asarray([[1.0, 0.0, 0.0]], dtype=float))
-    ds = pos.unsafe_data.expand_dims(trial=[0])
+    ds = pos.as_dataset(copy="none").expand_dims(trial=[0])
     pos_extra = Position._from_unvalidated(ds)
     with pytest.raises(ValueError, match="spatial\\.rotation\\.apply"):
         rot.apply(pos_extra, validate=True)
@@ -426,7 +426,7 @@ def test_spatial_hard_060_apply_extra_unmatched_non_core_dims_fail_closed() -> N
 def test_spatial_hard_061_apply_malformed_frame_schema_fail_closed() -> None:
     """ID: SPATIAL_HARD_061_apply_malformed_frame_schema_fail_closed."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
-    rot._bind_dataset(_set_bad_frames(rot.unsafe_data))
+    rot._bind_dataset(_set_bad_frames(rot.as_dataset(copy="none")))
     pos = _position(np.asarray([[1.0, 0.0, 0.0]], dtype=float))
     with pytest.raises(SchemaError, match="tal\\.ext\\.frames\\.extra"):
         rot.apply(pos, validate=True)
@@ -436,7 +436,7 @@ def test_spatial_hard_062_apply_fail_closed_on_malformed_target_internal_state()
     """ID: SPATIAL_HARD_062_apply_fail_closed_on_malformed_target_internal_state."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
     malformed_target = _position(np.asarray([[1.0, 0.0, 0.0]], dtype=float))
-    malformed_target._bind_dataset(malformed_target.unsafe_data.isel(axis=slice(0, 2)))
+    malformed_target._bind_dataset(malformed_target.as_dataset(copy="none").isel(axis=slice(0, 2)))
     with pytest.raises(ValueError, match="spatial\\.rotation\\.apply"):
         rot.apply(malformed_target, validate=True)
 
@@ -455,8 +455,8 @@ def test_spatial_hard_063_pose_apply_spatial6_translation_coupling_not_introduce
     rot = pose.decompose(validate=True)[1]
     pose_out = pose.apply(vel, validate=True)
     rot_out = rot.apply(vel, validate=True)
-    np.testing.assert_allclose(pose_out.linear().unsafe_data["linear_velocity"].values, rot_out.linear().unsafe_data["linear_velocity"].values)
-    np.testing.assert_allclose(pose_out.angular().unsafe_data["angular_velocity"].values, rot_out.angular().unsafe_data["angular_velocity"].values)
+    np.testing.assert_allclose(pose_out.linear().as_dataset(copy="none")["linear_velocity"].values, rot_out.linear().as_dataset(copy="none")["linear_velocity"].values)
+    np.testing.assert_allclose(pose_out.angular().as_dataset(copy="none")["angular_velocity"].values, rot_out.angular().as_dataset(copy="none")["angular_velocity"].values)
 
 
 def test_spatial_hard_064_apply_public_boundary_no_raw_runtime_exception_leakage() -> None:
@@ -464,7 +464,7 @@ def test_spatial_hard_064_apply_public_boundary_no_raw_runtime_exception_leakage
     da = pytest.importorskip("dask.array")
     target = _position(np.asarray([[1.0, 0.0, 0.0]], dtype=float))
 
-    bad_rot_ds = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 0.0]], dtype=float)).unsafe_data.copy(deep=True)
+    bad_rot_ds = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 0.0]], dtype=float)).as_dataset(copy="none").copy(deep=True)
     bad_rot_ds["rotation"] = xr.DataArray(
         da.from_array(bad_rot_ds["rotation"].values, chunks=(1, 4)),
         dims=bad_rot_ds["rotation"].dims,
@@ -473,7 +473,7 @@ def test_spatial_hard_064_apply_public_boundary_no_raw_runtime_exception_leakage
     bad_rot = Rotation._from_unvalidated(bad_rot_ds)
     out_rot = bad_rot.apply(target, validate=True)
     with pytest.raises(ValueError) as rot_exc:
-        out_rot.unsafe_data["position"].compute()
+        out_rot.as_dataset(copy="none")["position"].compute()
     assert "spatial.rotation.apply" in str(rot_exc.value)
     assert "spatial.rotation.kernel" not in str(rot_exc.value)
     assert "AttributeError" not in str(rot_exc.value)
@@ -482,7 +482,7 @@ def test_spatial_hard_064_apply_public_boundary_no_raw_runtime_exception_leakage
     bad_pose = Pose.from_components(bad_rot, _position(np.asarray([[0.0, 0.0, 0.0]], dtype=float)), validate=False)
     out_pose = bad_pose.apply(target, validate=True)
     with pytest.raises(ValueError) as pose_exc:
-        out_pose.unsafe_data["position"].compute()
+        out_pose.as_dataset(copy="none")["position"].compute()
     assert "spatial.pose.apply" in str(pose_exc.value)
     assert "spatial.pose.kernel" not in str(pose_exc.value)
     assert "AttributeError" not in str(pose_exc.value)
@@ -492,7 +492,7 @@ def test_spatial_hard_064_apply_public_boundary_no_raw_runtime_exception_leakage
 def test_spatial_hard_065_pose_apply_spatial_target_dask_lazy_delegated_rotation_failure_preserves_pose_owner_context() -> None:
     """ID: SPATIAL_HARD_065_pose_apply_spatial_target_dask_lazy_delegated_rotation_failure_preserves_pose_owner_context."""
     da = pytest.importorskip("dask.array")
-    bad_rot_ds = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 0.0]], dtype=float)).unsafe_data.copy(deep=True)
+    bad_rot_ds = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 0.0]], dtype=float)).as_dataset(copy="none").copy(deep=True)
     bad_rot_ds["rotation"] = xr.DataArray(
         da.from_array(bad_rot_ds["rotation"].values, chunks=(1, 4)),
         dims=bad_rot_ds["rotation"].dims,
@@ -514,7 +514,7 @@ def test_spatial_hard_065_pose_apply_spatial_target_dask_lazy_delegated_rotation
     ]
     for target in targets:
         out = bad_pose.apply(target, validate=True)
-        linear_ds = out.linear().unsafe_data
+        linear_ds = out.linear().as_dataset(copy="none")
         linear_var = next(iter(linear_ds.data_vars))
         with pytest.raises(ValueError) as exc:
             linear_ds[linear_var].compute()
@@ -527,7 +527,7 @@ def test_spatial_hard_065_pose_apply_spatial_target_dask_lazy_delegated_rotation
 def test_spatial_hard_073_vector6_apply_paths_fail_closed_without_raw_runtime_exception_leakage() -> None:
     """ID: SPATIAL_HARD_073_vector6_apply_paths_fail_closed_without_raw_runtime_exception_leakage."""
     da = pytest.importorskip("dask.array")
-    bad_rot_ds = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 0.0]], dtype=float)).unsafe_data.copy(deep=True)
+    bad_rot_ds = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 0.0]], dtype=float)).as_dataset(copy="none").copy(deep=True)
     bad_rot_ds["rotation"] = xr.DataArray(
         da.from_array(bad_rot_ds["rotation"].values, chunks=(1, 4)),
         dims=bad_rot_ds["rotation"].dims,
@@ -550,9 +550,9 @@ def test_spatial_hard_073_vector6_apply_paths_fail_closed_without_raw_runtime_ex
 
     for target in targets:
         rot_out = bad_rot.apply(target, validate=True)
-        rot_var = next(iter(rot_out.unsafe_data.data_vars))
+        rot_var = next(iter(rot_out.as_dataset(copy="none").data_vars))
         with pytest.raises(ValueError) as rot_exc:
-            rot_out.unsafe_data[rot_var].compute()
+            rot_out.as_dataset(copy="none")[rot_var].compute()
         rot_msg = str(rot_exc.value)
         assert "spatial.rotation.apply" in rot_msg
         assert "spatial.rotation.kernel" not in rot_msg
@@ -560,9 +560,9 @@ def test_spatial_hard_073_vector6_apply_paths_fail_closed_without_raw_runtime_ex
         assert "KeyError" not in rot_msg
 
         pose_out = bad_pose.apply(target, validate=True)
-        pose_var = next(iter(pose_out.unsafe_data.data_vars))
+        pose_var = next(iter(pose_out.as_dataset(copy="none").data_vars))
         with pytest.raises(ValueError) as pose_exc:
-            pose_out.unsafe_data[pose_var].compute()
+            pose_out.as_dataset(copy="none")[pose_var].compute()
         pose_msg = str(pose_exc.value)
         assert "spatial.pose.apply" in pose_msg
         assert "spatial.rotation.apply" not in pose_msg
@@ -579,13 +579,13 @@ def test_topo_core_007_apply_paths_use_core_topology_touchpoint() -> None:
         np.asarray([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]], dtype=float),
     )
     target = _position(np.asarray([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float))
-    target_transposed = Position(target.unsafe_data.transpose("axis", "sample"))
+    target_transposed = Position(target.as_dataset(copy="none").transpose("axis", "sample"))
     rot_out = rot.apply(target_transposed, validate=True)
     pose_out = pose.apply(target_transposed, validate=True)
     rot_expected = rot.apply(target, validate=True)
     pose_expected = pose.apply(target, validate=True)
-    np.testing.assert_allclose(rot_out.unsafe_data["position"].values, rot_expected.unsafe_data["position"].values, atol=1e-6)
-    np.testing.assert_allclose(pose_out.unsafe_data["position"].values, pose_expected.unsafe_data["position"].values, atol=1e-6)
+    np.testing.assert_allclose(rot_out.as_dataset(copy="none")["position"].values, rot_expected.as_dataset(copy="none")["position"].values, atol=1e-6)
+    np.testing.assert_allclose(pose_out.as_dataset(copy="none")["position"].values, pose_expected.as_dataset(copy="none")["position"].values, atol=1e-6)
 
 
 def test_bcast_core_008_spatial_optin_broadcast_path_uses_shared_core_policy() -> None:
@@ -595,9 +595,9 @@ def test_bcast_core_008_spatial_optin_broadcast_path_uses_shared_core_policy() -
     )
     target = _position_missing_sequence(np.asarray([1.0, 2.0, 3.0], dtype=float))
     out = rot.b().apply(target, validate=True)
-    assert out.unsafe_data["position"].sizes["sample"] == 2
+    assert out.as_dataset(copy="none")["position"].sizes["sample"] == 2
     np.testing.assert_allclose(
-        out.unsafe_data["position"].values,
+        out.as_dataset(copy="none")["position"].values,
         np.asarray([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]], dtype=float),
     )
 
@@ -609,9 +609,9 @@ def test_bcast_core_045_spatial_default_semantic_index_broadcast_enabled_for_app
     )
     target = _position_missing_sequence(np.asarray([1.0, 2.0, 3.0], dtype=float))
     out = rot.apply(target, validate=True)
-    assert out.unsafe_data["position"].sizes["sample"] == 2
+    assert out.as_dataset(copy="none")["position"].sizes["sample"] == 2
     np.testing.assert_allclose(
-        out.unsafe_data["position"].values,
+        out.as_dataset(copy="none")["position"].values,
         np.asarray([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]], dtype=float),
     )
 
@@ -624,7 +624,7 @@ def test_bcast_core_047_spatial_apply_family_supports_missing_semantic_dim_mater
     )
     target = _position_missing_sequence(np.asarray([1.0, 2.0, 3.0], dtype=float))
     out = pose.apply(target, validate=True)
-    assert out.unsafe_data["position"].sizes["sample"] == 2
+    assert out.as_dataset(copy="none")["position"].sizes["sample"] == 2
 
 
 def test_bcast_core_051_spatial_param_key_alignment_supported_after_frame_precheck() -> None:
@@ -665,8 +665,8 @@ def test_bcast_core_051_spatial_param_key_alignment_supported_after_frame_preche
     ):
         rot.apply(target, validate=True)
     out = rot.a(on="param", sequence_join=None).apply(target, validate=True)
-    assert tuple(out.unsafe_data["position"].coords["sample"].values.tolist()) == ("a", "b")
-    np.testing.assert_allclose(out.unsafe_data["position"].coords["time_s"].values, np.asarray([0.0, 0.5]))
+    assert tuple(out.as_dataset(copy="none")["position"].coords["sample"].values.tolist()) == ("a", "b")
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].coords["time_s"].values, np.asarray([0.0, 0.5]))
 
 
 def test_bcast_core_046_spatial_frame_precheck_runs_before_alignment_resolution(
@@ -770,7 +770,7 @@ def test_bcast_hard_042_owner_prefixed_error_boundaries_preserved_in_spatial_e3c
     """ID: BCAST_HARD_042_owner_prefixed_error_boundaries_preserved_in_spatial_e3c_paths."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
     target = _position(np.asarray([[1.0, 0.0, 0.0]], dtype=float))
-    bad_target = Position(target.unsafe_data.assign_coords(sample=[10]))
+    bad_target = Position(target.as_dataset(copy="none").assign_coords(sample=[10]))
     with pytest.raises(ValueError) as exc:
         rot.a(on="sequence", sequence_join="exact").apply(bad_target, validate=True)
     assert "spatial.rotation.apply" in str(exc.value)
@@ -828,14 +828,14 @@ def test_bcast_core_009_no_frame_or_rep_semantics_changed_by_b_helper() -> None:
     )
     strict = rot.apply(target, validate=True)
     semantic = rot.b().apply(target, validate=True)
-    assert get_frames(strict.unsafe_data) == get_frames(semantic.unsafe_data)
-    assert get_position_rep(strict.unsafe_data, owner="test") == get_position_rep(
-        semantic.unsafe_data,
+    assert get_frames(strict.as_dataset(copy="none")) == get_frames(semantic.as_dataset(copy="none"))
+    assert get_position_rep(strict.as_dataset(copy="none"), owner="test") == get_position_rep(
+        semantic.as_dataset(copy="none"),
         owner="test",
     )
     np.testing.assert_allclose(
-        strict.unsafe_data["position"].values,
-        semantic.unsafe_data["position"].values,
+        strict.as_dataset(copy="none")["position"].values,
+        semantic.as_dataset(copy="none")["position"].values,
     )
 
 
@@ -860,7 +860,7 @@ def test_bcast_hard_006_spatial_frame_mismatch_paths_unchanged_under_b() -> None
 def test_bcast_hard_007_representation_conflict_paths_unchanged_under_b() -> None:
     """ID: BCAST_HARD_007_representation_conflict_paths_unchanged_under_b."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
-    bad_ds = rot.unsafe_data.copy(deep=True)
+    bad_ds = rot.as_dataset(copy="none").copy(deep=True)
     tal = dict(bad_ds.attrs["tal"])
     ext = dict(tal.get("ext", {}))
     spatial = dict(ext.get("spatial", {}))
@@ -870,7 +870,7 @@ def test_bcast_hard_007_representation_conflict_paths_unchanged_under_b() -> Non
     ext["spatial"] = spatial
     tal["ext"] = ext
     bad_ds.attrs["tal"] = tal
-    bad_rot = Rotation(rot.unsafe_data)
+    bad_rot = Rotation(rot.as_dataset(copy="none"))
     bad_rot._data = bad_ds
     with pytest.raises(ValueError, match=r"unsupported rotation representation"):
         _ = bad_rot.b()
@@ -879,7 +879,7 @@ def test_bcast_hard_007_representation_conflict_paths_unchanged_under_b() -> Non
 def test_bcast_hard_036_representation_conflict_paths_unchanged_under_e3c_rollout() -> None:
     """ID: BCAST_HARD_036_representation_conflict_paths_unchanged_under_e3c_rollout."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
-    bad_ds = rot.unsafe_data.copy(deep=True)
+    bad_ds = rot.as_dataset(copy="none").copy(deep=True)
     tal = dict(bad_ds.attrs["tal"])
     ext = dict(tal.get("ext", {}))
     spatial = dict(ext.get("spatial", {}))
@@ -889,7 +889,7 @@ def test_bcast_hard_036_representation_conflict_paths_unchanged_under_e3c_rollou
     ext["spatial"] = spatial
     tal["ext"] = ext
     bad_ds.attrs["tal"] = tal
-    bad_rot = Rotation(rot.unsafe_data)
+    bad_rot = Rotation(rot.as_dataset(copy="none"))
     bad_rot._data = bad_ds
     target = _position(np.asarray([[1.0, 0.0, 0.0]], dtype=float))
     with pytest.raises(ValueError, match="unsupported rotation representation"):
@@ -900,7 +900,7 @@ def test_bcast_hard_005_no_raw_runtime_exception_leakage_in_b_paths() -> None:
     """ID: BCAST_HARD_005_no_raw_runtime_exception_leakage_in_b_paths."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]], dtype=float))
     target = _position(np.asarray([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float))
-    bad_target = Position(target.unsafe_data.assign_coords(sample=[10, 11]))
+    bad_target = Position(target.as_dataset(copy="none").assign_coords(sample=[10, 11]))
     with pytest.raises(ValueError) as exc:
         rot.b().apply(bad_target, validate=True)
     message = str(exc.value)
@@ -913,7 +913,7 @@ def test_topo_hard_005_no_raw_runtime_exception_leakage_after_migration() -> Non
     """ID: TOPO_HARD_005_no_raw_runtime_exception_leakage_after_migration."""
     rot = _rotation_quat(np.asarray([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]], dtype=float))
     target = _position(np.asarray([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float))
-    target_ds = target.unsafe_data.assign_coords(sample=[10, 11])
+    target_ds = target.as_dataset(copy="none").assign_coords(sample=[10, 11])
     bad_target = Position(target_ds)
     with pytest.raises(ValueError, match=r"^spatial\.rotation\.apply:"):
         rot.apply(bad_target, validate=True)

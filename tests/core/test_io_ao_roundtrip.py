@@ -46,7 +46,7 @@ class _TrackingValidityBackend(BackendArray):
 
 
 def _with_backend_validity(backend: BackendArray) -> xr.Dataset:
-    ds = _batched_roundtrip_source().unsafe_data.copy(deep=False)
+    ds = _batched_roundtrip_source().as_dataset(copy="none").copy(deep=False)
     variable = xr.Variable(
         ("trial",),
         indexing.LazilyIndexedArray(backend),
@@ -103,13 +103,13 @@ def test_io_core_p10a_002_ao_zarr_round_trip_preserves_schema_roles_and_validity
     store = tmp_path / "ao.zarr"
     src.io.to_zarr(str(store))
     out = AnalysisObject.from_zarr(str(store), opts=AOZarrReadOptions(chunks=chunks))
-    assert read_roles(out.unsafe_data) == read_roles(src.unsafe_data)
-    assert read_param_coord_name(out.unsafe_data) == read_param_coord_name(src.unsafe_data)
-    assert read_sequence_size_coord_name(out.unsafe_data) == read_sequence_size_coord_name(
-        src.unsafe_data
+    assert read_roles(out.as_dataset(copy="none")) == read_roles(src.as_dataset(copy="none"))
+    assert read_param_coord_name(out.as_dataset(copy="none")) == read_param_coord_name(src.as_dataset(copy="none"))
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == read_sequence_size_coord_name(
+        src.as_dataset(copy="none")
     )
-    xr.testing.assert_allclose(out.unsafe_data["x"], src.unsafe_data["x"])
-    xr.testing.assert_allclose(out.unsafe_data["y"], src.unsafe_data["y"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], src.as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["y"], src.as_dataset(copy="none")["y"])
 
 
 @pytest.mark.parametrize("chunks", [None, {"trial": 1, "sample": 2}])
@@ -127,10 +127,10 @@ def test_io_core_p10a_008_zarr_batched_validity_roundtrip_materializes_size_only
         out = AnalysisObject.from_zarr(str(store), opts=AOZarrReadOptions(chunks=chunks))
 
     assert task_keys
-    assert getattr(out.unsafe_data["payload_probe"].data, "chunks", None) is not None
-    assert getattr(out.unsafe_data.coords["n_valid"].data, "chunks", None) is None
-    np.testing.assert_array_equal(out.unsafe_data.coords["n_valid"], [2, 3])
-    np.testing.assert_allclose(out.unsafe_data["payload_probe"].compute(), [[0, 1, 2], [3, 4, 5]])
+    assert getattr(out.as_dataset(copy="none")["payload_probe"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none").coords["n_valid"].data, "chunks", None) is None
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["n_valid"], [2, 3])
+    np.testing.assert_allclose(out.as_dataset(copy="none")["payload_probe"].compute(), [[0, 1, 2], [3, 4, 5]])
 
 
 def test_io_perf_p10a_001_zarr_payload_nonexecution_uses_execution_sentinel(
@@ -141,7 +141,7 @@ def test_io_perf_p10a_001_zarr_payload_nonexecution_uses_execution_sentinel(
     def fail_if_payload_executes() -> np.ndarray:
         raise AssertionError("Zarr ingress executed a payload task")
 
-    src = _batched_roundtrip_source().unsafe_data
+    src = _batched_roundtrip_source().as_dataset(copy="none")
     payload = da.from_delayed(
         delayed(fail_if_payload_executes)(),
         shape=(2, 3),
@@ -154,9 +154,9 @@ def test_io_perf_p10a_001_zarr_payload_nonexecution_uses_execution_sentinel(
 
     out = AnalysisObject.from_zarr("sentinel.zarr")
 
-    assert getattr(out.unsafe_data["payload_probe"].data, "chunks", None) is not None
-    assert getattr(out.unsafe_data.coords["n_valid"].data, "chunks", None) is None
-    np.testing.assert_array_equal(out.unsafe_data.coords["n_valid"], [2, 3])
+    assert getattr(out.as_dataset(copy="none")["payload_probe"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none").coords["n_valid"].data, "chunks", None) is None
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["n_valid"], [2, 3])
 
 
 def test_io_core_p10a_009_zarr_batched_validity_roundtrip_preserves_subclass(
@@ -172,7 +172,7 @@ def test_io_core_p10a_009_zarr_batched_validity_roundtrip_preserves_subclass(
     src.io.to_zarr(str(store))
     out = SubAO.from_zarr(str(store))
     assert isinstance(out, SubAO)
-    np.testing.assert_array_equal(out.unsafe_data.coords["n_valid"], [2, 3])
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["n_valid"], [2, 3])
 
 
 @pytest.mark.parametrize("validate", [True, False])
@@ -181,7 +181,7 @@ def test_io_hard_p10a_006_zarr_malformed_batched_validity_fails_after_materializ
     validate: bool,
 ) -> None:
     """ID: IO_HARD_P10A_006_zarr_malformed_batched_validity_fails_after_materialization."""
-    malformed = _batched_roundtrip_source().unsafe_data.assign_coords(n_valid=("trial", [2, 4]))
+    malformed = _batched_roundtrip_source().as_dataset(copy="none").assign_coords(n_valid=("trial", [2, 4]))
     store = tmp_path / "malformed_batched.zarr"
     malformed.to_zarr(str(store), mode="w")
     with pytest.raises(ValueError, match="AnalysisObject.from_zarr: invalid persisted schema payload"):
@@ -192,7 +192,7 @@ def test_io_hard_p10a_007_zarr_schema_structure_fails_before_validity_materializ
     tmp_path: Path,
 ) -> None:
     """ID: IO_HARD_P10A_007_zarr_schema_structure_fails_before_validity_materialization."""
-    malformed = _batched_roundtrip_source().unsafe_data.copy(deep=True)
+    malformed = _batched_roundtrip_source().as_dataset(copy="none").copy(deep=True)
     tal = deepcopy(malformed.attrs["tal"])
     tal["core"]["roles"]["sequence_dim"] = "missing"
     malformed.attrs["tal"] = tal
@@ -214,7 +214,7 @@ def test_io_hard_p10a_008_zarr_validity_dtype_fails_before_materialization(
     tmp_path: Path,
 ) -> None:
     """ID: IO_HARD_P10A_008_zarr_validity_dtype_fails_before_materialization."""
-    malformed = _batched_roundtrip_source().unsafe_data.assign_coords(n_valid=("trial", ["2", "3"]))
+    malformed = _batched_roundtrip_source().as_dataset(copy="none").assign_coords(n_valid=("trial", ["2", "3"]))
     store = tmp_path / "malformed_validity_dtype.zarr"
     malformed.to_zarr(str(store), mode="w")
 
@@ -233,7 +233,7 @@ def test_io_hard_p10a_009_zarr_categorical_param_preserves_owner_before_executio
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ID: IO_HARD_P10A_009_zarr_categorical_param_preserves_owner_before_execution."""
-    src = _roundtrip_source().unsafe_data
+    src = _roundtrip_source().as_dataset(copy="none")
     size = da.from_array(np.array(3, dtype=np.int64), chunks=())
     payload = da.from_array(np.array([1.0, 2.0, 3.0]), chunks=(2,))
     malformed = src.assign(x=("sample", payload)).assign_coords(
@@ -310,7 +310,7 @@ def test_io_hard_p10a_014_zarr_read_failure_closes_open_dataset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ID: IO_HARD_P10A_014_zarr_read_failure_closes_open_dataset."""
-    malformed = _batched_roundtrip_source().unsafe_data.copy(deep=False)
+    malformed = _batched_roundtrip_source().as_dataset(copy="none").copy(deep=False)
     tal = deepcopy(malformed.attrs["tal"])
     tal["core"]["roles"]["sequence_dim"] = "missing"
     malformed.attrs = {**malformed.attrs, "tal": tal}
@@ -328,7 +328,7 @@ def test_io_hard_p10a_017_zarr_cleanup_interrupt_preserves_primary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ID: IO_HARD_P10A_017_zarr_cleanup_interrupt_preserves_primary."""
-    malformed = _batched_roundtrip_source().unsafe_data.copy(deep=False)
+    malformed = _batched_roundtrip_source().as_dataset(copy="none").copy(deep=False)
     tal = deepcopy(malformed.attrs["tal"])
     tal["core"]["roles"]["sequence_dim"] = "missing"
     malformed.attrs = {**malformed.attrs, "tal": tal}
@@ -356,7 +356,7 @@ def test_io_hard_p10a_015_zarr_success_transfers_close_ownership_once(
     class SubAO(AnalysisObject):
         pass
 
-    source = _batched_roundtrip_source().unsafe_data
+    source = _batched_roundtrip_source().as_dataset(copy="none")
     payload = da.from_array(np.arange(6.0).reshape(2, 3), chunks=(1, 2))
     size = da.from_array(np.array([2, 3], dtype=np.int64), chunks=(1,))
     opened = source.assign(payload_probe=(("trial", "sample"), payload))
@@ -368,10 +368,10 @@ def test_io_hard_p10a_015_zarr_success_transfers_close_ownership_once(
     out = SubAO.from_zarr("owned.zarr")
 
     assert isinstance(out, SubAO)
-    assert getattr(out.unsafe_data["payload_probe"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none")["payload_probe"].data, "chunks", None) is not None
     assert closed == []
-    out.unsafe_data.close()
-    out.unsafe_data.close()
+    out.close()
+    out.close()
     assert closed == [True]
 
 
@@ -394,7 +394,7 @@ def test_io_hard_p10a_016_zarr_close_composes_subclass_and_backend_ownership(
 
             self._data.set_close(close_subclass_resource)
 
-    opened = _batched_roundtrip_source().unsafe_data
+    opened = _batched_roundtrip_source().as_dataset(copy="none")
     opened.set_close(lambda: events.append("backend-close"))
     monkeypatch.setattr(xr, "open_zarr", lambda *_args, **_kwargs: opened)
 
@@ -403,10 +403,10 @@ def test_io_hard_p10a_016_zarr_close_composes_subclass_and_backend_ownership(
     assert events == ["bind"]
     if fail_subclass_close:
         with pytest.raises(RuntimeError, match="subclass close failed"):
-            out.unsafe_data.close()
+            out.close()
     else:
-        out.unsafe_data.close()
-    out.unsafe_data.close()
+        out.close()
+    out.close()
     assert events == ["bind", "subclass-close", "backend-close"]
 
 
@@ -414,7 +414,7 @@ def test_io_hard_p10a_010_zarr_writer_rejects_invalid_schema_before_store_mutati
     tmp_path: Path,
 ) -> None:
     """ID: IO_HARD_P10A_010_zarr_writer_rejects_invalid_schema_before_store_mutation."""
-    malformed = _batched_roundtrip_source().unsafe_data.assign_coords(n_valid=("trial", [2, 4]))
+    malformed = _batched_roundtrip_source().as_dataset(copy="none").assign_coords(n_valid=("trial", [2, 4]))
     ao = AnalysisObject.from_data(
         malformed,
         sequence_dim="sample",

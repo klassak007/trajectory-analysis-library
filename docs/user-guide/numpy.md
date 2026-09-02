@@ -78,8 +78,8 @@ operations still enforce their own contracts.
 
 ## Quick Checks
 
-- Inspect `sum_xy.unsafe_data`.
-- Inspect `sin_x.unsafe_data.attrs["tal"]`.
+- Inspect `sum_xy.as_dataset()`.
+- Inspect `sin_x.as_dataset().attrs["tal"]`.
 - Inspect `condition` directly before feeding it to `ao.events.mask(...)`.
 
 ## See Also

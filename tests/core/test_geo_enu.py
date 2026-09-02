@@ -33,7 +33,7 @@ def _lla_dataset(values: np.ndarray | None = None, *, sample_dim: str = "sample"
         param_coord="time_s",
         sequence_size_coord="group_size",
         validate=True,
-    ).unsafe_data.copy(deep=True)
+    ).as_dataset(copy="none").copy(deep=True)
 
 
 def _position_dataset(values: np.ndarray | None = None) -> xr.Dataset:
@@ -43,7 +43,7 @@ def _position_dataset(values: np.ndarray | None = None) -> xr.Dataset:
         {"position": (("sample", "axis"), values)},
         coords={"sample": np.arange(values.shape[0]), "axis": ["x", "y", "z"]},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True).unsafe_data
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True).as_dataset(copy="none")
 
 
 def _install_geo_backend_stub(monkeypatch) -> None:
@@ -101,9 +101,9 @@ def test_geo_core_g2_002_geodetic_to_enu_known_fixture(monkeypatch) -> None:
     enu = lla.to_enu(LocalOrigin(0.0, 0.0, 0.0))
 
     assert isinstance(enu, Position)
-    assert list(enu.unsafe_data["axis"].values) == ["x", "y", "z"]
-    np.testing.assert_allclose(enu.unsafe_data["position"], [[1.0, 0.0, 0.0]], atol=1e-12)
-    geo = enu.unsafe_data.attrs["tal"]["ext"]["geo"]
+    assert list(enu.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
+    np.testing.assert_allclose(enu.as_dataset(copy="none")["position"], [[1.0, 0.0, 0.0]], atol=1e-12)
+    geo = enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo["kind"] == "cartesian_geo_position"
     assert geo["cartesian_system"] == "enu"
     assert geo["origin"] == {"storage": "inline", "lat": 0.0, "lon": 0.0, "alt": 0.0}
@@ -117,7 +117,7 @@ def test_geo_core_g2_003_ecef_to_enu_known_fixture(monkeypatch) -> None:
 
     enu = position.geo.to_enu(opts=opts)
 
-    np.testing.assert_allclose(enu.unsafe_data["position"], [[1.0, 0.0, 0.0]], atol=1e-12)
+    np.testing.assert_allclose(enu.as_dataset(copy="none")["position"], [[1.0, 0.0, 0.0]], atol=1e-12)
 
 
 def test_geo_core_g4_local_origin_opts_accepts_geographic_crs(monkeypatch) -> None:
@@ -128,7 +128,7 @@ def test_geo_core_g4_local_origin_opts_accepts_geographic_crs(monkeypatch) -> No
 
     enu = GeodeticPosition.from_lla(_lla_dataset()).to_enu(origin)
 
-    geo = enu.unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo = enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo["geodetic_crs"] == "EPSG:4326"
     assert geo["origin"] == {"storage": "inline", "lat": 0.0, "lon": 0.0, "alt": 0.0}
 
@@ -152,8 +152,8 @@ def test_geo_core_g2_004_enu_to_ecef_roundtrip_within_tolerance(monkeypatch) -> 
     ecef = lla.to_ecef()
     roundtrip = lla.to_enu(origin).geo.to_ecef()
 
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], ecef.unsafe_data["position"], atol=1e-12)
-    assert roundtrip.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], ecef.as_dataset(copy="none")["position"], atol=1e-12)
+    assert roundtrip.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
 
 
 def test_geo_core_g2_005_enu_conversion_preserves_topology_and_output_frame(monkeypatch) -> None:
@@ -165,15 +165,15 @@ def test_geo_core_g2_005_enu_conversion_preserves_topology_and_output_frame(monk
 
     enu = lla.to_enu(opts=opts)
 
-    declared, sequence_dim, batch_dims, core_dims = read_roles(enu.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(enu.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ("axis",)
-    assert read_param_coord_name(enu.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(enu.unsafe_data) == "group_size"
-    assert get_frames(enu.unsafe_data) == ("site_enu", "receiver")
-    assert enu.unsafe_data.attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "site_enu"
+    assert read_param_coord_name(enu.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(enu.as_dataset(copy="none")) == "group_size"
+    assert get_frames(enu.as_dataset(copy="none")) == ("site_enu", "receiver")
+    assert enu.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "site_enu"
 
 
 def test_geo_core_g2_006_enu_origin_broadcasts_by_semantic_topology(monkeypatch) -> None:
@@ -187,14 +187,14 @@ def test_geo_core_g2_006_enu_origin_broadcasts_by_semantic_topology(monkeypatch)
 
     enu = source.to_enu(origin)
 
-    origin_meta = enu.unsafe_data.attrs["tal"]["ext"]["geo"]["origin"]
+    origin_meta = enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["origin"]
     assert origin_meta == {
         "storage": "coordinates",
         "lat_coord": "tal_geo_origin_lat_2",
         "lon_coord": "tal_geo_origin_lon_2",
         "alt_coord": "tal_geo_origin_alt_2",
     }
-    assert set(origin_meta.values()).issubset(set(enu.unsafe_data.coords) | {"coordinates"})
+    assert set(origin_meta.values()).issubset(set(enu.as_dataset(copy="none").coords) | {"coordinates"})
 
 
 def test_geo_core_g2_007_enu_output_is_cartesian_position(monkeypatch) -> None:
@@ -202,7 +202,7 @@ def test_geo_core_g2_007_enu_output_is_cartesian_position(monkeypatch) -> None:
     _install_geo_backend_stub(monkeypatch)
     enu = GeodeticPosition.from_lla(_lla_dataset()).to_enu(LocalOrigin(0.0, 0.0, 0.0))
     assert isinstance(enu, Position)
-    assert list(enu.unsafe_data["axis"].values) == ["x", "y", "z"]
+    assert list(enu.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
 
 
 def test_geo_core_g2_008_enu_conversion_preserves_dask_laziness(monkeypatch) -> None:
@@ -213,14 +213,14 @@ def test_geo_core_g2_008_enu_conversion_preserves_dask_laziness(monkeypatch) -> 
 
     enu = GeodeticPosition.from_lla(ds).to_enu(LocalOrigin(0.0, 0.0, 0.0), validate=False)
 
-    assert is_dask_collection(enu.unsafe_data["position"].data)
+    assert is_dask_collection(enu.as_dataset(copy="none")["position"].data)
 
 
 def test_geo_core_g2_009_geo_provenance_metadata_records_enu_origin(monkeypatch) -> None:
     """ID: GEO_CORE_G2_009_geo_provenance_metadata_records_enu_origin."""
     _install_geo_backend_stub(monkeypatch)
     enu = GeodeticPosition.from_lla(_lla_dataset()).to_enu(LocalOrigin(0.0, 0.0, 0.0))
-    geo = enu.unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo = enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo["kind"] == "cartesian_geo_position"
     assert geo["cartesian_system"] == "enu"
     assert geo["origin"]["storage"] == "inline"
@@ -306,8 +306,8 @@ def test_enu_output_without_output_frame_clears_frame_metadata(monkeypatch) -> N
     _install_geo_backend_stub(monkeypatch)
     ds = set_frames(_lla_dataset(), parent="earth_ecef", child="receiver", validate=False)
     enu = GeodeticPosition.from_lla(ds).to_enu(LocalOrigin(0.0, 0.0, 0.0))
-    assert get_frames(enu.unsafe_data) == (None, None)
-    relation = enu.unsafe_data.attrs["tal"]["ext"]["spatial"].get("relation", {})
+    assert get_frames(enu.as_dataset(copy="none")) == (None, None)
+    relation = enu.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"].get("relation", {})
     assert relation.get("expressed_in") is None
 
 
@@ -321,9 +321,9 @@ def test_enu_to_ecef_rejects_non_enu_input(monkeypatch) -> None:
 def test_enu_to_ecef_rejects_malformed_origin_provenance(monkeypatch) -> None:
     _install_geo_backend_stub(monkeypatch)
     enu = GeodeticPosition.from_lla(_lla_dataset()).to_enu(LocalOrigin(0.0, 0.0, 0.0))
-    geo = dict(enu.unsafe_data.attrs["tal"]["ext"]["geo"])
+    geo = dict(enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"])
     geo["origin"] = {**geo["origin"], "extra": "bad"}
-    corrupted = merge_schema(enu.unsafe_data, {"ext": {"geo": None}}, validate=False)
+    corrupted = merge_schema(enu.as_dataset(copy="none"), {"ext": {"geo": None}}, validate=False)
     corrupted = merge_schema(corrupted, {"ext": {"geo": geo}}, validate=False)
     with pytest.raises(ValueError, match="unknown key"):
         Position(corrupted).geo.to_ecef()

@@ -52,7 +52,7 @@ def _rotation_grouping() -> Rotation:
         core_dims=("quat",),
         validate=True,
     )
-    return Rotation(ao.unsafe_data)
+    return Rotation(ao.as_dataset(copy="none"))
 
 
 def _windowed_grouping_ao() -> AnalysisObject:
@@ -98,7 +98,7 @@ def test_group_core_p9d_001_grouped_reducer_surface_methods_exist_and_are_invoca
 
 def test_group_core_p9d_002_grouped_dim_none_reduces_member_axis_and_preserves_group_axis() -> None:
     """ID: GROUP_CORE_P9D_002_grouped_dim_none_reduces_member_axis_and_preserves_group_axis."""
-    out = _grouping_ao().group.groupby("label").mean(validate=True).unsafe_data
+    out = _grouping_ao().group.groupby("label").mean(validate=True).as_dataset(copy="none")
     np.testing.assert_array_equal(out.coords["group_key"].to_numpy(), np.array(["A", "C", "B"], dtype=object))
     np.testing.assert_allclose(out["signal"].to_numpy(), np.array([14.0, 11.0, 21.5], dtype=float))
     assert out["signal"].dims == ("group_key",)
@@ -107,11 +107,11 @@ def test_group_core_p9d_002_grouped_dim_none_reduces_member_axis_and_preserves_g
 def test_group_core_p9d_003_grouped_explicit_dim_override_matches_canonical_padded_reference() -> None:
     """ID: GROUP_CORE_P9D_003_grouped_explicit_dim_override_matches_canonical_padded_reference."""
     grouped = _grouping_ao().group.groupby("label")
-    out = grouped.sum(dim="group_key", validate=True).unsafe_data
+    out = grouped.sum(dim="group_key", validate=True).as_dataset(copy="none")
     reference = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False),
         validate=True,
-    ).sum(dim="group_key", validate=True).unsafe_data
+    ).sum(dim="group_key", validate=True).as_dataset(copy="none")
     assert out.identical(reference)
 
 
@@ -121,23 +121,23 @@ def test_group_core_p9d_004_stacked_layout_requests_normalize_to_canonical_padde
     padded = grouped.mean(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     stacked = grouped.mean(
         opts=GroupMaterializeOptions(layout="stacked", include_empty_groups=False),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     assert padded.identical(stacked)
 
     stacked_member = grouped.sum(
         dim="group_member",
         opts=GroupMaterializeOptions(layout="stacked", include_empty_groups=False),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     padded_member = grouped.sum(
         dim="sample",
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     assert stacked_member.identical(padded_member)
 
 
@@ -148,11 +148,11 @@ def test_group_core_p9d_005_grouped_reducer_default_excludes_no_member_groups_an
         bins=np.array([-0.5, 0.5, 1.5, 2.5, 3.5], dtype=float),
         labels=["low", "mid", "high", "very_high"],
     )
-    default_out = grouped.mean(validate=True).unsafe_data
+    default_out = grouped.mean(validate=True).as_dataset(copy="none")
     include_out = grouped.mean(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=True),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     np.testing.assert_array_equal(
         default_out.coords["group_key"].to_numpy(),
         np.array(["low", "mid", "high"], dtype=object),
@@ -173,21 +173,21 @@ def test_group_core_p9d_006_grouped_rotation_mean_preserves_typed_and_non_owned_
     assert isinstance(mean_out, Rotation)
     assert type(sum_out) is AnalysisObject
     assert type(any_out) is AnalysisObject
-    assert any_out.unsafe_data["rotation"].dtype.kind == "b"
+    assert any_out.as_dataset(copy="none")["rotation"].dtype.kind == "b"
 
 
 def test_group_core_p9d_007_grouped_weighted_supported_ops_match_ao_and_unsupported_fail_closed() -> None:
     """ID: GROUP_CORE_P9D_007_grouped_weighted_supported_ops_match_ao_and_unsupported_fail_closed."""
     grouped = _grouping_ao().group.groupby("label")
     weights = np.array([1.0, 2.0, 1.0], dtype=float)
-    mean_out = grouped.mean(weights=weights, validate=True).unsafe_data
-    sum_out = grouped.sum(weights=weights, validate=True).unsafe_data
+    mean_out = grouped.mean(weights=weights, validate=True).as_dataset(copy="none")
+    sum_out = grouped.sum(weights=weights, validate=True).as_dataset(copy="none")
     padded = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False),
         validate=True,
     )
-    mean_ref = padded.mean(dim="sample", weights=weights, validate=True).unsafe_data
-    sum_ref = padded.sum(dim="sample", weights=weights, validate=True).unsafe_data
+    mean_ref = padded.mean(dim="sample", weights=weights, validate=True).as_dataset(copy="none")
+    sum_ref = padded.sum(dim="sample", weights=weights, validate=True).as_dataset(copy="none")
     assert mean_out.identical(mean_ref)
     assert sum_out.identical(sum_ref)
     with pytest.raises(ValueError, match="weights are supported only"):
@@ -197,6 +197,6 @@ def test_group_core_p9d_007_grouped_weighted_supported_ops_match_ao_and_unsuppor
 def test_group_core_p9d_008_windowed_grouping_supports_primary_batch_key_with_preserve_batch_mean() -> None:
     """ID: GROUP_CORE_P9D_008_windowed_grouping_supports_primary_batch_key_with_preserve_batch_mean."""
     ao = _windowed_grouping_ao()
-    out = ao.group.groupby("outcome", opts=GroupByOptions(preserve_batch=True)).mean(dim="trial", validate=True).unsafe_data
+    out = ao.group.groupby("outcome", opts=GroupByOptions(preserve_batch=True)).mean(dim="trial", validate=True).as_dataset(copy="none")
     assert out["signal"].dims == ("event", "group_key", "tau")
     np.testing.assert_array_equal(out.coords["group_key"].to_numpy(), np.asarray(["intercept", "miss"], dtype=object))

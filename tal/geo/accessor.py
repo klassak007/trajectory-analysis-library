@@ -74,7 +74,7 @@ class PositionGeoAccessor:
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> opts = GeodeticOptions(ecef_frame=None)
         >>> lla = Position(ao).geo.to_lla(opts=opts)
-        >>> list(lla.unsafe_data["lla"].values)
+        >>> list(lla.as_dataset()["lla"].values)
         ['lat', 'lon', 'alt']
         """
         from .local import position_to_lla
@@ -137,7 +137,7 @@ class PositionGeoAccessor:
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> opts = ENUOptions(origin=LocalOrigin(0.0, 0.0, 0.0), output_frame="site_enu")
         >>> enu = Position(ao).geo.to_enu(opts=opts)
-        >>> list(enu.unsafe_data["axis"].values)
+        >>> list(enu.as_dataset()["axis"].values)
         ['x', 'y', 'z']
         """
         from .local import ecef_to_enu
@@ -198,7 +198,7 @@ class PositionGeoAccessor:
         >>> opts = ENUOptions(origin=LocalOrigin(0.0, 0.0, 0.0), ecef_frame="custom_ecef")
         >>> enu = GeodeticPosition.from_lla(ao).to_enu(opts=opts)
         >>> ecef = enu.geo.to_ecef(opts=opts)
-        >>> list(ecef.unsafe_data["axis"].values)
+        >>> list(ecef.as_dataset()["axis"].values)
         ['x', 'y', 'z']
         """
         from .local import enu_to_ecef

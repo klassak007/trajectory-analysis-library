@@ -42,9 +42,10 @@ sun = direction_to_sun(
     time="2024-06-01T12:00:00",
     opts=opts,
 )
-direction = sun.unsafe_data["direction"]
-altitude = sun.unsafe_data["altitude_deg"]
-azimuth = sun.unsafe_data["azimuth_deg"]
+sun_snapshot = sun.as_dataset()
+direction = sun_snapshot["direction"]
+altitude = sun_snapshot["altitude_deg"]
+azimuth = sun_snapshot["azimuth_deg"]
 sun_xyz = sun.to_vector3()
 ```
 

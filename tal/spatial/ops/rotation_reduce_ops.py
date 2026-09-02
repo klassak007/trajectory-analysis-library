@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.reducer_ops.dims import resolve_reduce_dims
 from tal.core.reducer_ops.types import DimLike, WeightInput
 from tal.core.reducer_ops.validity import apply_structural_mask, reduce_missing_on_valid_prefix, resolve_structural_valid_mask
@@ -35,7 +36,7 @@ _QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
 
 
 def _resolve_quat_payload(rotation: "Rotation", *, owner: str) -> tuple[xr.Dataset, str, str, xr.DataArray]:
-    source = rotation.as_quat(validate=False).unsafe_data
+    source = analysis_object_dataset(rotation.as_quat(validate=False))
     var_name = select_single_numeric_var(source, owner=owner, what="Rotation.mean")
     quat_dim = resolve_quat_dim_with_role_fallback(source, var_name=var_name, owner=owner, what="Rotation.mean")
     require_var_contains_dims(source, var_name=var_name, required_dims=(quat_dim,), owner=owner, what="Rotation.mean")
@@ -313,8 +314,9 @@ def rotation_mean(
     validate: bool = True,
     owner: str = "spatial.rotation.mean",
 ) -> "Rotation":
+    source = analysis_object_dataset(rotation)
     reduce_dims = resolve_reduce_dims(
-        rotation.unsafe_data,
+        source,
         dim=dim,
         component_dims=rotation._required_component_dims_for_reduce(),
         owner=owner,
@@ -322,7 +324,7 @@ def rotation_mean(
     if isinstance(weights, np.ndarray) and len(reduce_dims) > 1:
         raise ValueError(f"{owner}: ndarray weights are only valid for single-dim reduction.")
     if not reduce_dims:
-        return wrap_as(rotation.__class__, rotation.unsafe_data, validate=validate)
+        return wrap_as(rotation.__class__, source, validate=validate)
     if len(reduce_dims) > 1:
         return _reduce_multi_dim(
             rotation,
@@ -333,8 +335,8 @@ def rotation_mean(
             validate=validate,
         )
     reduce_dim = reduce_dims[0]
-    if reduce_dim not in rotation.unsafe_data.dims:
-        return wrap_as(rotation.__class__, rotation.unsafe_data, validate=validate)
+    if reduce_dim not in source.dims:
+        return wrap_as(rotation.__class__, source, validate=validate)
     return _reduce_one_dim(
         rotation,
         dim=reduce_dim,

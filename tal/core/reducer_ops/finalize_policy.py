@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..dataset_ownership import analysis_object_dataset
 from .types import ReducerOp
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ def resolve_reducer_finalize_source(
     if defining_cls is None:
         raise ValueError(f"{owner}: reducer method {op!r} is not available on {source_cls.__name__}.")
     if _uses_analysis_object_surface_method(defining_cls, op=op, analysis_object_cls=AnalysisObject):
-        return AnalysisObject._from_unvalidated(source.unsafe_data)
+        return AnalysisObject._from_unvalidated(analysis_object_dataset(source))
     return source
 
 

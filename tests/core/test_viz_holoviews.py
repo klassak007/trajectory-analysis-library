@@ -214,8 +214,8 @@ def test_viz_core_008_group_key_uses_foundation_na_policy(monkeypatch: pytest.Mo
         np.asarray([[1.0, np.nan, 3.0], [1.0, 2.0, 3.0]], dtype=float),
         dims=("trial", "time"),
         coords={
-            "trial": ao.unsafe_data.coords["trial"],
-            "time": ao.unsafe_data.coords["time"],
+            "trial": ao.as_dataset(copy="none").coords["trial"],
+            "time": ao.as_dataset(copy="none").coords["time"],
         },
     )
     with pytest.raises(ValueError, match="na_key_policy='error'"):

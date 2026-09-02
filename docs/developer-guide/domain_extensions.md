@@ -29,8 +29,9 @@ Declare core roles as data enters the domain. Add domain metadata with
 A typed AO is a thin `TypedAnalysisObject` subclass over an xarray dataset. Keep
 the shape predictable:
 
-- Storage comes from `AnalysisObject`: the typed class still exposes
-  `unsafe_data` and keeps TAL schema in `ds.attrs["tal"]`.
+- Storage comes from `AnalysisObject`: public Dataset exposure uses
+  `as_dataset(copy=...)`, while internal operations use TAL's private Dataset
+  owner and keep schema in `ds.attrs["tal"]`.
 - Ingress constructors such as `from_celsius(...)` should declare shared TAL
   roles with `AnalysisObject.from_data(...)`.
 - `TypedLifecycleSpec.normalize` should add or normalize domain metadata under
@@ -138,8 +139,9 @@ base = xr.Dataset(
 )
 
 temperature = Temperature.from_celsius(base)
-schema = temperature.unsafe_data.attrs["tal"]
-declared, sequence_dim, batch_dims, core_dims = read_roles(temperature.unsafe_data)
+temperature_snapshot = temperature.as_dataset()
+schema = temperature_snapshot.attrs["tal"]
+declared, sequence_dim, batch_dims, core_dims = read_roles(temperature_snapshot)
 
 assert isinstance(temperature, Temperature)
 assert declared is True
@@ -188,6 +190,7 @@ from tal.core import AnalysisObject
 from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_context
 from tal.core.orchestration.finalize import finalize_like
 from tal.core.orchestration.inputs import coerce_operand
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.schema import merge_schema
 from tal.core.schema_read import read_roles
 from tal.core.typed_lifecycle import (
@@ -258,9 +261,10 @@ def bias_temperature(value: object, offset_c: float, *, validate: bool = True) -
     out = context.ds.copy(deep=False)
     out["temperature_c"] = context.data + float(offset_c)
     finalized = finalize_like(context.ao, out, validate=validate, owner=owner)
+    finalized_ds = analysis_object_dataset(finalized)
     if validate:
-        return Temperature._from_validated(finalized.unsafe_data)
-    return Temperature._from_unvalidated(finalized.unsafe_data)
+        return Temperature._from_validated(finalized_ds)
+    return Temperature._from_unvalidated(finalized_ds)
 
 
 sample = np.arange(3)
@@ -283,10 +287,11 @@ expected = xr.DataArray(
     name="temperature_c",
 )
 
-xr.testing.assert_allclose(biased.unsafe_data["temperature_c"], expected)
+biased_snapshot = biased.as_dataset()
+xr.testing.assert_allclose(biased_snapshot["temperature_c"], expected)
 assert isinstance(biased, Temperature)
-assert read_roles(biased.unsafe_data)[1:] == ("sample", ("sensor",), ())
-assert biased.unsafe_data.attrs["tal"]["ext"]["thermal"]["unit"] == "degC"
+assert read_roles(biased_snapshot)[1:] == ("sample", ("sensor",), ())
+assert biased_snapshot.attrs["tal"]["ext"]["thermal"]["unit"] == "degC"
 
 try:
     bias_temperature(object(), 1.0)

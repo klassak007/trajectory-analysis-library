@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import (
     ComponentExtractOptions,
@@ -283,7 +284,7 @@ def _clear_component_registry_for_matrix_layout(
     *,
     owner: str,
 ) -> xr.Dataset:
-    return clear_component_registry(source.unsafe_data, owner=owner)
+    return clear_component_registry(analysis_object_dataset(source), owner=owner)
 
 
 def _wrap_pose_output(ds: xr.Dataset, *, validate: bool) -> "Pose":
@@ -379,17 +380,17 @@ class Pose(AnalysisObject):
     CANONICAL_ROTATION_REP: str = "quat"
     def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
         source = _coerce_pose_source(data, owner="spatial.pose.__init__")
-        super().__init__(source.unsafe_data)
+        super().__init__(analysis_object_dataset(source))
         self._normalize_metadata(owner="spatial.pose.__init__")
         self._enforce_invariants(owner="spatial.pose.__init__")
         self._bind_dataset(
-            _validate_pose_matrix_if_needed(self.unsafe_data, owner="spatial.pose.__init__")
+            _validate_pose_matrix_if_needed(analysis_object_dataset(self), owner="spatial.pose.__init__")
         )
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Pose":
         owner = f"{cls.__name__}._from_validated"
         obj = cls._from_rigid_validated(ds, owner=owner)
-        obj._bind_dataset(_validate_pose_matrix_if_needed(obj.unsafe_data, owner=owner))
+        obj._bind_dataset(_validate_pose_matrix_if_needed(analysis_object_dataset(obj), owner=owner))
         return obj
     @classmethod
     def _from_rigid_validated(
@@ -410,10 +411,10 @@ class Pose(AnalysisObject):
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
         return obj
     def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = _normalize_pose_metadata(self.unsafe_data, owner=owner)
+        normalized = _normalize_pose_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_pose_dataset_invariants(self.unsafe_data, owner=owner)
+        _enforce_pose_dataset_invariants(analysis_object_dataset(self), owner=owner)
     @property
     def preferred_interpolator(self) -> str:
         """Return the default temporal interpolation strategy for poses.
@@ -483,13 +484,15 @@ class Pose(AnalysisObject):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> sorted(Pose.from_components(rot, pos).unsafe_data.data_vars)
+        >>> sorted(Pose.from_components(rot, pos).as_dataset().data_vars)
         ['position', 'rotation']
         """
         owner = "spatial.pose.from_components"
         rot = _coerce_rotation_operand(rotation, owner=owner)
         pos = _coerce_position_operand(position, owner=owner)
-        parent, child = resolve_components_shared_frames(rot.unsafe_data, pos.unsafe_data, owner=owner, left_name="rotation", right_name="position")
+        rot_ds = analysis_object_dataset(rot)
+        pos_ds = analysis_object_dataset(pos)
+        parent, child = resolve_components_shared_frames(rot_ds, pos_ds, owner=owner, left_name="rotation", right_name="position")
         selection = select_topology_policy_with_intents(
             (rot, pos),
             owner=owner,
@@ -499,8 +502,8 @@ class Pose(AnalysisObject):
             semantic_policy=SEMANTIC_NON_CORE_POLICY,
         )
         ds = _build_components_pose_dataset(
-            rot.unsafe_data,
-            pos.unsafe_data,
+            rot_ds,
+            pos_ds,
             owner=owner,
             validate=validate,
             policy=selection.policy,
@@ -553,7 +556,7 @@ class Pose(AnalysisObject):
         ...     core_dims=("row", "col"),
         ...     validate=True,
         ... )
-        >>> Pose.from_matrix(ao).unsafe_data["pose_matrix"].shape[-2:]
+        >>> Pose.from_matrix(ao).as_dataset()["pose_matrix"].shape[-2:]
         (4, 4)
         """
         owner = "spatial.pose.from_matrix"
@@ -589,7 +592,7 @@ class Pose(AnalysisObject):
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
         >>> position, rotation = pose.decompose()  # doctest: +SKIP
         """
-        rep = get_pose_rep(self.unsafe_data, owner="spatial.pose.decompose")
+        rep = get_pose_rep(analysis_object_dataset(self), owner="spatial.pose.decompose")
         if rep == "components":
             return self._decompose_components(validate=validate)
         return self._decompose_matrix(validate=validate)
@@ -617,7 +620,7 @@ class Pose(AnalysisObject):
         Examples
         --------
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
-        >>> pose.to_rep("matrix").unsafe_data["pose_matrix"].shape[-2:]  # doctest: +SKIP
+        >>> pose.to_rep("matrix").as_dataset()["pose_matrix"].shape[-2:]  # doctest: +SKIP
         (4, 4)
         """
         return pose_to_rep(self, rep=rep, validate=validate)
@@ -642,7 +645,7 @@ class Pose(AnalysisObject):
         Examples
         --------
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
-        >>> sorted(pose.as_components().unsafe_data.data_vars)  # doctest: +SKIP
+        >>> sorted(pose.as_components().as_dataset().data_vars)  # doctest: +SKIP
         ['position', 'rotation']
         """
         return pose_as_components(self, validate=validate)
@@ -667,7 +670,7 @@ class Pose(AnalysisObject):
         Examples
         --------
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
-        >>> pose.as_matrix().unsafe_data["pose_matrix"].shape[-2:]  # doctest: +SKIP
+        >>> pose.as_matrix().as_dataset()["pose_matrix"].shape[-2:]  # doctest: +SKIP
         (4, 4)
         """
         return pose_as_matrix(self, validate=validate)
@@ -874,17 +877,18 @@ class Pose(AnalysisObject):
         )
     def _decompose_components(self, *, validate: bool) -> tuple[Position, Rotation]:
         owner = "spatial.pose.decompose"
-        source = AnalysisObject._from_validated(self.unsafe_data) if validate else AnalysisObject._from_unvalidated(self.unsafe_data)
+        source_ds = analysis_object_dataset(self)
+        source = AnalysisObject._from_validated(source_ds) if validate else AnalysisObject._from_unvalidated(source_ds)
         extracted = extract_components(source, opts=ComponentExtractOptions(names=("position", "rotation")), validate=validate)
-        parent, child = get_frames(self.unsafe_data)
-        pos_ds = set_position_rep(extracted["position"].unsafe_data, rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
-        rot_ds = set_rotation_rep(extracted["rotation"].unsafe_data, rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
+        parent, child = get_frames(source_ds)
+        pos_ds = set_position_rep(analysis_object_dataset(extracted["position"]), rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
+        rot_ds = set_rotation_rep(analysis_object_dataset(extracted["rotation"]), rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
         pos_ds = set_frames(pos_ds, parent=parent, child=child, validate=False)
         rot_ds = set_frames(rot_ds, parent=parent, child=child, validate=False)
         return _wrap_position_output(pos_ds, validate=validate), _wrap_rotation_output(rot_ds, validate=validate)
     def _decompose_matrix(self, *, validate: bool) -> tuple[Position, Rotation]:
         owner = "spatial.pose.decompose"
-        candidate = validate_schema_if_needed(self.unsafe_data)
+        candidate = validate_schema_if_needed(analysis_object_dataset(self))
         declared, seq_dim, batch_dims, core_dims = read_roles(candidate)
         if not declared:
             raise ValueError(f"{owner}: Pose requires declared roles.")
@@ -924,8 +928,8 @@ class Pose(AnalysisObject):
         )
 
         parent, child = get_frames(candidate)
-        pos_ds = set_position_rep(pos_ao.unsafe_data, rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
-        rot_ds = set_rotation_rep(rot_ao.unsafe_data, rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
+        pos_ds = set_position_rep(analysis_object_dataset(pos_ao), rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
+        rot_ds = set_rotation_rep(analysis_object_dataset(rot_ao), rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
         pos_ds = set_frames(pos_ds, parent=parent, child=child, validate=False)
         rot_ds = set_frames(rot_ds, parent=parent, child=child, validate=False)
         return _wrap_position_output(pos_ds, validate=validate), _wrap_rotation_output(rot_ds, validate=validate)

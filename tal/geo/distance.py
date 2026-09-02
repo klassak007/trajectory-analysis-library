@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.combine_ops.align import align_contexts
 from tal.core.combine_ops.types import AlignOptions, CombineContext
 from tal.core.metadata_optional import shared_optional_name
@@ -116,9 +117,10 @@ def _finalize_array(
         owner=owner,
         optional_sources=data_sources,
     )
+    finalized_ds = analysis_object_dataset(finalized)
     if validate:
-        return Array._from_validated(finalized.unsafe_data)
-    return Array._from_unvalidated(finalized.unsafe_data)
+        return Array._from_validated(finalized_ds)
+    return Array._from_unvalidated(finalized_ds)
 
 
 def _geodesic_inverse(

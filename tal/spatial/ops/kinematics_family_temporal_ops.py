@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..metadata import get_acceleration_rep, get_velocity_rep
 
 if TYPE_CHECKING:
@@ -32,14 +34,14 @@ class FamilyTemporalRequest:
 
 
 def _velocity_family_parts(source: Velocity, *, validate: bool, owner: str):
-    rep = get_velocity_rep(source.unsafe_data, owner=owner)
+    rep = get_velocity_rep(analysis_object_dataset(source), owner=owner)
     linear = source.linear(validate=validate)
     angular = source.angular(validate=validate)
     return rep, linear, angular
 
 
 def _acceleration_family_parts(source: Acceleration, *, validate: bool, owner: str):
-    rep = get_acceleration_rep(source.unsafe_data, owner=owner)
+    rep = get_acceleration_rep(analysis_object_dataset(source), owner=owner)
     linear = source.linear(validate=validate)
     angular = source.angular(validate=validate)
     return rep, linear, angular

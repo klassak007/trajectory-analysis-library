@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like
 from ..schema import merge_schema as _merge_schema
 from ..schema import set_roles
@@ -18,7 +19,7 @@ def _coerce_result_dataset(result: object, *, source: AnalysisObject, owner: str
     if isinstance(result, xr.DataArray):
         if is_valid_user_var_name(result.name):
             return result.to_dataset(name=result.name)
-        source_names = tuple(str(name) for name in source.unsafe_data.data_vars)
+        source_names = tuple(str(name) for name in analysis_object_dataset(source).data_vars)
         if len(source_names) == 1:
             return result.to_dataset(name=preserve_or_datavar(source_names[0]))
         return result.to_dataset(name=default_datavar_name())
@@ -28,7 +29,7 @@ def _coerce_result_dataset(result: object, *, source: AnalysisObject, owner: str
 
 
 def _attach_source_schema(result: xr.Dataset, *, source: AnalysisObject) -> xr.Dataset:
-    tal_payload = source.unsafe_data.attrs.get("tal")
+    tal_payload = analysis_object_dataset(source).attrs.get("tal")
     if not isinstance(tal_payload, Mapping):
         return result
     return _merge_schema(result, patch=dict(tal_payload), validate=False)
@@ -42,7 +43,7 @@ def _attach_output_core_dims(
 ) -> xr.Dataset:
     if output_core_dims is None:
         return result
-    declared, sequence_dim, batch_dims, _ = read_roles(source.unsafe_data)
+    declared, sequence_dim, batch_dims, _ = read_roles(analysis_object_dataset(source))
     roles_kwargs: dict[str, object]
     if declared:
         roles_kwargs = {

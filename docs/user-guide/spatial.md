@@ -138,8 +138,9 @@ solving needs more than topology.
 
 ## Quick Checks
 
-- Inspect `pose.unsafe_data` and `pose.unsafe_data.attrs["tal"]`.
-- Compare `rot_q.unsafe_data` with `rot_m.unsafe_data` when checking
+- Capture one `pose_snapshot = pose.as_dataset()`, then inspect it and
+  `pose_snapshot.attrs["tal"]`.
+- Compare `rot_q.as_dataset()` with `rot_m.as_dataset()` when checking
   representation changes.
 - Confirm the declared `param_coord` before using `.param.at(...)` or
   `.param.resample_to(...)`.

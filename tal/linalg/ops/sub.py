@@ -46,7 +46,7 @@ def sub(
     ...     validate=True,
     ... ))
     >>> out = sub(left, right)
-    >>> out.unsafe_data["datavar"].to_numpy().tolist()
+    >>> out.as_dataset()["datavar"].to_numpy().tolist()
     [3.0, 4.0]
     """
     return run_elementwise_binary(

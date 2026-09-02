@@ -122,7 +122,7 @@ def test_io_core_p10b_007_ros_timestamp_source_precedence_is_deterministic(
 
     monkeypatch.setattr(ros_logs_module, "_iter_ros_messages", _fake_iter_ros_messages)
     ao = read_ros_logs([str(path)], opts=RosIngestOptions(topic="/pose"))
-    times = ao.unsafe_data.coords["time"].isel(trial=0).values.tolist()
+    times = ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist()
     assert times[:2] == [10_000_000_000, 30_000_000_000]
 
 
@@ -151,7 +151,7 @@ def test_io_core_p10b_023_ros_ingest_accepts_rosbag2_directory_paths(
     ao = read_ros_logs(str(bag_dir), opts=RosIngestOptions(topic="/pose"))
 
     assert observed_paths == [str(bag_dir.resolve())]
-    assert ao.unsafe_data.sizes["sample"] == 1
+    assert ao.as_dataset(copy="none").sizes["sample"] == 1
 
 
 def test_io_hard_p10b_039_ros_backend_lifecycle_errors_retain_public_owner(
@@ -430,7 +430,7 @@ def test_io_core_p10b_022_ros_timestamps_preserve_exact_int64_nanoseconds(
         ),
     )
 
-    time = ao.unsafe_data.coords["time"]
+    time = ao.as_dataset(copy="none").coords["time"]
     assert time.dtype == np.dtype("int64")
     assert time.isel(trial=0).values.tolist() == expected
     assert time.attrs == {"units": "ns", "epoch": "unix"}
@@ -461,7 +461,7 @@ def test_io_core_p10b_003_ros_ingest_timestamp_fallback_and_bad_time_policy_are_
         [str(path)],
         opts=RosIngestOptions(topic="/pose", timestamp_source="header", invalid_time="drop"),
     )
-    times = ao.unsafe_data.coords["time"].isel(trial=0).values.tolist()
+    times = ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist()
     assert times[:1] == [1_000_000_000]
 
 
@@ -501,8 +501,8 @@ def test_io_hard_p10b_032_missing_timestamp_drop_precedes_pose_extraction(
         ),
     )
 
-    assert ao.unsafe_data.coords["time"].isel(trial=0).values.tolist() == [1_000_000_000]
-    assert ao.unsafe_data["translation_x"].isel(trial=0).values.tolist() == [1.0]
+    assert ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist() == [1_000_000_000]
+    assert ao.as_dataset(copy="none")["translation_x"].isel(trial=0).values.tolist() == [1.0]
 
 
 def test_io_hard_p10b_002_topic_or_message_type_ambiguity_fails_closed_with_owner_prefix(
@@ -631,7 +631,7 @@ def test_io_perf_p10b_005_ros_filters_connections_before_deserialization(
 
     assert selected_topics == ["/pose"]
     assert deserialized_topics == ["/pose"]
-    assert ao.unsafe_data.sizes["sample"] == 1
+    assert ao.as_dataset(copy="none").sizes["sample"] == 1
 
 
 def test_io_perf_p10b_009_ros_connection_metadata_is_normalized_once(
@@ -732,11 +732,11 @@ def test_io_hard_p10b_025_ros_frame_metadata_follows_timestamp_sort_order(
 
     ao = read_ros_logs(str(path), opts=options)
 
-    assert ao.unsafe_data.coords["time"].isel(trial=0).values.tolist() == [
+    assert ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist() == [
         1_000_000_000,
         2_000_000_000,
     ]
-    assert ao.unsafe_data.attrs["ros_parent_frame"] == ["early", "late"]
+    assert ao.as_dataset(copy="none").attrs["ros_parent_frame"] == ["early", "late"]
 
 
 def test_io_core_p10b_028_ros_all_missing_optional_frames_are_omitted(
@@ -760,9 +760,9 @@ def test_io_core_p10b_028_ros_all_missing_optional_frames_are_omitted(
 
     ao = read_ros_logs(str(path), opts=RosIngestOptions(topic="/pose"))
 
-    assert ao.unsafe_data.attrs["ros_parent_frame"] == "map"
-    assert "ros_child_frame" not in ao.unsafe_data.attrs
-    assert "ros_child_frame" not in ao.unsafe_data.coords
+    assert ao.as_dataset(copy="none").attrs["ros_parent_frame"] == "map"
+    assert "ros_child_frame" not in ao.as_dataset(copy="none").attrs
+    assert "ros_child_frame" not in ao.as_dataset(copy="none").coords
 
 
 def test_io_core_p10b_029_ros_retained_mixed_frames_preserve_alignment(
@@ -798,11 +798,11 @@ def test_io_core_p10b_029_ros_retained_mixed_frames_preserve_alignment(
         opts=RosIngestOptions(topic="/pose", metadata_promotion=metadata),
     )
 
-    assert ao.unsafe_data.coords["time"].values.tolist() == [
+    assert ao.as_dataset(copy="none").coords["time"].values.tolist() == [
         [1_000_000_000, 2_000_000_000]
     ]
-    assert ao.unsafe_data.attrs["ros_parent_frame"] == ["map", None]
-    assert "ros_child_frame" not in ao.unsafe_data.attrs
+    assert ao.as_dataset(copy="none").attrs["ros_parent_frame"] == ["map", None]
+    assert "ros_child_frame" not in ao.as_dataset(copy="none").attrs
 
 
 @pytest.mark.parametrize(
@@ -882,8 +882,8 @@ def test_io_core_p10b_026_generated_metadata_attrs_can_share_ros_layout_names(
         opts=RosIngestOptions(topic="/pose", batch_dim="ros_timestamp_unit"),
     )
 
-    assert ao.unsafe_data.sizes["ros_timestamp_unit"] == 1
-    assert ao.unsafe_data.attrs["ros_timestamp_unit"] == "ns"
+    assert ao.as_dataset(copy="none").sizes["ros_timestamp_unit"] == 1
+    assert ao.as_dataset(copy="none").attrs["ros_timestamp_unit"] == "ns"
 
 
 def test_io_hard_p10b_066_ros_generated_batch_coord_collision_preflights(
@@ -1043,7 +1043,7 @@ def test_io_hard_p10b_052_ros_canonical_stamp_ignores_failing_legacy_aliases(
         opts=RosIngestOptions(topic="/pose", timestamp_source="header"),
     )
 
-    assert ao.unsafe_data.coords["time"].values.tolist() == [[1_000_000_002]]
+    assert ao.as_dataset(copy="none").coords["time"].values.tolist() == [[1_000_000_002]]
 
 
 def test_io_hard_p10b_050_ros_frame_text_conversion_retains_public_owner(
@@ -1118,8 +1118,8 @@ def test_io_hard_p10b_070_disabled_ros_metadata_does_not_read_frame_payload(
         ),
     )
 
-    assert ao.unsafe_data["translation_x"].values.tolist() == [[1.0]]
-    assert "ros_parent_frame" not in ao.unsafe_data.attrs
+    assert ao.as_dataset(copy="none")["translation_x"].values.tolist() == [[1.0]]
+    assert "ros_parent_frame" not in ao.as_dataset(copy="none").attrs
 
 
 def test_io_perf_p10b_008_ros_default_frame_policy_uses_constant_memory() -> None:
@@ -1256,4 +1256,4 @@ def test_io_perf_p10b_007_ros_ingest_releases_records_before_grid_allocation(
     gc.collect()
 
     assert all(reference() is None for reference in previous_refs)
-    assert ao.unsafe_data.sizes == {"trial": 2, "sample": 1}
+    assert ao.as_dataset(copy="none").sizes == {"trial": 2, "sample": 1}

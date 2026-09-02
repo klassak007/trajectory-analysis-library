@@ -490,7 +490,7 @@ def read_csv_logs(
     ...     path = Path(tmpdir) / "run.csv"
     ...     _ = path.write_text("time,value\\n0.0,1.0\\n1.0,2.0\\n", encoding="utf-8")
     ...     ao = read_csv_logs(str(path), opts=CsvIngestOptions(time_col="time"))
-    >>> ao.unsafe_data["value"].values.tolist()
+    >>> ao.as_dataset()["value"].values.tolist()
     [[1.0, 2.0]]
     """
     owner = "tal.io.read_csv_logs"

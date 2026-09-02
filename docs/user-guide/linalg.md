@@ -101,9 +101,9 @@ For structural payload work, use `tal.linalg.assemble_core`,
 
 ## Quick Checks
 
-- Inspect `Av.unsafe_data`, `energy.unsafe_data`, `mag.unsafe_data`, and
-  `x.unsafe_data`.
-- Check `vec3.unsafe_data.coords["axis"]` to confirm the canonical
+- Inspect `Av.as_dataset()`, `energy.as_dataset()`, `mag.as_dataset()`, and
+  `x.as_dataset()`.
+- Check `vec3.as_dataset().coords["axis"]` to confirm the canonical
   `("x", "y", "z")` labels.
 
 ## See Also

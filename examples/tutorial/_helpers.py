@@ -34,18 +34,14 @@ from tal.spatial import (
 from tal.utils.frame_ops import frame_retag
 
 
-def _as_dataset(obj: Any) -> xr.Dataset:
-    """Return the xarray dataset carried by an AO-like tutorial object."""
+def _readonly_dataset(obj: Any) -> xr.Dataset:
+    """Return a read-only tutorial view of an AO-like object."""
     if isinstance(obj, AnalysisObject):
-        return obj.unsafe_data
+        return obj.as_dataset(copy="shallow")
     if isinstance(obj, xr.Dataset):
         return obj
     if isinstance(obj, xr.DataArray):
         return obj.to_dataset(name=obj.name or "value")
-    if hasattr(obj, "unsafe_data"):
-        data = obj.unsafe_data
-        if isinstance(data, xr.Dataset):
-            return data
     if hasattr(obj, "as_dataset"):
         data = obj.as_dataset()
         if isinstance(data, xr.Dataset):
@@ -53,7 +49,7 @@ def _as_dataset(obj: Any) -> xr.Dataset:
     raise TypeError(f"Expected an AnalysisObject-like object or xarray data; got {type(obj)!r}.")
 
 
-def summarize_ao(obj: Any) -> pd.DataFrame:
+def summarize_ao(obj: Any, *, snapshot: xr.Dataset | None = None) -> pd.DataFrame:
     """Return a compact, tutorial-friendly summary for AO or typed TAL objects.
 
     The release notebooks use this instead of importing schema internals. It
@@ -61,7 +57,7 @@ def summarize_ao(obj: Any) -> pd.DataFrame:
     dimensions, variables, roles, param coordinate, validity coordinate, and
     frame metadata.
     """
-    ds = _as_dataset(obj)
+    ds = snapshot if snapshot is not None else _readonly_dataset(obj)
     tal_schema = ds.attrs.get("tal", {})
     core = tal_schema.get("core", {}) if isinstance(tal_schema, dict) else {}
     roles = core.get("roles", {}) if isinstance(core, dict) else {}
@@ -89,17 +85,18 @@ def show_ao(label: str, obj: Any, *, data: bool = True) -> Any:
     """Print a label, display a compact AO summary, and optionally show data."""
     from IPython.display import HTML, Markdown, display
 
+    snapshot = _readonly_dataset(obj)
     display(Markdown(f"#### {label}"))
-    display(summarize_ao(obj))
+    display(summarize_ao(obj, snapshot=snapshot))
     if data:
-        display(_as_dataset(obj))
+        display(snapshot)
     display(HTML("<div style='height: 0.75rem'></div>"))
     return obj
 
 
 def compact_dataset(obj: Any, *, max_rows: int = 12) -> pd.DataFrame:
     """Return a compact variable/coordinate inventory for xarray-like data."""
-    ds = _as_dataset(obj)
+    ds = _readonly_dataset(obj)
     rows: list[dict[str, object]] = []
     for name, da in ds.data_vars.items():
         rows.append(
@@ -131,12 +128,13 @@ def display_result(label: str, obj: Any, *, data: bool = False, max_rows: int = 
     display(Markdown(f"#### {label}"))
     if isinstance(obj, pd.DataFrame):
         display(obj.head(max_rows))
-    elif isinstance(obj, (xr.Dataset, xr.DataArray)) or hasattr(obj, "unsafe_data") or hasattr(obj, "as_dataset"):
-        display(summarize_ao(obj))
+    elif isinstance(obj, (xr.Dataset, xr.DataArray)) or hasattr(obj, "as_dataset"):
+        snapshot = _readonly_dataset(obj)
+        display(summarize_ao(obj, snapshot=snapshot))
         if data:
-            display(_as_dataset(obj))
+            display(snapshot)
         else:
-            display(compact_dataset(obj, max_rows=max_rows))
+            display(compact_dataset(snapshot, max_rows=max_rows))
     else:
         display(obj)
     display(HTML("<div style='height: 0.75rem'></div>"))

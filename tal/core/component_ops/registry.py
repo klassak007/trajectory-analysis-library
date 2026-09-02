@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like, rewrap_unvalidated_like
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..schema import merge_schema, validate_schema
@@ -224,10 +225,11 @@ def define_components(
     owner = "components.define"
     source = _coerce_source_ao(ao, owner=owner)
     options = coerce_component_registry_options(opts, owner=owner)
-    sequence_dim, core_dims = _require_declared_roles(source.unsafe_data, owner=owner)
+    source_ds = analysis_object_dataset(source)
+    sequence_dim, core_dims = _require_declared_roles(source_ds, owner=owner)
     validate_component_registry_options(
         options,
-        ds=source.unsafe_data,
+        ds=source_ds,
         sequence_dim=sequence_dim,
         core_dims=core_dims,
         owner=owner,
@@ -236,17 +238,17 @@ def define_components(
     if options.replace:
         target = dict(options.registry)
     else:
-        existing = _read_registry_from_dataset(source.unsafe_data, owner=owner)
+        existing = _read_registry_from_dataset(source_ds, owner=owner)
         target = _merge_registry(existing, options.registry, owner=owner)
         validate_component_registry_options(
             ComponentRegistryOptions(registry=target, replace=True),
-            ds=source.unsafe_data,
+            ds=source_ds,
             sequence_dim=sequence_dim,
             core_dims=core_dims,
             owner=owner,
         )
 
-    ds_out = _apply_registry_patch(source.unsafe_data, registry=target)
+    ds_out = _apply_registry_patch(source_ds, registry=target)
     return _rewrap_component_result(source, ds_out, validate=validate)
 
 
@@ -283,7 +285,7 @@ def read_components(ao: object) -> Mapping[str, ComponentSpec]:
     """
     owner = "components.read"
     source = _coerce_source_ao(ao, owner=owner)
-    return dict(_read_registry_from_dataset(source.unsafe_data, owner=owner))
+    return dict(_read_registry_from_dataset(analysis_object_dataset(source), owner=owner))
 
 
 __all__ = [

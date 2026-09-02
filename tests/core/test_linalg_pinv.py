@@ -78,12 +78,12 @@ def test_linalg_matrix_006_matrix_pinv_rectangular_semantics() -> None:
     left = Matrix(_matrix_ao(values, row="eq", col="sol"))
     out = pinv(left)
     out_method = left.pinv()
-    expected = _expected_pinv(left.unsafe_data["x"], row="eq", col="sol")
+    expected = _expected_pinv(left.as_dataset(copy="none")["x"], row="eq", col="sol")
     assert isinstance(out, Matrix)
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
-    assert list(out.unsafe_data.data_vars) == ["datavar"]
-    assert not any("_pinv" in name for name in out.unsafe_data.data_vars)
-    xr.testing.assert_identical(out.unsafe_data, out_method.unsafe_data)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
+    assert list(out.as_dataset(copy="none").data_vars) == ["datavar"]
+    assert not any("_pinv" in name for name in out.as_dataset(copy="none").data_vars)
+    xr.testing.assert_identical(out.as_dataset(copy="none"), out_method.as_dataset(copy="none"))
 
 
 def test_linalg_core_016_matrix_pinv_swaps_core_axes_truthfully() -> None:
@@ -91,8 +91,8 @@ def test_linalg_core_016_matrix_pinv_swaps_core_axes_truthfully() -> None:
     values = (np.arange(24, dtype=float).reshape(2, 2, 3, 2) + 1.0) / 5.0
     left = Matrix(_matrix_ao(values, row="row", col="col"))
     out = pinv(left)
-    assert _core_dims(out.unsafe_data) == ("col", "row")
-    assert out.unsafe_data["datavar"].dims[-2:] == ("col", "row")
+    assert _core_dims(out.as_dataset(copy="none")) == ("col", "row")
+    assert out.as_dataset(copy="none")["datavar"].dims[-2:] == ("col", "row")
 
 
 def test_linalg_hard_038_pinv_requires_matrix_operand() -> None:
@@ -108,7 +108,7 @@ def test_linalg_hard_039_pinv_chunked_inputs_fail_fast_no_eager() -> None:
     values = (np.arange(24, dtype=float).reshape(2, 2, 3, 2) + 1.0) / 4.0
     left = _matrix_ao(values, row="eq", col="sol")
     left_chunked = AnalysisObject.from_data(
-        left.unsafe_data.chunk({"sample": 1}),
+        left.as_dataset(copy="none").chunk({"sample": 1}),
         sequence_dim="sample",
         batch_dims=("trial",),
         core_dims=("eq", "sol"),
@@ -123,7 +123,7 @@ def test_linalg_hard_040_pinv_plain_ao_inputs_fallback_to_array() -> None:
     values = (np.arange(24, dtype=float).reshape(2, 2, 3, 2) + 1.0) / 4.0
     left_ao = _matrix_ao(values, row="eq", col="sol")
     out = pinv(left_ao)
-    out_ds = pinv(left_ao.unsafe_data)
+    out_ds = pinv(left_ao.as_dataset(copy="none"))
     assert type(out) is Array
     assert type(out_ds) is Array
 
@@ -133,9 +133,9 @@ def test_linalg_hard_041_pinv_builtin_wrapper_type_routing_preserves_values() ->
     values = (np.arange(24, dtype=float).reshape(2, 2, 3, 2) + 2.0) / 7.0
     left = Matrix(_matrix_ao(values, row="eq", col="sol"))
     out = pinv(left, opts=PInvOptions(rcond=1e-8))
-    expected = _expected_pinv(left.unsafe_data["x"], row="eq", col="sol", rcond=1e-8)
+    expected = _expected_pinv(left.as_dataset(copy="none")["x"], row="eq", col="sol", rcond=1e-8)
     assert isinstance(out, Matrix)
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
 
 
 def test_linalg_hard_047_pinv_hermitian_non_square_policy_error_specific() -> None:

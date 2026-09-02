@@ -198,8 +198,8 @@ def test_param_hard_009_explicit_sequence_size_conflict_fails() -> None:
 def test_param_hard_010_bootstrap_unbound_is_usable_with_explicit_sequence_dim() -> None:
     """ID: PARAM_HARD_010_bootstrap_unbound_is_usable_with_explicit_sequence_dim."""
     ao = AnalysisObject(_ds_sample())
-    assert ao.data.attrs["tal"] == {"version": 1, "core": {}}
-    spec = resolve_param_coord(ao.data, sequence_dim="sample")
+    assert ao.as_dataset().attrs["tal"] == {"version": 1, "core": {}}
+    spec = resolve_param_coord(ao.as_dataset(), sequence_dim="sample")
     assert spec is None
 
 
@@ -692,8 +692,8 @@ def test_param_hard_029_materialize_indexer_not_used_in_select_chunked_paths() -
     assert not hasattr(map_apply_mod, "materialize_indexer")
     point = ao.param.sel([0.5, 1.5])
     slc = ao.param.sel(slice(0.25, 1.75))
-    assert tuple(point.unsafe_data["value"].dims) == ("sample",)
-    assert tuple(slc.unsafe_data["value"].dims) == ("sample",)
+    assert tuple(point.as_dataset(copy="none")["value"].dims) == ("sample",)
+    assert tuple(slc.as_dataset(copy="none")["value"].dims) == ("sample",)
 
 
 def test_param_hard_031_materialize_indexer_removed_from_production_surface() -> None:

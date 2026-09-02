@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from ...core import CoreConcatOptions
 from ...core import concat_core as _core_concat_core
+from ...core.dataset_ownership import analysis_object_dataset
 from ..array import Array
 
 
@@ -24,9 +25,10 @@ def _rewrap_array_output(
     if isinstance(result, Array):
         return result
     first_type = _first_input_array_type(input_values)
+    result_ds = analysis_object_dataset(result)
     if first_type is not None:
-        return first_type._from_validated(result.unsafe_data)
-    return Array._from_validated(result.unsafe_data)
+        return first_type._from_validated(result_ds)
+    return Array._from_validated(result_ds)
 
 
 def concat_core(

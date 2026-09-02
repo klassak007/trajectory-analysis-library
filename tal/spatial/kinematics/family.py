@@ -5,6 +5,7 @@ from typing import Any, Callable, Literal
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import ComponentExtractOptions, extract_components
 from tal.core.component_ops.runtime_checks import require_component_numeric_var
@@ -347,9 +348,11 @@ def family_from_linear_angular(
 ):
     linear_value = coerce_typed_operand(linear, expected_cls=classes.linear_cls, owner=owner, label="linear")
     angular_value = coerce_typed_operand(angular, expected_cls=classes.angular_cls, owner=owner, label="angular")
+    linear_ds = analysis_object_dataset(linear_value)
+    angular_ds = analysis_object_dataset(angular_value)
     parent, child = resolve_components_shared_frames(
-        linear_value.unsafe_data,
-        angular_value.unsafe_data,
+        linear_ds,
+        angular_ds,
         owner=owner,
         left_name=cfg.pair_opts.left_component_name,
         right_name=cfg.pair_opts.right_component_name,
@@ -366,8 +369,8 @@ def family_from_linear_angular(
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
     ds = build_family_dataset(
-        linear_value.unsafe_data,
-        angular_value.unsafe_data,
+        linear_ds,
+        angular_ds,
         cfg=cfg,
         owner=owner,
         validate=validate,
@@ -381,27 +384,29 @@ def family_from_linear_angular(
 
 def family_from_vector6(data: object, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
     source = coerce_source(data, owner=owner)
-    ds = cfg.set_family_rep(source.unsafe_data, "vector6", False, owner)
+    ds = cfg.set_family_rep(analysis_object_dataset(source), "vector6", False, owner)
     ds = cfg.set_kinematics_kind(ds, cfg.family_kind, False, owner)
     return wrap_as(classes.family_cls, ds, validate=validate)
 
 
 def family_to_rep(value, rep: Literal["components", "vector6"], *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
-    current_rep = cfg.get_family_rep(value.unsafe_data, owner)
-    target_rep = cfg.get_family_rep(cfg.set_family_rep(value.unsafe_data, rep, False, owner), owner)
+    source = analysis_object_dataset(value)
+    current_rep = cfg.get_family_rep(source, owner)
+    target_rep = cfg.get_family_rep(cfg.set_family_rep(source, rep, False, owner), owner)
     if target_rep == current_rep:
-        return wrap_as(classes.family_cls, value.unsafe_data, validate=validate)
+        return wrap_as(classes.family_cls, source, validate=validate)
     if target_rep == "components":
         return family_as_components(value, cfg=cfg, classes=classes, owner=owner, validate=validate)
     return family_as_vector6(value, cfg=cfg, classes=classes, owner=owner, validate=validate)
 
 
 def family_as_components(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
-    rep = cfg.get_family_rep(value.unsafe_data, owner)
+    source = analysis_object_dataset(value)
+    rep = cfg.get_family_rep(source, owner)
     if rep == "components":
-        return wrap_as(classes.family_cls, value.unsafe_data, validate=validate)
+        return wrap_as(classes.family_cls, source, validate=validate)
     linear_ds, angular_ds = unpack_vector6_to_linear_angular_datasets(
-        value.unsafe_data,
+        source,
         owner=owner,
         opts=cfg.vector6_opts,
         set_linear_rep=lambda ds, _validate, _owner: cfg.set_linear_rep(ds, "cart", False, _owner),
@@ -417,14 +422,15 @@ def family_as_components(value, *, cfg: KinematicsFamilyConfig, classes: Kinemat
         owner=f"{owner}.from_linear_angular",
         validate=False,
     )
-    return wrap_as(classes.family_cls, out.unsafe_data, validate=validate)
+    return wrap_as(classes.family_cls, analysis_object_dataset(out), validate=validate)
 
 
 def family_as_vector6(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
-    rep = cfg.get_family_rep(value.unsafe_data, owner)
+    source = analysis_object_dataset(value)
+    rep = cfg.get_family_rep(source, owner)
     if rep == "vector6":
-        return wrap_as(classes.family_cls, value.unsafe_data, validate=validate)
-    components = wrap_as(classes.family_cls, value.unsafe_data, validate=False)
+        return wrap_as(classes.family_cls, source, validate=validate)
+    components = wrap_as(classes.family_cls, source, validate=False)
     linear = family_linear(components, cfg=cfg, classes=classes, owner=f"{owner}.linear", validate=False)
     angular = family_angular(components, cfg=cfg, classes=classes, owner=f"{owner}.angular", validate=False)
     selection = select_topology_policy_with_intents(
@@ -440,8 +446,8 @@ def family_as_vector6(value, *, cfg: KinematicsFamilyConfig, classes: Kinematics
     )
     policy = selection.policy
     out_ds = pack_linear_angular_to_vector6_dataset(
-        linear.unsafe_data,
-        angular.unsafe_data,
+        analysis_object_dataset(linear),
+        analysis_object_dataset(angular),
         owner=owner,
         opts=cfg.vector6_opts,
         set_spatial_rep=lambda ds, _validate, _owner: cfg.set_family_rep(ds, "vector6", False, _owner),
@@ -457,51 +463,53 @@ def _finalize_component_extract(ds: xr.Dataset, *, rep_setter: SetRepFn, kind: s
 
 
 def family_linear(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
-    rep = cfg.get_family_rep(value.unsafe_data, owner)
+    value_ds = analysis_object_dataset(value)
+    rep = cfg.get_family_rep(value_ds, owner)
     if rep == "vector6":
         linear_ds, _ = unpack_vector6_to_linear_angular_datasets(
-            value.unsafe_data,
+            value_ds,
             owner=owner,
             opts=cfg.vector6_opts,
             set_linear_rep=lambda ds, _validate, _owner: cfg.set_linear_rep(ds, "cart", False, _owner),
             set_angular_rep=lambda ds, _validate, _owner: cfg.set_angular_rep(ds, "cart", False, _owner),
         )
         return wrap_as(classes.linear_cls, linear_ds, validate=validate)
-    source = AnalysisObject._from_validated(value.unsafe_data) if validate else AnalysisObject._from_unvalidated(value.unsafe_data)
+    source = AnalysisObject._from_validated(value_ds) if validate else AnalysisObject._from_unvalidated(value_ds)
     extracted = extract_components(source, opts=ComponentExtractOptions(names=(cfg.pair_opts.left_component_name,)), validate=validate)
     ds = _finalize_component_extract(
-        extracted[cfg.pair_opts.left_component_name].unsafe_data,
+        analysis_object_dataset(extracted[cfg.pair_opts.left_component_name]),
         rep_setter=cfg.set_linear_rep,
         kind=cfg.linear_kind,
         cfg=cfg,
         owner=owner,
     )
-    parent, child = get_frames(value.unsafe_data)
+    parent, child = get_frames(value_ds)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
     return wrap_as(classes.linear_cls, ds, validate=validate)
 
 
 def family_angular(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
-    rep = cfg.get_family_rep(value.unsafe_data, owner)
+    value_ds = analysis_object_dataset(value)
+    rep = cfg.get_family_rep(value_ds, owner)
     if rep == "vector6":
         _, angular_ds = unpack_vector6_to_linear_angular_datasets(
-            value.unsafe_data,
+            value_ds,
             owner=owner,
             opts=cfg.vector6_opts,
             set_linear_rep=lambda ds, _validate, _owner: cfg.set_linear_rep(ds, "cart", False, _owner),
             set_angular_rep=lambda ds, _validate, _owner: cfg.set_angular_rep(ds, "cart", False, _owner),
         )
         return wrap_as(classes.angular_cls, angular_ds, validate=validate)
-    source = AnalysisObject._from_validated(value.unsafe_data) if validate else AnalysisObject._from_unvalidated(value.unsafe_data)
+    source = AnalysisObject._from_validated(value_ds) if validate else AnalysisObject._from_unvalidated(value_ds)
     extracted = extract_components(source, opts=ComponentExtractOptions(names=(cfg.pair_opts.right_component_name,)), validate=validate)
     ds = _finalize_component_extract(
-        extracted[cfg.pair_opts.right_component_name].unsafe_data,
+        analysis_object_dataset(extracted[cfg.pair_opts.right_component_name]),
         rep_setter=cfg.set_angular_rep,
         kind=cfg.angular_kind,
         cfg=cfg,
         owner=owner,
     )
-    parent, child = get_frames(value.unsafe_data)
+    parent, child = get_frames(value_ds)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
     return wrap_as(classes.angular_cls, ds, validate=validate)
 

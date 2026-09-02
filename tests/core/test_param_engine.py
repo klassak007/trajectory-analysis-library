@@ -313,7 +313,7 @@ def test_param_engine_034_large_integer_exact_lookup_preserved() -> None:
     )
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=(), param_coord="tau")
     assert int(ao.param.index(np.int64(base + 1)).item()) == 1
-    assert float(ao.param.sel(np.int64(base + 1)).unsafe_data["value"].item()) == 20.0
+    assert float(ao.param.sel(np.int64(base + 1)).as_dataset(copy="none")["value"].item()) == 20.0
 
     maximum = np.iinfo(np.uint64).max
     param = xr.DataArray(np.asarray([maximum - 1, maximum], dtype="uint64"), dims=("sample",))

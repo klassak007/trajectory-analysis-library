@@ -62,7 +62,7 @@ def _matrix_leaf(
 
 
 def _roles(ao: AnalysisObject) -> tuple[bool, str | None, tuple[str, ...], tuple[str, ...]]:
-    return read_roles(validate_schema_if_needed(ao.unsafe_data))
+    return read_roles(validate_schema_if_needed(ao.as_dataset(copy="none")))
 
 
 def test_combine_overlay_core_001_single_patch_label_overlay_semantics() -> None:
@@ -70,10 +70,10 @@ def test_combine_overlay_core_001_single_patch_label_overlay_semantics() -> None
     base = _vector_leaf(offset=0.0)
     patch = _vector_leaf(offset=100.0, axis_labels=("b", "d"))
     out = overlay_core(base, [patch], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected.loc[{"axis": ["b", "d"]}] = patch.unsafe_data["x"]
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
-    assert out.unsafe_data.coords["axis"].values.tolist() == base.unsafe_data.coords["axis"].values.tolist()
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected.loc[{"axis": ["b", "d"]}] = patch.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
+    assert out.as_dataset(copy="none").coords["axis"].values.tolist() == base.as_dataset(copy="none").coords["axis"].values.tolist()
     assert _roles(out)[3] == ("axis",)
 
 
@@ -89,7 +89,7 @@ def test_combine_overlay_core_003_requires_declared_roles_and_target_core_dim() 
     """ID: COMBINE_OVERLAY_CORE_003_requires_declared_roles_and_target_core_dim."""
     base = _vector_leaf(offset=0.0)
     patch = _vector_leaf(offset=10.0, axis_labels=("b",))
-    raw_ds = base.unsafe_data.copy(deep=True)
+    raw_ds = base.as_dataset(copy="none").copy(deep=True)
     raw_ds.attrs = {}
     raw = AnalysisObject(raw_ds)
     with pytest.raises(ValueError, match="declared roles"):
@@ -139,10 +139,10 @@ def test_combine_overlay_core_007_patch_overlap_replace_policy_last_wins() -> No
         opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace"),
         validate=True,
     )
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected.loc[{"axis": ["b", "c"]}] = patch_a.unsafe_data["x"]
-    expected.loc[{"axis": ["c"]}] = patch_b.unsafe_data["x"]
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected.loc[{"axis": ["b", "c"]}] = patch_a.as_dataset(copy="none")["x"]
+    expected.loc[{"axis": ["c"]}] = patch_b.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_combine_overlay_core_008_base_and_patch_target_labels_unique_required() -> None:
@@ -164,13 +164,13 @@ def test_combine_overlay_core_009_accessor_overlay_core_self_semantics() -> None
     opts = CoreOverlayOptions(core_dim="axis")
     out_accessor = base.combine.overlay_core([patch_a, patch_b], opts=opts, validate=True)
     out_functional = overlay_core(base, [patch_a, patch_b], opts=opts, validate=True)
-    xr.testing.assert_identical(out_accessor.unsafe_data, out_functional.unsafe_data)
+    xr.testing.assert_identical(out_accessor.as_dataset(copy="none"), out_functional.as_dataset(copy="none"))
 
 
 def test_combine_overlay_core_010_single_numeric_var_required() -> None:
     """ID: COMBINE_OVERLAY_CORE_010_single_numeric_var_required."""
     base = _vector_leaf(offset=0.0)
-    patch_ds = _vector_leaf(offset=10.0, axis_labels=("b",)).unsafe_data.copy(deep=True)
+    patch_ds = _vector_leaf(offset=10.0, axis_labels=("b",)).as_dataset(copy="none").copy(deep=True)
     patch_ds["y"] = patch_ds["x"] + 1.0
     patch = AnalysisObject.from_data(
         patch_ds,
@@ -189,9 +189,9 @@ def test_combine_overlay_core_011_nan_target_labels_patch_applied() -> None:
     base = _vector_leaf(offset=0.0, axis_labels=("a", nan_label, "c"))
     patch = _vector_leaf(offset=100.0, axis_labels=(float("nan"),))
     out = overlay_core(base, [patch], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected.loc[{"axis": [patch.unsafe_data.get_index("axis")[0]]}] = patch.unsafe_data["x"]
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected.loc[{"axis": [patch.as_dataset(copy="none").get_index("axis")[0]]}] = patch.as_dataset(copy="none")["x"]
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_combine_overlay_core_012_overlap_error_composite_nan_labels_fail_closed() -> None:
@@ -225,10 +225,10 @@ def test_combine_overlay_core_013_replace_mode_composite_nan_last_wins_determini
         opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace"),
         validate=True,
     )
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected[{"axis": 0}] = patch_a.unsafe_data["x"].isel(axis=0)
-    expected[{"axis": 0}] = patch_b.unsafe_data["x"].isel(axis=0)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected[{"axis": 0}] = patch_a.as_dataset(copy="none")["x"].isel(axis=0)
+    expected[{"axis": 0}] = patch_b.as_dataset(copy="none")["x"].isel(axis=0)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_combine_overlay_core_014_integer_overlay_preserves_integer_dtype() -> None:
@@ -262,8 +262,8 @@ def test_combine_overlay_core_014_integer_overlay_preserves_integer_dtype() -> N
         validate=True,
     )
     out = overlay_core(base, [patch], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
-    assert out.unsafe_data["x"].dtype.kind in {"i", "u"}
-    assert np.all(out.unsafe_data["x"].sel(axis="b").data == 99)
+    assert out.as_dataset(copy="none")["x"].dtype.kind in {"i", "u"}
+    assert np.all(out.as_dataset(copy="none")["x"].sel(axis="b").data == 99)
 
 
 def test_combine_overlay_core_015_mixed_nan_scalar_types_subset_equivalent() -> None:
@@ -273,9 +273,9 @@ def test_combine_overlay_core_015_mixed_nan_scalar_types_subset_equivalent() -> 
     base = _vector_leaf(offset=0.0, axis_labels=(base_nan, "a", "c"))
     patch = _vector_leaf(offset=100.0, axis_labels=(patch_nan,))
     out = overlay_core(base, [patch], opts=CoreOverlayOptions(core_dim="axis"), validate=True)
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected[{"axis": 0}] = patch.unsafe_data["x"].isel(axis=0)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected[{"axis": 0}] = patch.as_dataset(copy="none")["x"].isel(axis=0)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_combine_overlay_core_016_mixed_nan_scalar_types_overlap_equivalent_under_canonical_keys() -> None:
@@ -299,7 +299,7 @@ def test_combine_overlay_core_016_mixed_nan_scalar_types_overlap_equivalent_unde
         opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace"),
         validate=True,
     )
-    expected = base.unsafe_data["x"].copy(deep=True)
-    expected[{"axis": 0}] = patch_a.unsafe_data["x"].isel(axis=0)
-    expected[{"axis": 0}] = patch_b.unsafe_data["x"].isel(axis=0)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected[{"axis": 0}] = patch_a.as_dataset(copy="none")["x"].isel(axis=0)
+    expected[{"axis": 0}] = patch_b.as_dataset(copy="none")["x"].isel(axis=0)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)

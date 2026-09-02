@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import read_components
 from tal.core.component_ops.runtime_checks import select_component_var
@@ -93,7 +94,7 @@ def _eval_payload_carrier(
     *,
     on: str | None,
 ) -> xr.Dataset:
-    carrier = AnalysisObject._from_unvalidated(source.unsafe_data)
+    carrier = AnalysisObject._from_unvalidated(analysis_object_dataset(source))
     if on is not None:
         carrier = carrier.set_param_coord(name=on, validate=False)
     kwargs = {
@@ -105,8 +106,8 @@ def _eval_payload_carrier(
         "sequence_size_coord": request.sequence_size_coord,
     }
     if request.mode == "at":
-        return carrier.param.at(request.query, **kwargs).unsafe_data
-    return carrier.param.resample_to(request.query, **kwargs).unsafe_data
+        return analysis_object_dataset(carrier.param.at(request.query, **kwargs))
+    return analysis_object_dataset(carrier.param.resample_to(request.query, **kwargs))
 
 
 def _overlay_components_payload(
@@ -172,12 +173,13 @@ def _matrix_only_pose_source(
     *,
     owner: str,
 ) -> tuple[Pose, str]:
+    source_ds = analysis_object_dataset(source)
     matrix_var = _resolve_matrix_payload_var(
-        source.unsafe_data,
+        source_ds,
         owner=owner,
         what="pose temporal source matrix payload",
     )
-    matrix_only = source.unsafe_data[[matrix_var]]
+    matrix_only = source_ds[[matrix_var]]
     return source.__class__._from_unvalidated(matrix_only), matrix_var
 
 
@@ -296,7 +298,7 @@ def _rewrap_pose_temporal_output(
 
 def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:
     source = request.pose
-    source_rep = get_pose_rep(source.unsafe_data, owner=request.owner)
+    source_rep = get_pose_rep(analysis_object_dataset(source), owner=request.owner)
     on = _effective_param_key(request)
     carrier_ds = _eval_payload_carrier(source, request, on=on)
     matrix_source_var: str | None = None
@@ -311,7 +313,7 @@ def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:
     if source_rep == "matrix":
         if matrix_source_var is None:
             raise ValueError(f"{request.owner}: missing source matrix payload selection.")
-        typed_matrix = recomposed.as_matrix(validate=False).unsafe_data
+        typed_matrix = analysis_object_dataset(recomposed.as_matrix(validate=False))
         matrix_template_ds = typed_matrix
         merged_ds = _overlay_matrix_payload(
             carrier_ds,
@@ -322,7 +324,7 @@ def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:
     else:
         merged_ds = _overlay_components_payload(
             carrier_ds,
-            recomposed.unsafe_data,
+            analysis_object_dataset(recomposed),
             owner=request.owner,
         )
     if _needs_matrix_aux_rebind(

@@ -24,7 +24,7 @@ def _rotation_quat_ao(values: np.ndarray) -> Rotation:
         batch_dims=(),
         core_dims=("quat",),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     return Rotation(ds)
 
 
@@ -45,7 +45,7 @@ def _rotation_quat_batched_ao(values: np.ndarray) -> Rotation:
         batch_dims=("trial",),
         core_dims=("quat",),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     return Rotation(ds)
 
 
@@ -82,13 +82,13 @@ def test_spatial_core_p9c_002_rotation_weighted_mean_and_na_policy_semantics_rem
     rot = _rotation_quat_ao(np.stack([q0, q90, q180], axis=0))
 
     out = rot.mean(dim="sample", weights=np.array([1.0, 1.0, 0.0], dtype=float), validate=True)
-    actual = out.as_quat(validate=True).unsafe_data["rotation"].to_numpy()
+    actual = out.as_quat(validate=True).as_dataset(copy="none")["rotation"].to_numpy()
     expected = np.array([0.0, 0.0, np.sin(np.pi / 8.0), np.cos(np.pi / 8.0)], dtype=float)
     _assert_quat_equivalent(actual, expected)
 
     bad = _rotation_quat_ao(np.stack([q0, np.array([np.nan, np.nan, np.nan, np.nan]), q180], axis=0))
     out_bad = bad.mean(dim="sample", skipna=False, validate=True)
-    assert np.isnan(out_bad.unsafe_data["rotation"].to_numpy()).all()
+    assert np.isnan(out_bad.as_dataset(copy="none")["rotation"].to_numpy()).all()
 
 
 def test_spatial_core_p9c_003_typed_reducers_preserve_typed_outputs_when_invariants_hold() -> None:
@@ -111,8 +111,8 @@ def test_spatial_core_p9c_004_rotation_weighted_mean_batched_reduction_is_shape_
     for trial in range(values.shape[0]):
         expected = _rotation_quat_ao(values[trial]).mean(dim="sample", weights=sample_weights, validate=True)
         _assert_quat_equivalent(
-            reduced_sample.unsafe_data["rotation"].isel(trial=trial).to_numpy(),
-            expected.unsafe_data["rotation"].to_numpy(),
+            reduced_sample.as_dataset(copy="none")["rotation"].isel(trial=trial).to_numpy(),
+            expected.as_dataset(copy="none")["rotation"].to_numpy(),
         )
 
     trial_weights = np.array([1.0, 2.0], dtype=float)
@@ -120,8 +120,8 @@ def test_spatial_core_p9c_004_rotation_weighted_mean_batched_reduction_is_shape_
     for sample in range(values.shape[1]):
         expected = _rotation_quat_ao(values[:, sample, :]).mean(dim="sample", weights=trial_weights, validate=True)
         _assert_quat_equivalent(
-            reduced_trial.unsafe_data["rotation"].isel(sample=sample).to_numpy(),
-            expected.unsafe_data["rotation"].to_numpy(),
+            reduced_trial.as_dataset(copy="none")["rotation"].isel(sample=sample).to_numpy(),
+            expected.as_dataset(copy="none")["rotation"].to_numpy(),
         )
 
 
@@ -153,14 +153,14 @@ def test_spatial_core_p9c_005_rotation_multi_dim_dataarray_weights_supported_in_
     weight_da = xr.DataArray(
         np.array([[1.0, 2.0, 1.0], [1.0, 1.0, 3.0]], dtype=float),
         dims=("trial", "sample"),
-        coords={"trial": rot.unsafe_data.coords["trial"], "sample": rot.unsafe_data.coords["sample"]},
+        coords={"trial": rot.as_dataset(copy="none").coords["trial"], "sample": rot.as_dataset(copy="none").coords["sample"]},
     )
     out = rot.mean(dim=("trial", "sample"), weights=weight_da, validate=True)
 
     flat_rot = _rotation_quat_ao(values.reshape(-1, 4))
     flat_weight = weight_da.to_numpy().reshape(-1)
     expected = flat_rot.mean(dim="sample", weights=flat_weight, validate=True)
-    _assert_quat_equivalent(out.unsafe_data["rotation"].to_numpy(), expected.unsafe_data["rotation"].to_numpy())
+    _assert_quat_equivalent(out.as_dataset(copy="none")["rotation"].to_numpy(), expected.as_dataset(copy="none")["rotation"].to_numpy())
 
 
 def test_spatial_core_p9c_006_rotation_multi_dim_mapping_and_dataarray_weights_are_equivalent() -> None:
@@ -181,10 +181,10 @@ def test_spatial_core_p9c_006_rotation_multi_dim_mapping_and_dataarray_weights_a
     dense_weight = xr.DataArray(
         trial_w[:, None] * sample_w[None, :],
         dims=("trial", "sample"),
-        coords={"trial": rot.unsafe_data.coords["trial"], "sample": rot.unsafe_data.coords["sample"]},
+        coords={"trial": rot.as_dataset(copy="none").coords["trial"], "sample": rot.as_dataset(copy="none").coords["sample"]},
     )
     dense_out = rot.mean(dim=("trial", "sample"), weights=dense_weight, validate=True)
-    _assert_quat_equivalent(map_out.unsafe_data["rotation"].to_numpy(), dense_out.unsafe_data["rotation"].to_numpy())
+    _assert_quat_equivalent(map_out.as_dataset(copy="none")["rotation"].to_numpy(), dense_out.as_dataset(copy="none")["rotation"].to_numpy())
 
 
 def test_spatial_core_p9c_007_rotation_reduce_prunes_reduced_dims_from_output_topology_metadata() -> None:
@@ -194,17 +194,17 @@ def test_spatial_core_p9c_007_rotation_reduce_prunes_reduced_dims_from_output_to
     rot = _rotation_quat_batched_ao(np.array([[q0, q90], [q0, q0]], dtype=float))
 
     sample_reduced = rot.mean(dim="sample", validate=True)
-    core_block = sample_reduced.unsafe_data.attrs.get("tal", {}).get("core", {})
-    assert "sample" not in sample_reduced.unsafe_data.dims
-    assert sample_reduced.unsafe_data["rotation"].dims == ("trial", "quat")
+    core_block = sample_reduced.as_dataset(copy="none").attrs.get("tal", {}).get("core", {})
+    assert "sample" not in sample_reduced.as_dataset(copy="none").dims
+    assert sample_reduced.as_dataset(copy="none")["rotation"].dims == ("trial", "quat")
     assert core_block.get("roles") == {"batch_dims": [], "core_dims": []}
     assert core_block.get("param_coord") is None
     assert core_block.get("validity") is None
 
     trial_reduced = rot.mean(dim="trial", validate=True)
-    roles = trial_reduced.unsafe_data.attrs.get("tal", {}).get("core", {}).get("roles")
-    assert "trial" not in trial_reduced.unsafe_data.dims
-    assert trial_reduced.unsafe_data["rotation"].dims == ("sample", "quat")
+    roles = trial_reduced.as_dataset(copy="none").attrs.get("tal", {}).get("core", {}).get("roles")
+    assert "trial" not in trial_reduced.as_dataset(copy="none").dims
+    assert trial_reduced.as_dataset(copy="none")["rotation"].dims == ("sample", "quat")
     assert roles == {"sequence_dim": "sample", "batch_dims": [], "core_dims": ["quat"]}
 
 
@@ -217,8 +217,8 @@ def test_spatial_core_p9c_008_rotation_chained_reduce_over_remaining_non_core_di
     first = rot.mean(dim="sample", validate=True)
     second = first.mean(dim="trial", validate=True)
     assert isinstance(second, Rotation)
-    assert second.unsafe_data["rotation"].dims == ("quat",)
-    assert np.isfinite(second.unsafe_data["rotation"].to_numpy()).all()
+    assert second.as_dataset(copy="none")["rotation"].dims == ("quat",)
+    assert np.isfinite(second.as_dataset(copy="none")["rotation"].to_numpy()).all()
 
 
 def test_spatial_hard_p9c_006_rotation_component_dim_guard_persists_after_sequence_clear() -> None:
@@ -241,7 +241,7 @@ def test_spatial_hard_p9c_006_rotation_component_dim_guard_persists_after_sequen
 
     default_reduced = first.mean(validate=True)
     assert isinstance(default_reduced, Rotation)
-    assert default_reduced.unsafe_data["rotation"].dims == ("quat",)
+    assert default_reduced.as_dataset(copy="none")["rotation"].dims == ("quat",)
 
 
 def test_spatial_core_p9c_009_rotation_matrix_rep_mean_reducer_succeeds() -> None:
@@ -254,9 +254,9 @@ def test_spatial_core_p9c_009_rotation_matrix_rep_mean_reducer_succeeds() -> Non
     second = first.mean(dim="trial", validate=True)
     assert isinstance(first, Rotation)
     assert isinstance(second, Rotation)
-    assert "sample" not in first.unsafe_data.dims
-    assert second.unsafe_data["rotation"].dims == ("quat",)
-    assert np.isfinite(second.unsafe_data["rotation"].to_numpy()).all()
+    assert "sample" not in first.as_dataset(copy="none").dims
+    assert second.as_dataset(copy="none")["rotation"].dims == ("quat",)
+    assert np.isfinite(second.as_dataset(copy="none")["rotation"].to_numpy()).all()
 
 
 def test_spatial_core_p9c_010_rotation_inherited_non_owned_reducers_demote_to_analysisobject() -> None:
@@ -270,7 +270,7 @@ def test_spatial_core_p9c_010_rotation_inherited_non_owned_reducers_demote_to_an
     assert type(sum_out) is AnalysisObject
     assert not isinstance(any_out, Rotation)
     assert not isinstance(sum_out, Rotation)
-    assert any_out.unsafe_data["rotation"].dtype.kind == "b"
+    assert any_out.as_dataset(copy="none")["rotation"].dtype.kind == "b"
 
 
 def test_spatial_hard_p9c_007_rotation_matrix_component_dims_fail_closed() -> None:
@@ -316,7 +316,11 @@ def test_spatial_hard_p9c_005_rotation_roleless_ambiguous_quat_dim_resolution_fa
         },
     )
 
-    monkeypatch.setattr(Rotation, "as_quat", lambda self, validate=False: SimpleNamespace(unsafe_data=ambiguous))
+    monkeypatch.setattr(
+        Rotation,
+        "as_quat",
+        lambda self, validate=False: SimpleNamespace(_data=ambiguous),
+    )
     with pytest.raises(ValueError, match="spatial\\.rotation\\.mean: Rotation.mean without declared sequence roles requires exactly one length-4 quaternion dim"):
         _ = rot.mean(dim="trial", validate=True)
 

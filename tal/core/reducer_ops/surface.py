@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..dataset_ownership import analysis_object_dataset
 from ..schema_read import read_roles
 from .api import reduce_analysis_object
 
@@ -14,7 +15,7 @@ def _default_required_component_dims(self: "AnalysisObject") -> tuple[str, ...]:
     if self.__class__.__name__ == "AnalysisObject":
         return ()
     try:
-        declared, _, _, core_dims = read_roles(self.unsafe_data)
+        declared, _, _, core_dims = read_roles(analysis_object_dataset(self))
     except Exception:
         return ()
     if not declared:
@@ -130,7 +131,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.mean(dim="sample").unsafe_data["value"].item()
+>>> ao.mean(dim="sample").as_dataset()["value"].item()
 2.0
 """
 
@@ -169,7 +170,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.sum(dim="sample").unsafe_data["value"].item()
+>>> ao.sum(dim="sample").as_dataset()["value"].item()
 4.0
 """
 
@@ -208,7 +209,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.std(dim="sample").unsafe_data["value"].item()
+>>> ao.std(dim="sample").as_dataset()["value"].item()
 1.0
 """
 
@@ -247,7 +248,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.var(dim="sample").unsafe_data["value"].item()
+>>> ao.var(dim="sample").as_dataset()["value"].item()
 1.0
 """
 
@@ -285,7 +286,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.median(dim="sample").unsafe_data["value"].item()
+>>> ao.median(dim="sample").as_dataset()["value"].item()
 3.0
 """
 
@@ -323,7 +324,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.min(dim="sample").unsafe_data["value"].item()
+>>> ao.min(dim="sample").as_dataset()["value"].item()
 1.0
 """
 
@@ -361,7 +362,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.max(dim="sample").unsafe_data["value"].item()
+>>> ao.max(dim="sample").as_dataset()["value"].item()
 3.0
 """
 
@@ -396,7 +397,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> ao.count(dim="sample").unsafe_data["value"].item()
+>>> ao.count(dim="sample").as_dataset()["value"].item()
 1
 """
 
@@ -432,7 +433,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> bool(ao.any(dim="sample").unsafe_data["flag"].item())
+>>> bool(ao.any(dim="sample").as_dataset()["flag"].item())
 True
 """
 
@@ -468,7 +469,7 @@ Examples
 ...     core_dims=(),
 ...     validate=True,
 ... )
->>> bool(ao.all(dim="sample").unsafe_data["flag"].item())
+>>> bool(ao.all(dim="sample").as_dataset()["flag"].item())
 True
 """
 

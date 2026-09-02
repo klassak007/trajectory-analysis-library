@@ -3,6 +3,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, cast
 
+import dask.array as da
+from dask.callbacks import Callback
 import numpy as np
 import pytest
 import xarray as xr
@@ -44,6 +46,10 @@ def _ds_trial() -> xr.Dataset:
 
 def _ds_multiindex() -> xr.Dataset:
     return _ds_single().stack(sample_axis=("sample", "axis"))
+
+
+def _read_dataset(ao: AnalysisObject) -> xr.Dataset:
+    return ao.as_dataset(copy="shallow")
 
 
 def _mapping_schema(
@@ -144,24 +150,27 @@ def _assert_aliasing_schema_owned(
 def test_ao_init_001_dataset_accept() -> None:
     """ID: AO_INIT_001_dataset_accept."""
     ao = AnalysisObject(_ds_single())
-    assert isinstance(ao.data, xr.Dataset)
-    assert "value" in ao.data.data_vars
+    dataset = _read_dataset(ao)
+    assert isinstance(dataset, xr.Dataset)
+    assert "value" in dataset.data_vars
 
 
 def test_ao_init_002_dataarray_promote() -> None:
     """ID: AO_INIT_002_dataarray_promote."""
     da = xr.DataArray(np.arange(3), dims=("sample",), name="signal")
     ao = AnalysisObject(da)
-    assert isinstance(ao.data, xr.Dataset)
-    assert list(ao.data.data_vars) == ["signal"]
+    dataset = _read_dataset(ao)
+    assert isinstance(dataset, xr.Dataset)
+    assert list(dataset.data_vars) == ["signal"]
 
 
 def test_ao_init_012_dataarray_promote_unnamed_uses_datavar() -> None:
     """ID: AO_INIT_012_dataarray_promote_unnamed_uses_datavar."""
     da = xr.DataArray(np.arange(3), dims=("sample",))
     ao = AnalysisObject(da)
-    assert isinstance(ao.data, xr.Dataset)
-    assert list(ao.data.data_vars) == ["datavar"]
+    dataset = _read_dataset(ao)
+    assert isinstance(dataset, xr.Dataset)
+    assert list(dataset.data_vars) == ["datavar"]
 
 
 def test_ao_init_003_invalid_type_reject() -> None:
@@ -186,12 +195,12 @@ def test_ao_convert_002_to_dataarray_multi_var_error() -> None:
     """ID: AO_CONVERT_002_to_dataarray_multi_var_error."""
     ds = _ds_single().assign(other=("sample", np.arange(3)))
     ao = AnalysisObject(ds)
-    try:
-        ao.to_dataarray()
-    except ValueError as err:
-        assert "exactly one data variable" in str(err)
-        return
-    raise AssertionError("Expected ValueError for multi-variable dataset.")
+    ds.attrs["copy_bomb"] = _CopyBomb()
+    object.__setattr__(ao, "_data", ds)
+
+    for mode in ("deep", "shallow", "none"):
+        with pytest.raises(ValueError, match="exactly one data variable"):
+            ao.to_dataarray(copy=cast(Any, mode))
 
 
 def test_ao_convert_003_to_dataarray_mutation_not_reflective() -> None:
@@ -199,13 +208,13 @@ def test_ao_convert_003_to_dataarray_mutation_not_reflective() -> None:
     ao = AnalysisObject(_ds_single())
     out = ao.to_dataarray()
     out.values[0, 0] = 321.0
-    assert float(ao.unsafe_data["value"].values[0, 0]) == 1.0
+    assert float(_read_dataset(ao)["value"].values[0, 0]) == 1.0
 
 
 def test_ao_init_004_constructor_minimal_no_roles_required() -> None:
     """ID: AO_INIT_004_constructor_minimal_no_roles_required."""
     ao = AnalysisObject(_ds_single())
-    assert ao.data.attrs["tal"] == {"version": 1, "core": {}}
+    assert _read_dataset(ao).attrs["tal"] == {"version": 1, "core": {}}
 
 
 def test_ao_init_005_constructor_validates_existing_tal_payload() -> None:
@@ -240,14 +249,14 @@ def test_ao_init_006_constructor_skips_full_validation_without_tal(
     monkeypatch.setattr(ao_mod, "_validate_schema", _count_validate)
     ao = AnalysisObject(_ds_single())
     assert calls == []
-    assert ao.data.attrs["tal"] == {"version": 1, "core": {}}
+    assert _read_dataset(ao).attrs["tal"] == {"version": 1, "core": {}}
 
 
 def test_ao_init_007_constructor_roundtrip_bootstrap_schema_idempotent() -> None:
     """ID: AO_INIT_007_constructor_roundtrip_bootstrap_schema_idempotent."""
     ao = AnalysisObject(_ds_single())
-    roundtrip = AnalysisObject(ao.data)
-    assert roundtrip.data.attrs["tal"] == {"version": 1, "core": {}}
+    roundtrip = AnalysisObject(_read_dataset(ao))
+    assert _read_dataset(roundtrip).attrs["tal"] == {"version": 1, "core": {}}
 
 
 def test_ao_init_008_constructor_invalid_tal_type_dataset_dataarray_parity() -> None:
@@ -268,8 +277,8 @@ def test_ao_init_009_constructor_bootstrap_with_ext_roundtrip_idempotent() -> No
     """ID: AO_INIT_009_constructor_bootstrap_with_ext_roundtrip_idempotent."""
     base = AnalysisObject(_ds_single())
     with_ext = base.merge_schema({"ext": {"demo": {"enabled": True}}}, validate=False)
-    roundtrip = AnalysisObject(with_ext.data)
-    tal = roundtrip.data.attrs["tal"]
+    roundtrip = AnalysisObject(_read_dataset(with_ext))
+    tal = _read_dataset(roundtrip).attrs["tal"]
     assert tal["version"] == 1
     assert tal["core"] == {}
     assert tal["ext"] == {"demo": {"enabled": True}}
@@ -292,9 +301,10 @@ def test_ao_init_013_dataarray_schema_is_relocated_once(construct: Any) -> None:
 
     ao = construct(da)
 
-    assert ao.unsafe_data.attrs["tal"] == tal
-    assert "tal" not in ao.unsafe_data["signal"].attrs
-    assert ao.unsafe_data["signal"].attrs["ordinary"] == {"items": ["value"]}
+    dataset = _read_dataset(ao)
+    assert dataset.attrs["tal"] == tal
+    assert "tal" not in dataset["signal"].attrs
+    assert dataset["signal"].attrs["ordinary"] == {"items": ["value"]}
 
 
 @pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
@@ -367,7 +377,7 @@ def test_ao_ingress_016_mapping_schema_is_canonical_and_isolated(
         validate = ingress == "from-data-validated"
         ao = AnalysisObject.from_data(source, validate=validate)
 
-    actual = ao.unsafe_data.attrs["tal"]
+    actual = _read_dataset(ao).attrs["tal"]
     assert type(actual) is dict
     assert type(actual["core"]) is dict
     assert type(actual["ext"]) is dict
@@ -402,7 +412,7 @@ def test_ao_ingress_018_extension_graph_keys_and_aliases_owned(
             validate=ingress == "from-data-validated",
         )
 
-    _assert_aliasing_schema_owned(ao.unsafe_data.attrs["tal"], key, items)
+    _assert_aliasing_schema_owned(_read_dataset(ao).attrs["tal"], key, items)
 
 
 @pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
@@ -441,7 +451,7 @@ def test_ao_ingress_019_core_extension_alias_is_value_only(
             core_dims=(),
             validate=ingress == "from-data-validated",
         )
-    tal = ao.unsafe_data.attrs["tal"]
+    tal = _read_dataset(ao).attrs["tal"]
 
     assert type(tal["core"]["roles"]["core_dims"]) is list
     assert tal["core"]["roles"]["core_dims"] == []
@@ -506,75 +516,193 @@ def test_ao_init_011_constructor_ingress_mutation_not_reflective() -> None:
     ao = AnalysisObject(ds)
     ds["value"].values[0, 0] = 999.0
     ds = ds.assign_coords(sample=[999, 1, 2])
-    assert float(ao.unsafe_data["value"].values[0, 0]) == 1.0
-    assert int(ao.unsafe_data.coords["sample"].values[0]) == 0
+    dataset = _read_dataset(ao)
+    assert float(dataset["value"].values[0, 0]) == 1.0
+    assert int(dataset.coords["sample"].values[0]) == 0
 
 
-def test_ao_mutability_001_data_returns_safe_copy() -> None:
-    """ID: AO_MUTABILITY_001_data_returns_shallow_copy."""
-    ao = AnalysisObject(_ds_single())
-    out = ao.data
-    assert out is not ao.unsafe_data
-    assert out["value"].data is not ao.unsafe_data["value"].data
+def _ownership_dataset() -> xr.Dataset:
+    ds = _ds_single()
+    ds.attrs["nested"] = {"items": ["dataset"]}
+    ds.encoding["nested"] = {"items": ["dataset-encoding"]}
+    for name in ("value", "sample"):
+        ds[name].attrs["nested"] = {"items": [f"{name}-attrs"]}
+        ds[name].encoding["nested"] = {"items": [f"{name}-encoding"]}
+    return ds
 
 
-def test_ao_mutability_002_as_dataset_returns_safe_copy() -> None:
-    """ID: AO_MUTABILITY_002_as_dataset_returns_shallow_copy."""
-    ao = AnalysisObject(_ds_single())
+def test_ao_mutability_001_as_dataset_deep_isolates_eager_state() -> None:
+    """ID: AO_MUTABILITY_001_as_dataset_deep_isolates_eager_state."""
+    ao = AnalysisObject(_ownership_dataset())
+    backing = ao.as_dataset(copy="none")
     out = ao.as_dataset()
-    assert out is not ao.unsafe_data
-    assert out["value"].data is not ao.unsafe_data["value"].data
+
+    assert out is not backing
+    assert out.variables["value"] is not backing.variables["value"]
+    assert out.xindexes["sample"] is not backing.xindexes["sample"]
+    assert not np.shares_memory(out["value"].data, backing["value"].data)
+    assert not np.shares_memory(out["sample"].data, backing["sample"].data)
+    out["value"].data[0, 0] = 99.0
+    out["sample"].data[0] = 99
+    out.attrs["nested"]["items"].append("changed")
+    out["value"].encoding["nested"]["items"].append("changed")
+    assert float(backing["value"].data[0, 0]) == 1.0
+    assert int(backing["sample"].data[0]) == 0
+    assert backing.attrs["nested"]["items"] == ["dataset"]
+    assert backing["value"].encoding["nested"]["items"] == ["value-encoding"]
 
 
-def test_ao_mutability_003_mutating_accessor_copy_does_not_change_internal_schema() -> None:
-    """ID: AO_MUTABILITY_003_mutating_accessor_copy_does_not_change_internal_schema."""
+def test_ao_mutability_002_as_dataset_deep_lazy_nonowning() -> None:
+    """ID: AO_MUTABILITY_002_as_dataset_deep_lazy_nonowning."""
+    source = xr.Dataset({"value": ("sample", da.arange(6, chunks=3))})
+    ao = AnalysisObject(source)
+    backing = ao.as_dataset(copy="none")
+    closed: list[str] = []
+    tasks: list[object] = []
+    backing.set_close(lambda: closed.append("source"))
+
+    with Callback(pretask=lambda key, _dsk, _state: tasks.append(key)):
+        out = ao.as_dataset()
+
+    assert tasks == []
+    assert isinstance(out["value"].data, da.Array)
+    assert out["value"].data.dask is backing["value"].data.dask
+    out.close()
+    assert closed == []
+
+
+def test_ao_mutability_003_as_dataset_shallow_isolates_metadata_shares_payload() -> None:
+    """ID: AO_MUTABILITY_003_as_dataset_shallow_isolates_metadata_shares_payload."""
+    ao = AnalysisObject(_ownership_dataset())
+    backing = ao.as_dataset(copy="none")
+    out = ao.as_dataset(copy="shallow")
+
+    assert out is not backing
+    assert out.variables["value"] is not backing.variables["value"]
+    assert out.xindexes["sample"] is not backing.xindexes["sample"]
+    assert np.shares_memory(out["value"].data, backing["value"].data)
+    assert np.shares_memory(out["sample"].data, backing["sample"].data)
+    out.attrs["nested"]["items"].append("changed")
+    out["sample"].attrs["nested"]["items"].append("changed")
+    out["value"].data[0, 0] = 42.0
+    assert backing.attrs["nested"]["items"] == ["dataset"]
+    assert backing["sample"].attrs["nested"]["items"] == ["sample-attrs"]
+    assert float(backing["value"].data[0, 0]) == 42.0
+
+
+def test_ao_mutability_004_as_dataset_none_returns_backing_identity() -> None:
+    """ID: AO_MUTABILITY_004_as_dataset_none_returns_backing_identity."""
     ao = AnalysisObject(_ds_single())
-    out = ao.data
-    out.attrs["tal"]["core"]["roles"] = {
-        "sequence_dim": "sample",
-        "batch_dims": [],
-        "core_dims": ["axis"],
-    }
-    assert "roles" not in ao.unsafe_data.attrs["tal"]["core"]
+    backing = ao.as_dataset(copy="none")
+    assert backing is ao.as_dataset(copy="none")
+    backing.attrs["reflected"] = True
+    assert ao.as_dataset(copy="none").attrs["reflected"] is True
 
 
-def test_ao_mutability_004_unsafe_data_mutation_is_reflective() -> None:
-    """ID: AO_MUTABILITY_004_unsafe_data_mutation_is_reflective."""
-    ao = AnalysisObject(_ds_single())
-    ao.unsafe_data.attrs["tal"]["core"]["roles"] = {
-        "sequence_dim": "sample",
-        "batch_dims": [],
-        "core_dims": ["axis"],
-    }
-    assert ao.unsafe_data.attrs["tal"]["core"]["roles"]["sequence_dim"] == "sample"
-
-
-def test_ao_mutability_005_data_value_mutation_not_reflective() -> None:
-    """ID: AO_MUTABILITY_005_data_value_mutation_not_reflective."""
-    ao = AnalysisObject(_ds_single())
-    out = ao.data
-    out["value"].values[0, 0] = 999.0
-    assert float(ao.unsafe_data["value"].values[0, 0]) == 1.0
-
-
-def test_ao_mutability_006_data_coord_mutation_not_reflective() -> None:
-    """ID: AO_MUTABILITY_006_data_coord_mutation_not_reflective."""
-    ao = AnalysisObject(_ds_single())
-    out = ao.as_dataset()
-    out = out.assign_coords(sample=[999, 1, 2])
-    assert int(ao.unsafe_data.coords["sample"].values[0]) == 0
-
-
-def test_ao_mutability_007_data_rejects_multiindex_internal_state() -> None:
-    """ID: AO_MUTABILITY_007_data_rejects_multiindex_internal_state."""
+def test_ao_mutability_005_invalid_copy_mode_rejected() -> None:
+    """ID: AO_MUTABILITY_005_invalid_copy_mode_rejected."""
     ao = AnalysisObject(_ds_single())
     object.__setattr__(ao, "_data", _ds_multiindex())
-    with pytest.raises(ValueError) as err_data:
-        _ = ao.data
-    assert "PandasMultiIndex dimensions are not supported" in str(err_data.value)
-    with pytest.raises(ValueError) as err_ds:
-        _ = ao.as_dataset()
-    assert "PandasMultiIndex dimensions are not supported" in str(err_ds.value)
+    for invalid in (None, False, 1, "invalid"):
+        with pytest.raises(ValueError, match=r"^AnalysisObject\.as_dataset: copy must be"):
+            ao.as_dataset(copy=cast(Any, invalid))
+        with pytest.raises(ValueError, match=r"^AnalysisObject\.to_dataarray: copy must be"):
+            ao.to_dataarray(copy=cast(Any, invalid))
+
+
+def test_ao_mutability_006_to_dataarray_copy_and_lifetime_matrix() -> None:
+    """ID: AO_MUTABILITY_006_to_dataarray_copy_and_lifetime_matrix."""
+    ao = AnalysisObject(_ownership_dataset())
+    backing = ao.as_dataset(copy="none")
+    closed: list[str] = []
+    backing.set_close(lambda: closed.append("source"))
+
+    deep = ao.to_dataarray(copy="deep")
+    shallow = ao.to_dataarray(copy="shallow")
+    raw = ao.to_dataarray(copy="none")
+    assert deep.name == shallow.name == raw.name == "value"
+    assert deep.variable is not backing.variables["value"]
+    assert shallow.variable is not backing.variables["value"]
+    assert raw.variable is backing.variables["value"]
+    assert not np.shares_memory(deep.data, backing["value"].data)
+    assert np.shares_memory(shallow.data, backing["value"].data)
+    assert np.shares_memory(raw.data, backing["value"].data)
+    assert all("tal" not in view.attrs for view in (deep, shallow, raw))
+    deep.attrs["nested"]["items"].append("deep")
+    shallow.attrs["nested"]["items"].append("shallow")
+    assert backing["value"].attrs["nested"]["items"] == ["value-attrs"]
+    raw.attrs["nested"]["items"].append("raw")
+    assert backing["value"].attrs["nested"]["items"][-1] == "raw"
+    deep.close()
+    shallow.close()
+    raw.close()
+    assert closed == []
+
+    lazy = AnalysisObject(xr.Dataset({"value": ("sample", da.arange(6, chunks=3))}))
+    lazy_backing = lazy.as_dataset(copy="none")
+    lazy_closed: list[str] = []
+    tasks: list[object] = []
+    lazy_backing.set_close(lambda: lazy_closed.append("source"))
+    with Callback(pretask=lambda key, _dsk, _state: tasks.append(key)):
+        lazy_views = tuple(
+            lazy.to_dataarray(copy=cast(Any, mode))
+            for mode in ("deep", "shallow", "none")
+        )
+    assert tasks == []
+    assert all(isinstance(view.data, da.Array) for view in lazy_views)
+    for view in lazy_views:
+        view.close()
+    assert lazy_closed == []
+
+
+def test_ao_mutability_007_close_releases_backing_resource_once() -> None:
+    """ID: AO_MUTABILITY_007_close_releases_backing_resource_once."""
+    ao = AnalysisObject(_ds_single())
+    backing = ao.as_dataset(copy="none")
+    closed: list[str] = []
+    backing.set_close(lambda: closed.append("source"))
+    deep = ao.as_dataset()
+    shallow = ao.as_dataset(copy="shallow")
+    deep.close()
+    shallow.close()
+    assert closed == []
+    ao.close()
+    ao.close()
+    backing.close()
+    assert closed == ["source"]
+
+    other = AnalysisObject(_ds_single())
+    raw = other.as_dataset(copy="none")
+    raw.set_close(lambda: closed.append("other"))
+    raw.close()
+    other.close()
+    assert closed == ["source", "other"]
+
+
+def test_ao_mutability_008_exposure_rejects_multiindex_internal_state() -> None:
+    """ID: AO_MUTABILITY_008_exposure_rejects_multiindex_internal_state."""
+    ao = AnalysisObject(_ds_single())
+    object.__setattr__(ao, "_data", _ds_multiindex())
+    for mode in ("deep", "shallow", "none"):
+        with pytest.raises(
+            ValueError,
+            match="PandasMultiIndex dimensions are not supported",
+        ):
+            ao.as_dataset(copy=cast(Any, mode))
+        with pytest.raises(
+            ValueError,
+            match="PandasMultiIndex dimensions are not supported",
+        ):
+            ao.to_dataarray(copy=cast(Any, mode))
+
+
+def test_ao_mutability_009_removed_properties_absent_after_cutover() -> None:
+    """ID: AO_MUTABILITY_009_removed_properties_absent_after_cutover."""
+    ao = AnalysisObject(_ds_single())
+    for name in ("data", "unsafe_data"):
+        assert name not in AnalysisObject.__dict__
+        assert name not in dir(ao)
+        assert not hasattr(ao, name)
 
 
 def test_ao_events_001_accessor_available() -> None:
@@ -592,7 +720,7 @@ def test_ao_fromdata_001_set_roles_success() -> None:
         batch_dims=("trial",),
         core_dims=("axis",),
     )
-    roles = ao.data.attrs["tal"]["core"]["roles"]
+    roles = _read_dataset(ao).attrs["tal"]["core"]["roles"]
     assert roles == {
         "sequence_dim": "sample",
         "batch_dims": ["trial"],
@@ -610,7 +738,7 @@ def test_ao_fromdata_002_set_param_coord_1d_success() -> None:
         core_dims=("axis",),
         param_coord="time",
     )
-    assert ao.data.attrs["tal"]["core"]["param_coord"]["name"] == "time"
+    assert _read_dataset(ao).attrs["tal"]["core"]["param_coord"]["name"] == "time"
 
 
 def test_ao_fromdata_003_set_param_coord_nd_success() -> None:
@@ -625,7 +753,7 @@ def test_ao_fromdata_003_set_param_coord_nd_success() -> None:
         core_dims=("axis",),
         param_coord="phase",
     )
-    assert ao.data.attrs["tal"]["core"]["param_coord"]["name"] == "phase"
+    assert _read_dataset(ao).attrs["tal"]["core"]["param_coord"]["name"] == "phase"
 
 
 def test_ao_fromdata_004_set_validity_success() -> None:
@@ -638,14 +766,14 @@ def test_ao_fromdata_004_set_validity_success() -> None:
         core_dims=("axis",),
         sequence_size_coord="group_size",
     )
-    validity = ao.data.attrs["tal"]["core"]["validity"]
+    validity = _read_dataset(ao).attrs["tal"]["core"]["validity"]
     assert validity == {"sequence_size_coord": "group_size", "layout": "left_packed"}
 
 
 def test_ao_fromdata_005_batch_and_core_without_sequence_dim_allowed() -> None:
     """ID: AO_FROMDATA_012_batch_and_core_without_sequence_dim_allowed."""
     ao = AnalysisObject.from_data(_ds_trial(), batch_dims=("trial",), core_dims=("axis",))
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(_read_dataset(ao))
     assert declared is True
     assert sequence_dim is None
     assert batch_dims == ("trial",)
@@ -655,7 +783,7 @@ def test_ao_fromdata_005_batch_and_core_without_sequence_dim_allowed() -> None:
 def test_ao_fromdata_006_no_roles_assigned_validates_as_core_only() -> None:
     """ID: AO_FROMDATA_013_no_roles_assigned_validates_as_core_only."""
     ao = AnalysisObject.from_data(_ds_trial())
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(_read_dataset(ao))
     assert declared is False
     assert sequence_dim is None
     assert batch_dims == ()
@@ -714,8 +842,9 @@ def test_ao_fromdata_011_from_data_ingress_mutation_not_reflective() -> None:
     )
     ds["value"].values[0, 0, 0] = 777.0
     ds = ds.assign_coords(trial=[99, 1])
-    assert float(ao.unsafe_data["value"].values[0, 0, 0]) == 1.0
-    assert int(ao.unsafe_data.coords["trial"].values[0]) == 0
+    dataset = _read_dataset(ao)
+    assert float(dataset["value"].values[0, 0, 0]) == 1.0
+    assert int(dataset.coords["trial"].values[0]) == 0
 
 
 @pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))
@@ -926,7 +1055,7 @@ def test_ao_fastpath_001_from_validated_binds_without_validate_call(
     candidate = schema_validate_mod.validate_schema(candidate)
     out = AnalysisObject._from_validated(candidate)
     assert calls == []
-    assert out.unsafe_data is candidate
+    assert out.as_dataset(copy="none") is candidate
 
 
 def test_ao_fastpath_002_set_roles_validate_true_single_validation_pass(
@@ -996,7 +1125,7 @@ def test_bcast_core_003_b_helper_does_not_mutate_source_ao() -> None:
     intent = read_broadcast_intent(wrapped, owner="test.ao.b")
     assert intent is not None
     assert intent.mode == "semantic_broadcast"
-    xr.testing.assert_identical(wrapped.unsafe_data, ao.unsafe_data)
+    xr.testing.assert_identical(_read_dataset(wrapped), _read_dataset(ao))
 
 
 def test_bcast_hard_001_b_helper_invalid_options_fail_closed() -> None:
@@ -1030,7 +1159,7 @@ def test_bcast_core_037_a_helper_is_operand_local_and_non_mutating() -> None:
     assert intent is not None
     assert intent.on == "sequence"
     assert intent.sequence_join == "exact"
-    xr.testing.assert_identical(wrapped.unsafe_data, ao.unsafe_data)
+    xr.testing.assert_identical(_read_dataset(wrapped), _read_dataset(ao))
 
 
 def test_bcast_core_038_a_and_b_chain_nonconflicting_merge_is_deterministic() -> None:
@@ -1044,7 +1173,7 @@ def test_bcast_core_038_a_and_b_chain_nonconflicting_merge_is_deterministic() ->
     right_b = read_broadcast_intent(right, owner="test.ao.chain.right")
     assert left_a == right_a
     assert left_b == right_b
-    xr.testing.assert_identical(left.unsafe_data, right.unsafe_data)
+    xr.testing.assert_identical(_read_dataset(left), _read_dataset(right))
 
 
 def test_bcast_hard_032_b_and_a_chain_conflicts_fail_closed_with_owner_context() -> None:

@@ -77,7 +77,7 @@ class ComponentExtractOptions:
     ... )
     >>> tagged = define_components(ao, opts=ComponentRegistryOptions({"xy": ComponentSpec("axis", ("x", "y"))}))
     >>> parts = extract_components(tagged, opts=ComponentExtractOptions(names=("xy",)))
-    >>> parts["xy"].unsafe_data.sizes["axis"]
+    >>> parts["xy"].as_dataset().sizes["axis"]
     2
     """
 
@@ -112,7 +112,7 @@ class ComponentPatchOptions:
     ...     validate=True,
     ... )
     >>> out = patch_components(tagged, {"xy": patch}, opts=ComponentPatchOptions(on_overlap="replace"))
-    >>> out.unsafe_data["vec"].sel(axis="x").item()
+    >>> out.as_dataset()["vec"].sel(axis="x").item()
     10.0
     """
 
@@ -142,7 +142,7 @@ class ComponentComposeOptions:
     ...     core_dims=("axis",),
     ...     validate=True,
     ... )}, opts=opts)
-    >>> out.unsafe_data.sizes["axis"]
+    >>> out.as_dataset().sizes["axis"]
     2
     """
 

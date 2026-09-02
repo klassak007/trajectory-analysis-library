@@ -48,7 +48,7 @@ def _temporal_vector3_dataset(*, var_name: str, core_dim: str, values: np.ndarra
         param_coord="time_s",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _typed_sources() -> dict[str, object]:
@@ -136,7 +136,7 @@ def test_spatial_core_156_d6_ao_temporal_surface_delegates_to_existing_typed_or_
     for kind, source in sources.items():
         typed_out = smooth(source, validate=True, target_cls=source.__class__)
         assert isinstance(typed_out, source.__class__)
-        ao = AnalysisObject._from_validated(source.unsafe_data)
+        ao = AnalysisObject._from_validated(source.as_dataset(copy="none"))
         ao_out = smooth(ao, kind=kind, validate=True)
         assert isinstance(ao_out, AnalysisObject)
     diff_expected = {
@@ -164,7 +164,7 @@ def test_spatial_core_156_d6_ao_temporal_surface_delegates_to_existing_typed_or_
 def test_spatial_hard_173_d6_ao_temporal_kind_validation_fails_closed_on_unsupported_or_ambiguous_kind() -> None:
     """ID: SPATIAL_HARD_173_d6_ao_temporal_kind_validation_fails_closed_on_unsupported_or_ambiguous_kind."""
     src = _typed_sources()["linear_velocity"]
-    ao = AnalysisObject._from_validated(src.unsafe_data)
+    ao = AnalysisObject._from_validated(src.as_dataset(copy="none"))
     with pytest.raises(ValueError, match="spatial\\.temporal\\.smooth"):
         _ = smooth(ao, validate=True)
     with pytest.raises(ValueError, match="spatial\\.temporal\\.smooth"):
@@ -205,14 +205,14 @@ def test_spatial_core_159_d6_ao_default_target_cls_none_returns_analysis_object_
         for kind, typed_target in expected.items():
             typed_source = sources[kind]
             typed_out = op(typed_source, validate=True, target_cls=typed_target)
-            ao_source = AnalysisObject._from_validated(typed_source.unsafe_data)
+            ao_source = AnalysisObject._from_validated(typed_source.as_dataset(copy="none"))
             ao_out = op(ao_source, kind=kind, validate=True, target_cls=None)
             assert type(ao_out) is AnalysisObject
-            assert read_roles(ao_out.unsafe_data) == read_roles(typed_out.unsafe_data)
-            assert read_param_coord_name(ao_out.unsafe_data) == read_param_coord_name(typed_out.unsafe_data)
-            assert read_sequence_size_coord_name(ao_out.unsafe_data) == read_sequence_size_coord_name(typed_out.unsafe_data)
-            assert get_kinematics_kind(ao_out.unsafe_data, owner="test") == get_kinematics_kind(
-                typed_out.unsafe_data, owner="test"
+            assert read_roles(ao_out.as_dataset(copy="none")) == read_roles(typed_out.as_dataset(copy="none"))
+            assert read_param_coord_name(ao_out.as_dataset(copy="none")) == read_param_coord_name(typed_out.as_dataset(copy="none"))
+            assert read_sequence_size_coord_name(ao_out.as_dataset(copy="none")) == read_sequence_size_coord_name(typed_out.as_dataset(copy="none"))
+            assert get_kinematics_kind(ao_out.as_dataset(copy="none"), owner="test") == get_kinematics_kind(
+                typed_out.as_dataset(copy="none"), owner="test"
             )
-            assert _spatial_rep(ao_out.unsafe_data) == _spatial_rep(typed_out.unsafe_data)
-            xr.testing.assert_identical(ao_out.unsafe_data, typed_out.unsafe_data)
+            assert _spatial_rep(ao_out.as_dataset(copy="none")) == _spatial_rep(typed_out.as_dataset(copy="none"))
+            xr.testing.assert_identical(ao_out.as_dataset(copy="none"), typed_out.as_dataset(copy="none"))

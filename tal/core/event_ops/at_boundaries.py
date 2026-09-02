@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from ..param_ops.guards import dataset_namespace_names
@@ -99,8 +100,9 @@ def _attach_boundary_metadata(
     validate: bool,
     owner: str,
 ) -> "AnalysisObject":
-    _metadata_namespace_safe(out.unsafe_data, owner=owner)
-    ds = out.unsafe_data.assign_coords(
+    out_ds = analysis_object_dataset(out)
+    _metadata_namespace_safe(out_ds, owner=owner)
+    ds = out_ds.assign_coords(
         {
             "event_edge_code": table["edge_code"].astype("int8"),
             "event_sample_index_before": table["sample_index_before"].astype("int64"),
@@ -174,7 +176,10 @@ def evaluate_at_boundaries_condition(
         batch_dims=context.runtime.batch_dims,
         sequence_size_coord=context.runtime.sequence_size_coord,
     )
-    if context.runtime.sequence_dim in out.unsafe_data.dims and context.runtime.sequence_dim != boundary_dim:
+    if (
+        context.runtime.sequence_dim in analysis_object_dataset(out).dims
+        and context.runtime.sequence_dim != boundary_dim
+    ):
         out = out.rename({context.runtime.sequence_dim: boundary_dim}, validate=validate)
     return _attach_boundary_metadata(out, table=table, validate=validate, owner=owner)
 

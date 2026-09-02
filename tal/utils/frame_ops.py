@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.schema import UNSET, UnsetType, validate_schema
 from tal.frames import Frame, FrameGraph, get_active_frame_graph
@@ -129,7 +130,7 @@ def frame_ids(ao: object) -> tuple[str | None, str | None]:
     """
     owner = "frames.ids"
     source = coerce_analysis_object_input(ao, owner=owner)
-    return get_frames(source.unsafe_data)
+    return get_frames(analysis_object_dataset(source))
 
 
 def frame_retag(
@@ -172,7 +173,7 @@ def frame_retag(
     """
     owner = "frames.retag"
     source = coerce_analysis_object_input(ao, owner=owner)
-    updated = set_frames(source.unsafe_data, parent=parent, child=child, validate=False)
+    updated = set_frames(analysis_object_dataset(source), parent=parent, child=child, validate=False)
     return _rewrap_like(source, updated, validate=validate)
 
 
@@ -215,10 +216,11 @@ def frame_remap_ids(
     owner = "frames.remap_ids"
     source = coerce_analysis_object_input(ao, owner=owner)
     normalized = _normalize_remap_mapping(mapping, owner=owner)
-    current_parent, current_child = get_frames(source.unsafe_data)
+    source_ds = analysis_object_dataset(source)
+    current_parent, current_child = get_frames(source_ds)
     next_parent = normalized.get(current_parent, current_parent) if current_parent is not None else None
     next_child = normalized.get(current_child, current_child) if current_child is not None else None
-    updated = set_frames(source.unsafe_data, parent=next_parent, child=next_child, validate=False)
+    updated = set_frames(source_ds, parent=next_parent, child=next_child, validate=False)
     return _rewrap_like(source, updated, validate=validate)
 
 
@@ -282,7 +284,7 @@ def _frame_bind_impl(
     resolved_graph: FrameGraph,
     owner: str,
 ) -> tuple[Frame | None, Frame | None]:
-    parent_id, child_id = get_frames(source.unsafe_data)
+    parent_id, child_id = get_frames(analysis_object_dataset(source))
     parent = None
     child = None
     if parent_id is not None:

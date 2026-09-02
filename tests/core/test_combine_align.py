@@ -96,11 +96,11 @@ def test_combine_align_001_pair_join_matrix_inner_outer_exact() -> None:
     left = _ao_grouped(trial_labels=("a", "b"), tau_rows=[[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]])
     right = _ao_grouped(trial_labels=("b", "c"), tau_rows=[[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]], value_offset=100.0)
     inner_left, inner_right = align_pair(left, right, opts=AlignOptions(batch_join="inner", sequence_join="inner"))
-    assert list(inner_left.data.coords["trial"].values) == ["b"]
-    assert list(inner_right.data.coords["trial"].values) == ["b"]
+    assert list(inner_left.as_dataset().coords["trial"].values) == ["b"]
+    assert list(inner_right.as_dataset().coords["trial"].values) == ["b"]
     outer_left, outer_right = align_pair(left, right, opts=AlignOptions(batch_join="outer", sequence_join="inner"))
-    assert list(outer_left.data.coords["trial"].values) == ["a", "b", "c"]
-    assert list(outer_right.data.coords["trial"].values) == ["a", "b", "c"]
+    assert list(outer_left.as_dataset().coords["trial"].values) == ["a", "b", "c"]
+    assert list(outer_right.as_dataset().coords["trial"].values) == ["a", "b", "c"]
     with pytest.raises(ValueError) as err:
         align_pair(left, right, opts=AlignOptions(batch_join="exact", sequence_join="inner"))
     assert "batch_join='exact'" in str(err.value)
@@ -112,10 +112,10 @@ def test_combine_align_002_many_multi_batch_flatten_restore() -> None:
     second = _ao_multi_batch(trial_labels=("b", "c"), sensor_labels=("s1", "s2"), offset=100.0)
     out = align_many([first, second], opts=AlignOptions(batch_join="outer", sequence_join="inner"))
     assert len(out) == 2
-    assert set(out[0].data.dims) == {"trial", "sensor", "sample"}
-    assert list(out[0].data.coords["trial"].values) == ["a", "b", "c"]
-    assert list(out[0].data.coords["sensor"].values) == ["s0", "s1", "s2"]
-    assert out[0].data.attrs["tal"]["core"]["roles"]["batch_dims"] == ["trial", "sensor"]
+    assert set(out[0].as_dataset().dims) == {"trial", "sensor", "sample"}
+    assert list(out[0].as_dataset().coords["trial"].values) == ["a", "b", "c"]
+    assert list(out[0].as_dataset().coords["sensor"].values) == ["s0", "s1", "s2"]
+    assert out[0].as_dataset().attrs["tal"]["core"]["roles"]["batch_dims"] == ["trial", "sensor"]
 
 
 def test_orch_topo_parity_003_combine_align_multi_batch_behavior_parity() -> None:
@@ -124,9 +124,9 @@ def test_orch_topo_parity_003_combine_align_multi_batch_behavior_parity() -> Non
     second = _ao_multi_batch(trial_labels=("b", "a"), sensor_labels=("s1", "s0"), offset=25.0)
     out = align_many([first, second], opts=AlignOptions(batch_join="inner", sequence_join="inner"))
     assert len(out) == 2
-    assert set(out[0].data.dims) == {"trial", "sensor", "sample"}
-    assert list(out[0].data.coords["trial"].values) == ["a", "b"]
-    assert list(out[0].data.coords["sensor"].values) == ["s0", "s1"]
+    assert set(out[0].as_dataset().dims) == {"trial", "sensor", "sample"}
+    assert list(out[0].as_dataset().coords["trial"].values) == ["a", "b"]
+    assert list(out[0].as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_orch_finalize_parity_003_combine_align_finalize_path_stable(
@@ -147,7 +147,7 @@ def test_orch_finalize_parity_003_combine_align_finalize_path_stable(
     right = _ao_grouped(trial_labels=("b", "c"), tau_rows=[[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]], value_offset=10.0)
     out = align_many([left, right], opts=AlignOptions(batch_join="inner", sequence_join="inner"))
     assert len(out) == 2
-    assert list(out[0].data.coords["trial"].values) == ["b"]
+    assert list(out[0].as_dataset().coords["trial"].values) == ["b"]
     assert calls["finalize_with_schema"] >= 1
 
 
@@ -179,9 +179,9 @@ def test_combine_align_004_static_batch_or_scalar_alignment_supported() -> None:
     dynamic = _ao_grouped(trial_labels=("a", "b"), tau_rows=[[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]])
     scalar = AnalysisObject(xr.Dataset(data_vars={"offset": xr.DataArray(5.0)}))
     out = align_many([dynamic, scalar], opts=AlignOptions(batch_join="outer", sequence_join="inner"))
-    assert "trial" in out[1].data.dims
-    assert list(out[1].data.coords["trial"].values) == ["a", "b"]
-    np.testing.assert_allclose(out[1].data["offset"].values, [5.0, 5.0])
+    assert "trial" in out[1].as_dataset().dims
+    assert list(out[1].as_dataset().coords["trial"].values) == ["a", "b"]
+    np.testing.assert_allclose(out[1].as_dataset()["offset"].values, [5.0, 5.0])
 
 
 def test_combine_align_005_pad_invalid_outer_true_rebuilds_validity_or_prunes_unrepresentable() -> None:
@@ -193,10 +193,10 @@ def test_combine_align_005_pad_invalid_outer_true_rebuilds_validity_or_prunes_un
         right,
         opts=AlignOptions(batch_join="inner", sequence_join="outer", pad_invalid_outer=True),
     )
-    assert out_left.data.attrs["tal"]["core"].get("validity") == {"sequence_size_coord": "n_valid", "layout": "left_packed"}
-    assert out_right.data.attrs["tal"]["core"].get("validity") is None
-    assert "n_valid" in out_left.data.coords
-    assert "n_valid" not in out_right.data.coords
+    assert out_left.as_dataset().attrs["tal"]["core"].get("validity") == {"sequence_size_coord": "n_valid", "layout": "left_packed"}
+    assert out_right.as_dataset().attrs["tal"]["core"].get("validity") is None
+    assert "n_valid" in out_left.as_dataset().coords
+    assert "n_valid" not in out_right.as_dataset().coords
 
 
 def test_combine_align_006_pad_invalid_outer_false_prunes_validity_metadata() -> None:
@@ -208,10 +208,10 @@ def test_combine_align_006_pad_invalid_outer_false_prunes_validity_metadata() ->
         right,
         opts=AlignOptions(batch_join="inner", sequence_join="outer", pad_invalid_outer=False),
     )
-    assert out_left.data.attrs["tal"]["core"].get("validity") is None
-    assert out_right.data.attrs["tal"]["core"].get("validity") is None
-    assert "n_valid" not in out_left.data.coords
-    assert "n_valid" not in out_right.data.coords
+    assert out_left.as_dataset().attrs["tal"]["core"].get("validity") is None
+    assert out_right.as_dataset().attrs["tal"]["core"].get("validity") is None
+    assert "n_valid" not in out_left.as_dataset().coords
+    assert "n_valid" not in out_right.as_dataset().coords
 
 
 def test_combine_align_007_multi_batch_outer_null_labels_restore_deterministic() -> None:
@@ -228,7 +228,7 @@ def test_combine_align_007_multi_batch_outer_null_labels_restore_deterministic()
     )
     out = align_many([left, right], opts=AlignOptions(batch_join="outer", sequence_join="exact"))
     assert len(out) == 2
-    assert set(out[0].data.dims) == {"trial", "sensor", "sample"}
+    assert set(out[0].as_dataset().dims) == {"trial", "sensor", "sample"}
 
 
 def test_combine_align_008_multi_batch_outer_nan_labels_restore() -> None:
@@ -245,9 +245,9 @@ def test_combine_align_008_multi_batch_outer_nan_labels_restore() -> None:
     )
     out = align_many([left, right], opts=AlignOptions(batch_join="outer", sequence_join="exact"))
     assert len(out) == 2
-    assert set(out[0].data.dims) == {"trial", "sensor", "sample"}
-    assert bool(np.asarray(out[0].data.coords["trial"].isnull().values).item())
-    assert out[0].data.coords["sensor"].values.tolist() == ["s0"]
+    assert set(out[0].as_dataset().dims) == {"trial", "sensor", "sample"}
+    assert bool(np.asarray(out[0].as_dataset().coords["trial"].isnull().values).item())
+    assert out[0].as_dataset().coords["sensor"].values.tolist() == ["s0"]
 
 
 def test_combine_align_009_outer_chunked_sequence_size_coord_fails_fast() -> None:
@@ -412,5 +412,5 @@ def test_orch_edge_001_align_excludes_core_dim_label_union() -> None:
         sequence_size_coord="group_size",
     )
     out_left, out_right = align_pair(left, right, opts=AlignOptions(batch_join="inner", sequence_join="inner"))
-    assert out_left.data.sizes["axis"] == 2
-    assert out_right.data.sizes["axis"] == 3
+    assert out_left.as_dataset().sizes["axis"] == 2
+    assert out_right.as_dataset().sizes["axis"] == 3

@@ -71,7 +71,7 @@ def _numba_autosummary_symbols() -> tuple[str, ...]:
 
 
 def test_curated_scope_counts_match_plan() -> None:
-    expected_total = 256
+    expected_total = 255
     observed = curated_scope_counts()
     assert observed == CURATED_SCOPE_COUNTS
     assert sum(observed.values()) == expected_total

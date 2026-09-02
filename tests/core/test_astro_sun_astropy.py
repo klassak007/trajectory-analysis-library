@@ -83,34 +83,34 @@ def test_astro_core_a2_001_direction_to_sun_scalar_location_scalar_time_astropy(
     """ID: ASTRO_CORE_A2_001_direction_to_sun_scalar_location_scalar_time_astropy."""
     out = _sun(GeodeticPosition.from_lla(_scalar_lla()))
     assert isinstance(out, TopocentricDirection)
-    assert out.unsafe_data["direction"].dims == ("enu",)
+    assert out.as_dataset(copy="none")["direction"].dims == ("enu",)
 
 
 @requires_astropy
 def test_astro_core_a2_002_direction_to_sun_sequence_time_coord_astropy() -> None:
     """ID: ASTRO_CORE_A2_002_direction_to_sun_sequence_time_coord_astropy."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla()), source="time")
-    assert out.unsafe_data["direction"].dims == ("sample", "enu")
-    assert out.unsafe_data["altitude_deg"].dims == ("sample",)
+    assert out.as_dataset(copy="none")["direction"].dims == ("sample", "enu")
+    assert out.as_dataset(copy="none")["altitude_deg"].dims == ("sample",)
 
 
 @requires_astropy
 def test_astro_core_a2_003_direction_to_sun_preserves_batch_topology() -> None:
     """ID: ASTRO_CORE_A2_003_direction_to_sun_preserves_batch_topology."""
     out = _sun(GeodeticPosition.from_lla(_batched_lla()), source="utc")
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("enu",)
-    assert out.unsafe_data["direction"].dims == ("sample", "trial", "enu")
+    assert out.as_dataset(copy="none")["direction"].dims == ("sample", "trial", "enu")
 
 
 @requires_astropy
 def test_astro_core_a2_004_direction_to_sun_outputs_unit_enu_vector() -> None:
     """ID: ASTRO_CORE_A2_004_direction_to_sun_outputs_unit_enu_vector."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla()), source="time")
-    norm = np.linalg.norm(out.unsafe_data["direction"].to_numpy(), axis=-1)
+    norm = np.linalg.norm(out.as_dataset(copy="none")["direction"].to_numpy(), axis=-1)
     np.testing.assert_allclose(norm, 1.0, atol=1e-12)
 
 
@@ -118,10 +118,10 @@ def test_astro_core_a2_004_direction_to_sun_outputs_unit_enu_vector() -> None:
 def test_astro_core_a2_005_altitude_azimuth_match_direction_vector() -> None:
     """ID: ASTRO_CORE_A2_005_altitude_azimuth_match_direction_vector."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla()), source="time")
-    alt = np.radians(out.unsafe_data["altitude_deg"].to_numpy())
-    az = np.radians(out.unsafe_data["azimuth_deg"].to_numpy())
+    alt = np.radians(out.as_dataset(copy="none")["altitude_deg"].to_numpy())
+    az = np.radians(out.as_dataset(copy="none")["azimuth_deg"].to_numpy())
     expected = np.stack([np.cos(alt) * np.sin(az), np.cos(alt) * np.cos(az), np.sin(alt)], axis=-1)
-    np.testing.assert_allclose(out.unsafe_data["direction"].to_numpy(), expected, atol=1e-12)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["direction"].to_numpy(), expected, atol=1e-12)
 
 
 def test_astro_core_a2_006_iers_options_are_applied_and_restored() -> None:
@@ -140,12 +140,12 @@ def test_astro_core_a2_006_iers_options_are_applied_and_restored() -> None:
 def test_astro_core_a2_007_output_metadata_records_astropy_backend() -> None:
     """ID: ASTRO_CORE_A2_007_output_metadata_records_astropy_backend."""
     out = _sun(GeodeticPosition.from_lla(_scalar_lla()))
-    block = read_astro_block(out.unsafe_data, owner="test")
+    block = read_astro_block(out.as_dataset(copy="none"), owner="test")
     assert block["kind"] == "topocentric_direction"
     assert block["target"] == "sun"
     assert block["backend"] == "astropy"
     assert block["direction_var"] == "direction"
-    assert set(out.unsafe_data.data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
+    assert set(out.as_dataset(copy="none").data_vars) == {"direction", "altitude_deg", "azimuth_deg"}
 
 
 def test_astro_core_a2_008_sun_direction_options_shape_includes_spice_field() -> None:
@@ -158,8 +158,8 @@ def test_astro_core_a2_008_sun_direction_options_shape_includes_spice_field() ->
 def test_astro_core_a2_009_datetime64_param_time_source_astropy() -> None:
     """ID: ASTRO_CORE_A2_009_datetime64_param_time_source_astropy."""
     out = _sun(GeodeticPosition.from_lla(_sequence_lla(datetime_param=True)), source="time")
-    assert read_param_coord_name(out.unsafe_data) == "time"
-    assert np.issubdtype(out.unsafe_data.coords["time"].dtype, np.datetime64)
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time"
+    assert np.issubdtype(out.as_dataset(copy="none").coords["time"].dtype, np.datetime64)
 
 
 def test_astro_hard_a2_001_spice_backend_request_before_a3_fails_closed() -> None:

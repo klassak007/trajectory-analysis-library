@@ -15,7 +15,7 @@ def _projected_dataset() -> xr.Dataset:
         {"position": (("sample", "projected"), np.asarray([[500000.0, 4100000.0]], dtype=float))},
         coords={"sample": [0], "projected": ["easting", "northing"]},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True).unsafe_data
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True).as_dataset(copy="none")
 
 
 def test_geo_core_g4_001_tal_geo_imports_without_pyproj() -> None:

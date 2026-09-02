@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core import AnalysisObject, SchemaError
 from tal.core.schema import set_validity
 from tal.core.schema_read import (
@@ -58,7 +59,7 @@ def resolve_csv_export_context(
     owner: str,
 ) -> CsvExportContext:
     """Resolve roles and effective validity without reading array payloads."""
-    source_ds = ao.unsafe_data
+    source_ds = analysis_object_dataset(ao)
     try:
         schema_ds = source_ds
         if options.sequence_size_coord is not None:

@@ -91,18 +91,18 @@ def _topology_operand(
     index: int,
     var_name: str = "x",
 ) -> TopologyOperand:
-    _, _, _, core_dims = read_roles(ao.unsafe_data)
+    _, _, _, core_dims = read_roles(ao.as_dataset(copy="none"))
     return TopologyOperand(
         index=index,
-        data=ao.unsafe_data[var_name],
+        data=ao.as_dataset(copy="none")[var_name],
         semantic=resolve_semantic_topology_from_dataset(
-            ao.unsafe_data,
+            ao.as_dataset(copy="none"),
             var_name=var_name,
             core_dims=core_dims,
             owner="test.topology",
             what=f"operand {index}",
         ),
-        param_coord=read_param_coord_name(ao.unsafe_data),
+        param_coord=read_param_coord_name(ao.as_dataset(copy="none")),
     )
 
 
@@ -286,15 +286,15 @@ def test_orch_array_004_finalize_array_result_optional_metadata_restore_and_cano
         validate=True,
     )
 
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("row", "out")
-    assert read_param_coord_name(out.unsafe_data) == "tau"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
-    assert out.unsafe_data.coords["tau"].dims == ("trial", "sample")
-    assert out.unsafe_data.coords["sample_size"].dims == ("trial",)
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "tau"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
+    assert out.as_dataset(copy="none").coords["tau"].dims == ("trial", "sample")
+    assert out.as_dataset(copy="none").coords["sample_size"].dims == ("trial",)
 
 
 def test_orch_array_005_resolve_dataset_context_matches_array_plan_operand_context() -> None:
@@ -366,11 +366,11 @@ def test_orch_array_006_finalize_array_result_without_sequence_preserves_core_on
             param_name=None,
             size_name=None,
         ),
-        optional_sources=(ao.unsafe_data["x"],),
+        optional_sources=(ao.as_dataset(copy="none")["x"],),
         owner="orch.array",
         validate=True,
     )
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared
     assert sequence_dim is None
     assert batch_dims == ()
@@ -481,13 +481,13 @@ def test_topo_core_001_shared_topology_model_roundtrip_extraction() -> None:
     """ID: TOPO_CORE_001_shared_topology_model_roundtrip_extraction."""
     ao = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="mid")
     semantic = resolve_semantic_topology_from_dataset(
-        ao.unsafe_data,
+        ao.as_dataset(copy="none"),
         var_name="x",
         core_dims=("row", "mid"),
         owner="test.topology",
         what="matrix operand",
     )
-    operand = TopologyOperand(index=0, data=ao.unsafe_data["x"], semantic=semantic)
+    operand = TopologyOperand(index=0, data=ao.as_dataset(copy="none")["x"], semantic=semantic)
     plan = resolve_unary_topology(operand, owner="test.topology", what="unary")
     assert plan.sequence_dim == "sample"
     assert plan.batch_dims == ("trial",)
@@ -520,8 +520,8 @@ def test_topo_core_003_realize_operand_topology_preserves_existing_coords() -> N
         what="binary",
     )
     realized_left, realized_right = realize_operands_for_plan(plan, owner="test.topology", what="binary")
-    xr.testing.assert_identical(realized_left, left.unsafe_data["x"])
-    xr.testing.assert_identical(realized_right, right.unsafe_data["x"])
+    xr.testing.assert_identical(realized_left, left.as_dataset(copy="none")["x"])
+    xr.testing.assert_identical(realized_right, right.as_dataset(copy="none")["x"])
 
 
 def test_topo_core_010_nary_topology_path_uses_shared_touchpoint() -> None:
@@ -675,9 +675,9 @@ def test_bcast_core_005_semantic_mode_accepts_missing_sequence_dim_operand() -> 
     plan = resolve_binary_topology(
         TopologyOperand(
             index=0,
-            data=left.unsafe_data["x"],
+            data=left.as_dataset(copy="none")["x"],
             semantic=resolve_semantic_topology_from_dataset(
-                left.unsafe_data,
+                left.as_dataset(copy="none"),
                 var_name="x",
                 core_dims=("row", "mid"),
                 owner="test.broadcast",
@@ -688,9 +688,9 @@ def test_bcast_core_005_semantic_mode_accepts_missing_sequence_dim_operand() -> 
         ),
         TopologyOperand(
             index=1,
-            data=right.unsafe_data["x"],
+            data=right.as_dataset(copy="none")["x"],
             semantic=resolve_semantic_topology_from_dataset(
-                right.unsafe_data,
+                right.as_dataset(copy="none"),
                 var_name="x",
                 core_dims=("row", "mid"),
                 owner="test.broadcast",
@@ -705,7 +705,7 @@ def test_bcast_core_005_semantic_mode_accepts_missing_sequence_dim_operand() -> 
     )
     _, realized_right = align_exact_for_plan(plan, owner="test.broadcast", what="semantic sequence broadcast")
     assert "sample" in realized_right.dims
-    assert realized_right.sizes["sample"] == left.unsafe_data.sizes["sample"]
+    assert realized_right.sizes["sample"] == left.as_dataset(copy="none").sizes["sample"]
 
 
 def test_bcast_core_006_semantic_mode_accepts_missing_batch_dims_operand() -> None:
@@ -719,9 +719,9 @@ def test_bcast_core_006_semantic_mode_accepts_missing_batch_dims_operand() -> No
     plan = resolve_binary_topology(
         TopologyOperand(
             index=0,
-            data=left.unsafe_data["x"],
+            data=left.as_dataset(copy="none")["x"],
             semantic=resolve_semantic_topology_from_dataset(
-                left.unsafe_data,
+                left.as_dataset(copy="none"),
                 var_name="x",
                 core_dims=("row", "mid"),
                 owner="test.broadcast",
@@ -732,9 +732,9 @@ def test_bcast_core_006_semantic_mode_accepts_missing_batch_dims_operand() -> No
         ),
         TopologyOperand(
             index=1,
-            data=right.unsafe_data["x"],
+            data=right.as_dataset(copy="none")["x"],
             semantic=resolve_semantic_topology_from_dataset(
-                right.unsafe_data,
+                right.as_dataset(copy="none"),
                 var_name="x",
                 core_dims=("row", "mid"),
                 owner="test.broadcast",
@@ -749,7 +749,7 @@ def test_bcast_core_006_semantic_mode_accepts_missing_batch_dims_operand() -> No
     )
     _, realized_right = align_exact_for_plan(plan, owner="test.broadcast", what="semantic batch broadcast")
     assert "trial" in realized_right.dims
-    assert realized_right.sizes["trial"] == left.unsafe_data.sizes["trial"]
+    assert realized_right.sizes["trial"] == left.as_dataset(copy="none").sizes["trial"]
 
 
 def test_bcast_core_012_nary_optin_path_uses_shared_topology_touchpoint() -> None:
@@ -769,9 +769,9 @@ def test_bcast_core_012_nary_optin_path_uses_shared_topology_touchpoint() -> Non
         (
             TopologyOperand(
                 index=0,
-                data=full.unsafe_data["x"],
+                data=full.as_dataset(copy="none")["x"],
                 semantic=resolve_semantic_topology_from_dataset(
-                    full.unsafe_data,
+                    full.as_dataset(copy="none"),
                     var_name="x",
                     core_dims=("row", "mid"),
                     owner="test.broadcast",
@@ -782,9 +782,9 @@ def test_bcast_core_012_nary_optin_path_uses_shared_topology_touchpoint() -> Non
             ),
             TopologyOperand(
                 index=1,
-                data=missing_seq.unsafe_data["x"],
+                data=missing_seq.as_dataset(copy="none")["x"],
                 semantic=resolve_semantic_topology_from_dataset(
-                    missing_seq.unsafe_data,
+                    missing_seq.as_dataset(copy="none"),
                     var_name="x",
                     core_dims=("row", "mid"),
                     owner="test.broadcast",
@@ -795,9 +795,9 @@ def test_bcast_core_012_nary_optin_path_uses_shared_topology_touchpoint() -> Non
             ),
             TopologyOperand(
                 index=2,
-                data=missing_batch.unsafe_data["x"],
+                data=missing_batch.as_dataset(copy="none")["x"],
                 semantic=resolve_semantic_topology_from_dataset(
-                    missing_batch.unsafe_data,
+                    missing_batch.as_dataset(copy="none"),
                     var_name="x",
                     core_dims=("row", "mid"),
                     owner="test.broadcast",
@@ -839,12 +839,12 @@ def test_bcast_hard_003_semantic_mode_rejects_core_dim_broadcast_attempts() -> N
         _ = resolve_binary_topology(
             TopologyOperand(
                 index=0,
-                data=left.unsafe_data["x"],
+                data=left.as_dataset(copy="none")["x"],
                 semantic=SemanticTopology("sample", ("trial",), ("row", "mid")),
             ),
             TopologyOperand(
                 index=1,
-                data=right.unsafe_data["x"],
+                data=right.as_dataset(copy="none")["x"],
                 semantic=SemanticTopology("sample", ("trial",), ("row", "mid")),
             ),
             owner="test.broadcast",
@@ -870,9 +870,9 @@ def test_bcast_hard_008_nary_mixed_intent_conflict_fail_closed_with_owner_contex
             (
                 TopologyOperand(
                     index=0,
-                    data=full.unsafe_data["x"],
+                    data=full.as_dataset(copy="none")["x"],
                     semantic=resolve_semantic_topology_from_dataset(
-                        full.unsafe_data,
+                        full.as_dataset(copy="none"),
                         var_name="x",
                         core_dims=("row", "mid"),
                         owner="owner.broadcast",
@@ -883,9 +883,9 @@ def test_bcast_hard_008_nary_mixed_intent_conflict_fail_closed_with_owner_contex
                 ),
                 TopologyOperand(
                     index=1,
-                    data=bad.unsafe_data["x"],
+                    data=bad.as_dataset(copy="none")["x"],
                     semantic=resolve_semantic_topology_from_dataset(
-                        bad.unsafe_data,
+                        bad.as_dataset(copy="none"),
                         var_name="x",
                         core_dims=("row", "mid"),
                         owner="owner.broadcast",
@@ -909,13 +909,13 @@ def test_bcast_hard_024_no_interpolation_side_effects_in_e3a_default_paths() -> 
         row="row",
         col="mid",
     )
-    right_da = right.unsafe_data["x"].assign_coords(sample=np.asarray([10, 11], dtype=np.int64))
+    right_da = right.as_dataset(copy="none")["x"].assign_coords(sample=np.asarray([10, 11], dtype=np.int64))
     plan = resolve_binary_topology(
         TopologyOperand(
             index=0,
-            data=left.unsafe_data["x"],
+            data=left.as_dataset(copy="none")["x"],
             semantic=resolve_semantic_topology_from_dataset(
-                left.unsafe_data,
+                left.as_dataset(copy="none"),
                 var_name="x",
                 core_dims=("row", "mid"),
                 owner="owner.broadcast",
@@ -928,7 +928,7 @@ def test_bcast_hard_024_no_interpolation_side_effects_in_e3a_default_paths() -> 
             index=1,
             data=right_da,
             semantic=resolve_semantic_topology_from_dataset(
-                right.unsafe_data,
+                right.as_dataset(copy="none"),
                 var_name="x",
                 core_dims=("row", "mid"),
                 owner="owner.broadcast",
@@ -1074,7 +1074,7 @@ def test_topo_hard_002_strict_mode_rejects_extra_unmatched_non_core_dims() -> No
 def test_topo_hard_003_topology_resolution_failures_owner_prefixed() -> None:
     """ID: TOPO_HARD_003_topology_resolution_failures_owner_prefixed."""
     left = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="mid")
-    right_ds = left.unsafe_data.rename({"sample": "step"})
+    right_ds = left.as_dataset(copy="none").rename({"sample": "step"})
     right = AnalysisObject.from_data(
         right_ds,
         sequence_dim="step",
@@ -1164,7 +1164,7 @@ def test_bcast_core_040_sequence_and_batch_join_policies_are_applied_independent
         (np.arange(36, dtype=float).reshape(2, 2, 3, 3) + 1.0) / 5.0,
         row="row",
         col="col",
-    ).unsafe_data.assign_coords(sample=np.asarray([1, 2], dtype=np.int64))
+    ).as_dataset(copy="none").assign_coords(sample=np.asarray([1, 2], dtype=np.int64))
     right = AnalysisObject.from_data(
         right_ds,
         sequence_dim="sample",

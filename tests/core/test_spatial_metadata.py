@@ -202,7 +202,7 @@ def test_spatial_core_c4_001_relation_semantics_fields_roundtrip_for_typed_famil
         validate=True,
     )
     ds = set_expressed_in(
-        velocity.unsafe_data,
+        velocity.as_dataset(copy="none"),
         expressed_in="map",
         validate=False,
         owner="test",
@@ -214,8 +214,8 @@ def test_spatial_core_c4_001_relation_semantics_fields_roundtrip_for_typed_famil
         owner="test",
     )
     out = LinearVelocity(ds)
-    assert get_expressed_in(out.unsafe_data, owner="test") == "map"
-    assert get_instantaneous_inertial(out.unsafe_data, owner="test") == frozenset({"parent"})
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "map"
+    assert get_instantaneous_inertial(out.as_dataset(copy="none"), owner="test") == frozenset({"parent"})
 
 
 def test_spatial_core_c4_002_missing_expressed_in_defaults_to_canonical_parent_representation() -> None:
@@ -226,7 +226,7 @@ def test_spatial_core_c4_002_missing_expressed_in_defaults_to_canonical_parent_r
         child="sensor",
         validate=True,
     )
-    assert get_expressed_in(position.unsafe_data, owner="test") == "world"
+    assert get_expressed_in(position.as_dataset(copy="none"), owner="test") == "world"
 
 
 def test_spatial_core_c4_003_kinematic_instantaneous_inertial_roles_roundtrip() -> None:
@@ -238,13 +238,13 @@ def test_spatial_core_c4_003_kinematic_instantaneous_inertial_roles_roundtrip() 
         validate=True,
     )
     ds = set_instantaneous_inertial(
-        velocity.unsafe_data,
+        velocity.as_dataset(copy="none"),
         instantaneous_inertial={"parent", "child"},
         validate=False,
         owner="test",
     )
     out = LinearVelocity(ds)
-    assert get_instantaneous_inertial(out.unsafe_data, owner="test") == frozenset({"parent", "child"})
+    assert get_instantaneous_inertial(out.as_dataset(copy="none"), owner="test") == frozenset({"parent", "child"})
 
 
 def test_spatial_core_c4_004_missing_instantaneous_inertial_defaults_to_empty_frozenset() -> None:
@@ -255,7 +255,7 @@ def test_spatial_core_c4_004_missing_instantaneous_inertial_defaults_to_empty_fr
         child="body",
         validate=True,
     )
-    assert get_instantaneous_inertial(velocity.unsafe_data, owner="test") == frozenset()
+    assert get_instantaneous_inertial(velocity.as_dataset(copy="none"), owner="test") == frozenset()
 
 
 def test_spatial_core_c4_005_configuration_expressed_in_supports_third_frame_not_limited_to_parent_child() -> None:
@@ -266,13 +266,13 @@ def test_spatial_core_c4_005_configuration_expressed_in_supports_third_frame_not
         validate=True,
     )
     ds = set_expressed_in(
-        pose.unsafe_data,
+        pose.as_dataset(copy="none"),
         expressed_in="world",
         validate=False,
         owner="test",
     )
     out = Pose(ds)
-    assert get_expressed_in(out.unsafe_data, owner="test") == "world"
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "world"
 
 
 def test_spatial_core_c4_006_kinematic_parent_eq_child_nontrivial_values_are_allowed_by_contract() -> None:
@@ -283,8 +283,8 @@ def test_spatial_core_c4_006_kinematic_parent_eq_child_nontrivial_values_are_all
         child="body",
         validate=True,
     )
-    out = LinearVelocity(velocity.unsafe_data)
-    np.testing.assert_allclose(out.unsafe_data["linear_velocity"].values, velocity.unsafe_data["linear_velocity"].values)
+    out = LinearVelocity(velocity.as_dataset(copy="none"))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["linear_velocity"].values, velocity.as_dataset(copy="none")["linear_velocity"].values)
 
 
 def test_spatial_core_c4_007_expressed_in_is_basis_only_and_does_not_change_relation_identity() -> None:
@@ -296,14 +296,14 @@ def test_spatial_core_c4_007_expressed_in_is_basis_only_and_does_not_change_rela
         validate=True,
     )
     ds = set_expressed_in(
-        velocity.unsafe_data,
+        velocity.as_dataset(copy="none"),
         expressed_in="map",
         validate=False,
         owner="test",
     )
     out = LinearVelocity(ds)
-    assert get_frames(out.unsafe_data) == ("world", "sensor")
-    assert get_expressed_in(out.unsafe_data, owner="test") == "map"
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "sensor")
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "map"
 
 
 def test_spatial_hard_c4_001_configuration_types_reject_instantaneous_inertial_metadata() -> None:
@@ -315,7 +315,7 @@ def test_spatial_hard_c4_001_configuration_types_reject_instantaneous_inertial_m
         validate=True,
     )
     ds = set_instantaneous_inertial(
-        position.unsafe_data,
+        position.as_dataset(copy="none"),
         instantaneous_inertial={"parent"},
         validate=False,
         owner="test",
@@ -334,7 +334,7 @@ def test_spatial_hard_c4_004_expressed_in_is_rejected_as_instantaneous_inertial_
     )
     with pytest.raises(ValueError, match="not a valid instantaneous_inertial role"):
         set_instantaneous_inertial(
-            velocity.unsafe_data,
+            velocity.as_dataset(copy="none"),
             instantaneous_inertial={"expressed_in"},
             validate=False,
             owner="test",
@@ -351,7 +351,7 @@ def test_spatial_hard_c4_005_invalid_instantaneous_inertial_role_fails_closed() 
     )
     with pytest.raises(ValueError, match="must be in"):
         set_instantaneous_inertial(
-            velocity.unsafe_data,
+            velocity.as_dataset(copy="none"),
             instantaneous_inertial={"observer"},
             validate=False,
             owner="test",

@@ -42,13 +42,13 @@ def test_io_perf_p10b_010_owned_adapter_finalize_reuses_fresh_buffers() -> None:
 
     out = _finalize(ds, validate=True)
 
-    assert np.shares_memory(values, out.unsafe_data["value"].data)
-    assert np.shares_memory(times, out.unsafe_data.coords["time"].data)
-    assert np.shares_memory(sizes, out.unsafe_data.coords["sequence_size"].data)
+    assert np.shares_memory(values, out.as_dataset(copy="none")["value"].data)
+    assert np.shares_memory(times, out.as_dataset(copy="none").coords["time"].data)
+    assert np.shares_memory(sizes, out.as_dataset(copy="none").coords["sequence_size"].data)
 
     external, (external_values, _, _) = _adapter_dataset()
     isolated = AnalysisObject(external)
-    assert not np.shares_memory(external_values, isolated.unsafe_data["value"].data)
+    assert not np.shares_memory(external_values, isolated.as_dataset(copy="none")["value"].data)
 
 
 def test_io_core_p10b_024_owned_adapter_finalize_preserves_validate_policy_and_owner() -> None:
@@ -56,7 +56,7 @@ def test_io_core_p10b_024_owned_adapter_finalize_preserves_validate_policy_and_o
     invalid, _ = _adapter_dataset(size=4)
 
     unchecked = _finalize(invalid, validate=False)
-    assert unchecked.unsafe_data.coords["sequence_size"].item() == 4
+    assert unchecked.as_dataset(copy="none").coords["sequence_size"].item() == 4
 
     with pytest.raises(
         ValueError,

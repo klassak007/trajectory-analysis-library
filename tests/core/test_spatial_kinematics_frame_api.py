@@ -136,12 +136,12 @@ def _pose_from_translation_and_quat(translation: np.ndarray, quat: np.ndarray) -
 
 
 def _single_var_values(value) -> np.ndarray:
-    var_name = next(iter(value.unsafe_data.data_vars))
-    return np.asarray(value.unsafe_data[var_name].values, dtype=float)
+    var_name = next(iter(value.as_dataset(copy="none").data_vars))
+    return np.asarray(value.as_dataset(copy="none")[var_name].values, dtype=float)
 
 
 def _with_sample_and_param(value, *, sample: list[int], param_name: str, param: list[float]):
-    ds = value.unsafe_data.assign_coords(sample=sample, **{param_name: ("sample", param)})
+    ds = value.as_dataset(copy="none").assign_coords(sample=sample, **{param_name: ("sample", param)})
     return value.__class__(ds).set_param_coord(name=param_name, validate=False)
 
 
@@ -234,10 +234,10 @@ def test_spatial_core_090_kinematics_to_frame_components_paths_preserve_kind_fra
     acceleration = _framed_acceleration_family(rep="components")
     v_out = velocity.to_frame("world", edge_pose_fn=pose_fn, opts=opts, validate=True)
     a_out = acceleration.to_frame("world", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_frames(v_out.unsafe_data) == ("world", "probe")
-    assert get_frames(a_out.unsafe_data) == ("world", "probe")
-    assert get_velocity_rep(v_out.unsafe_data, owner="test") == "components"
-    assert get_acceleration_rep(a_out.unsafe_data, owner="test") == "components"
+    assert get_frames(v_out.as_dataset(copy="none")) == ("world", "probe")
+    assert get_frames(a_out.as_dataset(copy="none")) == ("world", "probe")
+    assert get_velocity_rep(v_out.as_dataset(copy="none"), owner="test") == "components"
+    assert get_acceleration_rep(a_out.as_dataset(copy="none"), owner="test") == "components"
 
 
 def test_spatial_core_091_kinematics_to_frame_vector6_paths_preserve_input_rep_and_canonical_ordering() -> None:
@@ -247,17 +247,17 @@ def test_spatial_core_091_kinematics_to_frame_vector6_paths_preserve_input_rep_a
     acceleration = _framed_acceleration_family(rep="vector6")
     v_out = velocity.to_frame("world", edge_pose_fn=pose_fn, opts=opts, validate=True)
     a_out = acceleration.to_frame("world", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_velocity_rep(v_out.unsafe_data, owner="test") == "vector6"
-    assert get_acceleration_rep(a_out.unsafe_data, owner="test") == "vector6"
-    assert get_frames(v_out.unsafe_data) == ("world", "probe")
-    assert get_frames(a_out.unsafe_data) == ("world", "probe")
+    assert get_velocity_rep(v_out.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_acceleration_rep(a_out.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_frames(v_out.as_dataset(copy="none")) == ("world", "probe")
+    assert get_frames(a_out.as_dataset(copy="none")) == ("world", "probe")
 
 
 def test_spatial_core_092_kinematics_to_frame_numeric_outputs_match_rotation_reference_for_linear_angular_and_family_paths() -> None:
     """ID: SPATIAL_CORE_092_kinematics_to_frame_numeric_outputs_match_rotation_reference_for_linear_angular_and_family_paths."""
     _, rot_fn, pose_fn, opts = _build_graph_and_edges()
     basis = solve_rotation_path_transform("sensor", "world", edge_rotation_fn=rot_fn, opts=opts)
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
 
     lin_src = frame_retag(_linear_velocity(np.asarray([[1.0, 0.0, 0.0]], dtype=float)), parent="sensor", child="probe", validate=True)
     ang_src = frame_retag(_angular_velocity(np.asarray([[0.0, 0.5, 0.0]], dtype=float)), parent="sensor", child="probe", validate=True)
@@ -365,7 +365,7 @@ def test_spatial_core_093_kinematics_to_frame_non_identity_uses_expressed_in_sou
     )
     source = LinearVelocity(
         set_expressed_in(
-            source.unsafe_data,
+            source.as_dataset(copy="none"),
             expressed_in="map",
             validate=False,
             owner="test",
@@ -375,14 +375,14 @@ def test_spatial_core_093_kinematics_to_frame_non_identity_uses_expressed_in_sou
 
     to_dst = solve_rotation_path_transform("sensor", "world", edge_rotation_fn=rot_fn, opts=opts)
     to_parent = solve_rotation_path_transform("map", "sensor", edge_rotation_fn=rot_fn, opts=opts)
-    to_dst_m = to_dst.as_matrix(validate=True).unsafe_data["rotation"].values[0]
-    to_parent_m = to_parent.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    to_dst_m = to_dst.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
+    to_parent_m = to_parent.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     expected = to_dst_m @ to_parent_m @ np.asarray([1.0, 0.0, 0.0], dtype=float)
     parent_only = to_dst_m @ np.asarray([1.0, 0.0, 0.0], dtype=float)
 
     np.testing.assert_allclose(_single_var_values(out)[0], expected, atol=1e-6, rtol=0.0)
     assert not np.allclose(_single_var_values(out)[0], parent_only, atol=1e-6, rtol=0.0)
-    assert get_frames(out.unsafe_data) == ("world", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "probe")
 
 
 def test_spatial_core_094_position_to_frame_semantic_broadcast_static_edge_pose_regression() -> None:
@@ -470,9 +470,9 @@ def test_spatial_core_094_position_to_frame_semantic_broadcast_static_edge_pose_
             validate=True,
         )
 
-    assert get_frames(out.unsafe_data) == ("ship", "drone")
-    expected = drone_pos.unsafe_data["position"] - ship_pos.unsafe_data["position"]
-    np.testing.assert_allclose(out.unsafe_data["position"].values, expected.values, atol=1e-6, rtol=0.0)
+    assert get_frames(out.as_dataset(copy="none")) == ("ship", "drone")
+    expected = drone_pos.as_dataset(copy="none")["position"] - ship_pos.as_dataset(copy="none")["position"]
+    np.testing.assert_allclose(out.as_dataset(copy="none")["position"].values, expected.values, atol=1e-6, rtol=0.0)
 
 
 def test_spatial_core_c5_002_kinematic_express_in_preserves_instantaneous_inertial_role_set() -> None:
@@ -481,13 +481,13 @@ def test_spatial_core_c5_002_kinematic_express_in_preserves_instantaneous_inerti
     velocity = _framed_velocity_family(rep="vector6")
     acceleration = _framed_acceleration_family(rep="components")
     velocity_ds = set_instantaneous_inertial(
-        velocity.unsafe_data,
+        velocity.as_dataset(copy="none"),
         instantaneous_inertial={"parent", "child"},
         validate=False,
         owner="test",
     )
     acceleration_ds = set_instantaneous_inertial(
-        acceleration.unsafe_data,
+        acceleration.as_dataset(copy="none"),
         instantaneous_inertial={"child"},
         validate=False,
         owner="test",
@@ -498,21 +498,21 @@ def test_spatial_core_c5_002_kinematic_express_in_preserves_instantaneous_inerti
     v_out = velocity.express_in("world", edge_rotation_fn=rot_fn, opts=opts, validate=True)
     a_out = acceleration.express_in("world", edge_rotation_fn=rot_fn, opts=opts, validate=True)
 
-    assert get_frames(v_out.unsafe_data) == ("sensor", "probe")
-    assert get_frames(a_out.unsafe_data) == ("sensor", "probe")
-    assert get_expressed_in(v_out.unsafe_data, owner="test") == "world"
-    assert get_expressed_in(a_out.unsafe_data, owner="test") == "world"
-    assert get_instantaneous_inertial(v_out.unsafe_data, owner="test") == frozenset({"parent", "child"})
-    assert get_instantaneous_inertial(a_out.unsafe_data, owner="test") == frozenset({"child"})
-    assert get_velocity_rep(v_out.unsafe_data, owner="test") == "vector6"
-    assert get_acceleration_rep(a_out.unsafe_data, owner="test") == "components"
+    assert get_frames(v_out.as_dataset(copy="none")) == ("sensor", "probe")
+    assert get_frames(a_out.as_dataset(copy="none")) == ("sensor", "probe")
+    assert get_expressed_in(v_out.as_dataset(copy="none"), owner="test") == "world"
+    assert get_expressed_in(a_out.as_dataset(copy="none"), owner="test") == "world"
+    assert get_instantaneous_inertial(v_out.as_dataset(copy="none"), owner="test") == frozenset({"parent", "child"})
+    assert get_instantaneous_inertial(a_out.as_dataset(copy="none"), owner="test") == frozenset({"child"})
+    assert get_velocity_rep(v_out.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_acceleration_rep(a_out.as_dataset(copy="none"), owner="test") == "components"
 
 
 def test_spatial_core_c5_005_express_in_is_basis_only_for_vector_like_quantities() -> None:
     """ID: SPATIAL_CORE_C5_005_express_in_is_basis_only_for_vector_like_quantities."""
     _, rot_fn, _, opts = _build_graph_and_edges()
     basis = solve_rotation_path_transform("sensor", "world", edge_rotation_fn=rot_fn, opts=opts)
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
 
     lin_src = frame_retag(_linear_acceleration(np.asarray([[0.1, 0.0, 0.0]], dtype=float)), parent="sensor", child="probe", validate=True)
     ang_src = frame_retag(_angular_acceleration(np.asarray([[0.0, 0.2, 0.0]], dtype=float)), parent="sensor", child="probe", validate=True)
@@ -555,7 +555,7 @@ def test_spatial_core_c5_007_corotating_representation_change_does_not_zero_angu
     )
     out = source.express_in("world", edge_rotation_fn=rot_fn, opts=opts, validate=True)
     basis = solve_rotation_path_transform("sensor", "world", edge_rotation_fn=rot_fn, opts=opts)
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     expected = basis_m @ np.asarray([0.3, 0.0, -0.2], dtype=float)
     np.testing.assert_allclose(_single_var_values(out)[0], expected, atol=1e-6, rtol=0.0)
     assert np.linalg.norm(_single_var_values(out)[0]) > 0.0
@@ -567,14 +567,14 @@ def test_spatial_hard_c5_004_express_in_does_not_rewrite_inertial_roles() -> Non
     velocity = _framed_velocity_family(rep="components")
     velocity = Velocity(
         set_instantaneous_inertial(
-            velocity.unsafe_data,
+            velocity.as_dataset(copy="none"),
             instantaneous_inertial={"parent"},
             validate=False,
             owner="test",
         )
     )
     out = velocity.express_in("world", edge_rotation_fn=rot_fn, opts=opts, validate=True)
-    assert get_instantaneous_inertial(out.unsafe_data, owner="test") == frozenset({"parent"})
+    assert get_instantaneous_inertial(out.as_dataset(copy="none"), owner="test") == frozenset({"parent"})
 
 
 def test_spatial_hard_c5_005_express_in_cannot_inertialize_representation_role() -> None:
@@ -582,7 +582,7 @@ def test_spatial_hard_c5_005_express_in_cannot_inertialize_representation_role()
     _, rot_fn, _, opts = _build_graph_and_edges()
     velocity = _framed_velocity_family(rep="components")
     out = velocity.express_in("world", edge_rotation_fn=rot_fn, opts=opts, validate=True)
-    assert get_instantaneous_inertial(out.unsafe_data, owner="test") == frozenset()
+    assert get_instantaneous_inertial(out.as_dataset(copy="none"), owner="test") == frozenset()
 
 
 def test_spatial_hard_105_kinematics_to_frame_rejects_unframed_source_without_parent_fail_closed() -> None:
@@ -652,7 +652,7 @@ def test_spatial_hard_107_kinematics_identity_paths_short_circuit_before_solver(
     )
     source = Velocity(
         set_expressed_in(
-            source.unsafe_data,
+            source.as_dataset(copy="none"),
             expressed_in="map",
             validate=False,
             owner="test",
@@ -674,10 +674,10 @@ def test_spatial_hard_107_kinematics_identity_paths_short_circuit_before_solver(
         path_solve._solve_pose_path_transform_with_owner = original_pose_solver
         path_solve._solve_rotation_path_transform_with_owner = original_rot_solver
 
-    assert get_frames(to_out.unsafe_data) == ("world", "probe")
-    assert get_frames(expr_out.unsafe_data) == ("world", "probe")
-    assert get_expressed_in(to_out.unsafe_data, owner="test") == "map"
-    assert get_expressed_in(expr_out.unsafe_data, owner="test") == "map"
+    assert get_frames(to_out.as_dataset(copy="none")) == ("world", "probe")
+    assert get_frames(expr_out.as_dataset(copy="none")) == ("world", "probe")
+    assert get_expressed_in(to_out.as_dataset(copy="none"), owner="test") == "map"
+    assert get_expressed_in(expr_out.as_dataset(copy="none"), owner="test") == "map"
 
 
 def _build_dynamic_support_case() -> tuple[FrameGraph, object, object, object, object, PathSolveOptions]:
@@ -716,12 +716,12 @@ def _build_dynamic_support_case() -> tuple[FrameGraph, object, object, object, o
             validate=True,
         )
         edge_velocity = Velocity(
-            set_expressed_in(edge_velocity.unsafe_data, expressed_in="world", validate=False, owner="test")
+            set_expressed_in(edge_velocity.as_dataset(copy="none"), expressed_in="world", validate=False, owner="test")
         )
         lin = edge_velocity.linear(validate=True)
         ang = edge_velocity.angular(validate=True)
-        lin_ds = lin.unsafe_data.copy()
-        ang_ds = ang.unsafe_data.copy()
+        lin_ds = lin.as_dataset(copy="none").copy()
+        ang_ds = ang.as_dataset(copy="none").copy()
         lin_name = next(iter(lin_ds.data_vars))
         ang_name = next(iter(ang_ds.data_vars))
         lin_ds[lin_name] = xr.DataArray(
@@ -743,7 +743,7 @@ def _build_dynamic_support_case() -> tuple[FrameGraph, object, object, object, o
             validate=True,
         )
         edge_acceleration = Acceleration(
-            set_expressed_in(edge_acceleration.unsafe_data, expressed_in="world", validate=False, owner="test")
+            set_expressed_in(edge_acceleration.as_dataset(copy="none"), expressed_in="world", validate=False, owner="test")
         )
     support = KinematicsPathSupportOptions(
         edge_velocity_fn=lambda child, parent: edge_velocity if (child.id, parent.id) == ("map", "world") else None,
@@ -772,7 +772,7 @@ def _build_c8_param_alignment_case() -> tuple[LinearVelocity, object, object, Pa
     source = _with_sample_and_param(source, sample=[0], param_name="tau", param=[10.0])
     edge_velocity = frame_retag(_framed_velocity_family(rep="components"), parent="world", child="map", validate=True)
     edge_velocity = Velocity(
-        set_expressed_in(edge_velocity.unsafe_data, expressed_in="world", validate=False, owner="test")
+        set_expressed_in(edge_velocity.as_dataset(copy="none"), expressed_in="world", validate=False, owner="test")
     )
     edge_velocity = _with_sample_and_param(edge_velocity, sample=[1], param_name="tau", param=[10.0])
 
@@ -797,10 +797,10 @@ def test_spatial_core_c7_001_kinematics_to_frame_succeeds_with_explicit_supporte
     )
     out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
     basis = solve_rotation_path_transform("world", "map", edge_rotation_fn=rot_fn, opts=opts)
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     expected = basis_m @ np.asarray([1.0, 0.0, 0.0], dtype=float)
     np.testing.assert_allclose(_single_var_values(out)[0], expected, atol=1e-6, rtol=0.0)
-    assert get_frames(out.unsafe_data) == ("map", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_core_c7_002_kinematics_to_frame_preserves_relation_representation_and_kind_truthfulness() -> None:
@@ -810,16 +810,16 @@ def test_spatial_core_c7_002_kinematics_to_frame_preserves_relation_representati
     source = frame_retag(source, parent="world", child="probe", validate=True)
     source = Velocity(
         set_expressed_in(
-            source.unsafe_data,
+            source.as_dataset(copy="none"),
             expressed_in="world",
             validate=False,
             owner="test",
         )
     )
     out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_frames(out.unsafe_data) == ("map", "probe")
-    assert get_velocity_rep(out.unsafe_data, owner="test") == "components"
-    assert get_expressed_in(out.unsafe_data, owner="test") == "map"
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
+    assert get_velocity_rep(out.as_dataset(copy="none"), owner="test") == "components"
+    assert get_expressed_in(out.as_dataset(copy="none"), owner="test") == "map"
 
 
 def test_spatial_core_c7_003_velocity_acceleration_vector6_paths_preserve_rep_after_canonical_internal_execution() -> None:
@@ -829,10 +829,10 @@ def test_spatial_core_c7_003_velocity_acceleration_vector6_paths_preserve_rep_af
     acc = frame_retag(_framed_acceleration_family(rep="vector6"), parent="world", child="probe", validate=True)
     vel_out = vel.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
     acc_out = acc.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_velocity_rep(vel_out.unsafe_data, owner="test") == "vector6"
-    assert get_acceleration_rep(acc_out.unsafe_data, owner="test") == "vector6"
-    assert get_frames(vel_out.unsafe_data) == ("map", "probe")
-    assert get_frames(acc_out.unsafe_data) == ("map", "probe")
+    assert get_velocity_rep(vel_out.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_acceleration_rep(acc_out.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_frames(vel_out.as_dataset(copy="none")) == ("map", "probe")
+    assert get_frames(acc_out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_core_c7_004_kinematic_same_endpoint_inputs_support_parent_or_child_inertial_roles() -> None:
@@ -846,14 +846,14 @@ def test_spatial_core_c7_004_kinematic_same_endpoint_inputs_support_parent_or_ch
     )
     source = AngularVelocity(
         set_instantaneous_inertial(
-            source.unsafe_data,
+            source.as_dataset(copy="none"),
             instantaneous_inertial={"parent", "child"},
             validate=False,
             owner="test",
         )
     )
     out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_frames(out.unsafe_data) == ("map", "world")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "world")
 
 
 def test_spatial_core_c7_005_to_frame_retargets_parent_while_preserving_child() -> None:
@@ -866,7 +866,7 @@ def test_spatial_core_c7_005_to_frame_retargets_parent_while_preserving_child() 
         validate=True,
     )
     out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_frames(out.unsafe_data) == ("map", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_core_c7_006_corotating_parent_retarget_can_zero_relative_angular_rate() -> None:
@@ -943,10 +943,10 @@ def test_spatial_core_c7_007_to_frame_dst_frame_with_opts_none_uses_dst_bound_gr
         out = source.to_frame(map_frame, edge_pose_fn=pose_fn, opts=None, validate=True)
 
     basis = solve_rotation_path_transform("sensor", map_frame, edge_rotation_fn=rot_fn, opts=None)
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     expected = basis_m @ np.asarray([1.0, 0.0, 0.0], dtype=float)
     np.testing.assert_allclose(_single_var_values(out)[0], expected, atol=1e-6, rtol=0.0)
-    assert get_frames(out.unsafe_data) == ("map", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_core_c8_004_kinematic_coupling_supports_explicit_param_primary_key_with_sequence_label_mismatch() -> None:
@@ -954,10 +954,10 @@ def test_spatial_core_c8_004_kinematic_coupling_supports_explicit_param_primary_
     source, pose_fn, rot_fn, opts = _build_c8_param_alignment_case()
     out = source.a(on="param", sequence_join=None).to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
     basis = solve_rotation_path_transform("world", "map", edge_rotation_fn=rot_fn, opts=opts)
-    basis_m = basis.as_matrix(validate=True).unsafe_data["rotation"].values[0]
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
     expected = basis_m @ np.asarray([1.0, 0.0, 0.0], dtype=float)
     np.testing.assert_allclose(_single_var_values(out)[0], expected, atol=1e-6, rtol=0.0)
-    assert get_frames(out.unsafe_data) == ("map", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_hard_c8_001_frame_validation_runs_before_alignment_and_broadcast() -> None:
@@ -1066,7 +1066,7 @@ def test_spatial_hard_c7_004_to_frame_fails_closed_when_required_inertial_role_s
     )
     source = AngularVelocity(
         set_instantaneous_inertial(
-            source.unsafe_data,
+            source.as_dataset(copy="none"),
             instantaneous_inertial={"parent"},
             validate=False,
             owner="test",
@@ -1095,14 +1095,14 @@ def test_spatial_hard_c7_005_to_frame_does_not_gate_on_expressed_in_inertial_sta
     )
     source = AngularVelocity(
         set_instantaneous_inertial(
-            set_expressed_in(source.unsafe_data, expressed_in="map", validate=False, owner="test"),
+            set_expressed_in(source.as_dataset(copy="none"), expressed_in="map", validate=False, owner="test"),
             instantaneous_inertial={"parent"},
             validate=False,
             owner="test",
         )
     )
     out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
-    assert get_frames(out.unsafe_data) == ("map", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_hard_c7_006_express_in_style_basis_change_is_not_used_to_satisfy_to_frame_semantics() -> None:
@@ -1130,9 +1130,9 @@ def test_spatial_hard_c7_007_kinematic_coupling_exact_alignment_mismatch_fails_c
     )
     edge_velocity = frame_retag(_framed_velocity_family(rep="components"), parent="world", child="map", validate=True)
     edge_velocity = Velocity(
-        set_expressed_in(edge_velocity.unsafe_data, expressed_in="world", validate=False, owner="test")
+        set_expressed_in(edge_velocity.as_dataset(copy="none"), expressed_in="world", validate=False, owner="test")
     )
-    edge_velocity = Velocity(edge_velocity.unsafe_data.assign_coords(sample=[1]))
+    edge_velocity = Velocity(edge_velocity.as_dataset(copy="none").assign_coords(sample=[1]))
     support = KinematicsPathSupportOptions(
         edge_velocity_fn=lambda child, parent: edge_velocity if (child.id, parent.id) == ("map", "world") else None
     )
@@ -1202,7 +1202,7 @@ def test_spatial_hard_c8_003_frame_aware_alignment_does_not_invoke_hidden_interp
     finally:
         map_build.build_param_map = original_build
         map_apply.apply_param_map = original_apply
-    assert get_frames(out.unsafe_data) == ("map", "probe")
+    assert get_frames(out.as_dataset(copy="none")) == ("map", "probe")
 
 
 def test_spatial_hard_c8_004_kinematic_coupling_default_sequence_primary_key_fails_on_sequence_label_mismatch_even_when_param_labels_match() -> None:

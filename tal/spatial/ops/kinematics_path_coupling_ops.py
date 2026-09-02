@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
 from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
 
@@ -27,8 +28,9 @@ def _edge_rotation_from_pose(edge_pose_fn, *, owner: str):
 
 
 def _accumulator_like(source, *, owner: str) -> xr.DataArray:
-    var_name = select_single_numeric_var(source.unsafe_data, owner=owner, what="kinematic vector")
-    return xr.zeros_like(source.unsafe_data[var_name])
+    source_ds = analysis_object_dataset(source)
+    var_name = select_single_numeric_var(source_ds, owner=owner, what="kinematic vector")
+    return xr.zeros_like(source_ds[var_name])
 
 
 def _coerce_velocity_payload(payload, *, owner: str):
@@ -84,12 +86,13 @@ def _motion_component(
 ) -> xr.DataArray:
     expressed = payload.express_in(src_parent, edge_rotation_fn=edge_rot_fn, opts=opts, validate=False)
     target = expressed.linear(validate=False) if component == "linear" else expressed.angular(validate=False)
+    target_ds = analysis_object_dataset(target)
     var_name, payload_dim = resolve_single_numeric_var_single_core_dim(
-        target.unsafe_data,
+        target_ds,
         owner=owner,
         what=f"{operation} {component} payload",
     )
-    out = target.unsafe_data[var_name]
+    out = target_ds[var_name]
     if payload_dim != target_dim:
         return out.rename({payload_dim: target_dim})
     return out
@@ -106,7 +109,7 @@ def _accumulate_parent_motion(
     owner: str,
 ) -> xr.DataArray:
     _, target_dim = resolve_single_numeric_var_single_core_dim(
-        source.unsafe_data,
+        analysis_object_dataset(source),
         owner=owner,
         what="kinematic vector",
     )
@@ -148,7 +151,7 @@ def _accumulate_parent_motion(
 
 
 def _target_component(source, *, owner: str) -> str:
-    kind = get_kinematics_kind(source.unsafe_data, owner=owner)
+    kind = get_kinematics_kind(analysis_object_dataset(source), owner=owner)
     if kind is None:
         raise ValueError(f"{owner}: source kinematics kind metadata is required.")
     if kind.startswith("linear_"):
@@ -179,10 +182,11 @@ def apply_vector_path_coupling(
         opts=opts,
         owner=owner,
     )
-    var_name = select_single_numeric_var(prepared.unsafe_data, owner=owner, what="kinematic vector")
-    ds = prepared.unsafe_data.copy()
+    prepared_ds = analysis_object_dataset(prepared)
+    var_name = select_single_numeric_var(prepared_ds, owner=owner, what="kinematic vector")
+    ds = prepared_ds.copy()
     _, target_dim = resolve_single_numeric_var_single_core_dim(
-        prepared.unsafe_data,
+        prepared_ds,
         owner=owner,
         what="kinematic vector",
     )

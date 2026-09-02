@@ -28,7 +28,7 @@ def test_io_core_p10b_013_non_mapping_ingest_label_derivation_is_deterministic(t
     path = tmp_path / "run_01.csv"
     _write_csv(path, [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 2.0}])
     ao = read_csv_logs([str(path)], opts=CsvIngestOptions(time_col="time"))
-    labels = ao.unsafe_data.coords["trial"].values.tolist()
+    labels = ao.as_dataset(copy="none").coords["trial"].values.tolist()
     assert labels == ["run_01"]
 
 
@@ -43,12 +43,12 @@ def test_io_core_p10b_014_input_path_expansion_and_batch_ordering_are_determinis
         [str(b_path), str(a_path)],
         opts=CsvIngestOptions(time_col="time"),
     )
-    assert ao_seq.unsafe_data.coords["trial"].values.tolist() == ["b", "a"]
-    assert ao_seq.unsafe_data["x"].values.tolist() == [[2.0], [1.0]]
-    assert ao_seq.unsafe_data["y"].values.tolist() == [[20.0], [10.0]]
+    assert ao_seq.as_dataset(copy="none").coords["trial"].values.tolist() == ["b", "a"]
+    assert ao_seq.as_dataset(copy="none")["x"].values.tolist() == [[2.0], [1.0]]
+    assert ao_seq.as_dataset(copy="none")["y"].values.tolist() == [[20.0], [10.0]]
 
     ao_glob = read_csv_logs(str(tmp_path / "*.csv"), opts=CsvIngestOptions(time_col="time"))
-    assert ao_glob.unsafe_data.coords["trial"].values.tolist() == ["a", "b"]
+    assert ao_glob.as_dataset(copy="none").coords["trial"].values.tolist() == ["a", "b"]
 
 
 def test_io_hard_p10b_005_duplicate_resolved_input_paths_fail_closed(tmp_path: Path) -> None:
@@ -100,7 +100,7 @@ def test_io_hard_p10b_004_derived_ingest_label_collisions_fail_closed_without_ex
         {"left": str(first), "right": str(second)},
         opts=CsvIngestOptions(time_col="time"),
     )
-    assert ao.unsafe_data.coords["trial"].values.tolist() == ["left", "right"]
+    assert ao.as_dataset(copy="none").coords["trial"].values.tolist() == ["left", "right"]
 
 
 def test_io_core_p10b_001_csv_multi_file_ingest_has_deterministic_time_policy_controls(
@@ -122,7 +122,7 @@ def test_io_core_p10b_001_csv_multi_file_ingest_has_deterministic_time_policy_co
             allow_nonmonotonic_normalize=True,
         ),
     )
-    time_values = ao.unsafe_data.coords["time"].isel(trial=0).values.tolist()
+    time_values = ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist()
     assert time_values[:2] == [1.0, 2.0]
 
 
@@ -143,12 +143,12 @@ def test_io_hard_p10b_054_csv_integer_times_remain_exact_in_padded_grid(
         [str(first), str(second)],
         opts=CsvIngestOptions(time_col="time", monotonic_order="strict"),
     )
-    time = ao.unsafe_data.coords["time"]
+    time = ao.as_dataset(copy="none").coords["time"]
 
     assert time.dtype.kind in "iu"
     assert time.isel(trial=0).values.tolist() == [base, base + 1]
     assert int(time.isel(trial=1, sample=0)) == base + 2
-    assert ao.unsafe_data.coords["sequence_size"].values.tolist() == [2, 1]
+    assert ao.as_dataset(copy="none").coords["sequence_size"].values.tolist() == [2, 1]
 
 
 def test_io_hard_p10b_055_csv_mixed_time_kinds_fail_before_precision_loss(
@@ -202,11 +202,11 @@ def test_io_hard_p10b_068_csv_dropped_invalid_time_preserves_exact_integers(
         str(path),
         opts=CsvIngestOptions(time_col="time", invalid_time="drop"),
     )
-    time = ao.unsafe_data.coords["time"]
+    time = ao.as_dataset(copy="none").coords["time"]
 
     assert time.dtype.kind in "iu"
     assert time.isel(trial=0).values.tolist() == [base + 1, base + 2]
-    assert ao.unsafe_data.coords["sequence_size"].values.tolist() == [2]
+    assert ao.as_dataset(copy="none").coords["sequence_size"].values.tolist() == [2]
 
 
 @pytest.mark.parametrize("token", ["oops", "NA", "NULL"])
@@ -240,8 +240,8 @@ def test_io_hard_p10b_073_csv_raw_nonfinite_time_obeys_drop_policy(
         opts=CsvIngestOptions(time_col="time", invalid_time="drop"),
     )
 
-    assert ao.unsafe_data.coords["time"].isel(trial=0).values.tolist() == [0, 1]
-    assert ao.unsafe_data["value"].isel(trial=0).values.tolist() == [1.0, 5.0]
+    assert ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist() == [0, 1]
+    assert ao.as_dataset(copy="none")["value"].isel(trial=0).values.tolist() == [1.0, 5.0]
 
 
 @pytest.mark.parametrize(
@@ -293,7 +293,7 @@ def test_io_hard_p10b_089_integral_time_spellings_remain_exact(
 
     ao = read_csv_logs(str(path), opts=CsvIngestOptions(time_col="time"))
 
-    time = ao.unsafe_data.coords["time"]
+    time = ao.as_dataset(copy="none").coords["time"]
     assert time.dtype == np.dtype(np.int64)
     assert int(time.isel(trial=0, sample=0)) == 9_007_199_254_740_993
 
@@ -375,7 +375,7 @@ def test_io_core_p10b_018_csv_ingest_explicit_value_columns_parse_numeric_text_d
         [str(path)],
         opts=CsvIngestOptions(time_col="time", value_columns=("value",)),
     )
-    values = ao.unsafe_data["value"].isel(trial=0).values.tolist()
+    values = ao.as_dataset(copy="none")["value"].isel(trial=0).values.tolist()
     assert values[:2] == [1.5, 2.0]
 
 
@@ -389,7 +389,7 @@ def test_io_core_p10b_009_optional_csv_time_inference_requires_exactly_one_candi
     _write_csv(bad, [{"time": 0.0, "timestamp": 1.0, "value": 1.0}])
 
     ao = read_csv_logs([str(good)], opts=CsvIngestOptions(allow_time_infer=True))
-    assert ao.unsafe_data.attrs["io_time_source"] == "timestamp"
+    assert ao.as_dataset(copy="none").attrs["io_time_source"] == "timestamp"
 
     with pytest.raises(ValueError, match="requires exactly one candidate"):
         read_csv_logs([str(bad)], opts=CsvIngestOptions(allow_time_infer=True))
@@ -403,8 +403,8 @@ def test_io_core_p10b_006_csv_time_source_selection_order_is_deterministic(tmp_p
         [str(path)],
         opts=CsvIngestOptions(time_col="time", allow_time_infer=True),
     )
-    assert ao.unsafe_data.attrs["io_time_source"] == "time"
-    values = ao.unsafe_data.coords["time"].isel(trial=0).values.tolist()
+    assert ao.as_dataset(copy="none").attrs["io_time_source"] == "time"
+    values = ao.as_dataset(copy="none").coords["time"].isel(trial=0).values.tolist()
     assert values[:1] == [0.0]
 
 
@@ -416,7 +416,7 @@ def test_io_core_p10b_011_csv_time_inference_candidate_set_is_contract_locked(tm
     _write_csv(blocked, [{"clock": 0.0, "value": 1.0}])
 
     ao = read_csv_logs([str(allowed)], opts=CsvIngestOptions(allow_time_infer=True))
-    assert ao.unsafe_data.attrs["io_time_source"] == "Time"
+    assert ao.as_dataset(copy="none").attrs["io_time_source"] == "Time"
 
     with pytest.raises(ValueError, match="requires exactly one candidate"):
         read_csv_logs([str(blocked)], opts=CsvIngestOptions(allow_time_infer=True))
@@ -433,9 +433,9 @@ def test_io_core_p10b_008_metadata_promotion_defaults_are_deterministic(tmp_path
         [str(first), str(second)],
         opts=CsvIngestOptions(time_col="time", metadata_columns=("subject", "note")),
     )
-    assert ao.unsafe_data.attrs["subject"] == "S1"
-    assert "note" not in ao.unsafe_data.attrs
-    assert "note" not in ao.unsafe_data.coords
+    assert ao.as_dataset(copy="none").attrs["subject"] == "S1"
+    assert "note" not in ao.as_dataset(copy="none").attrs
+    assert "note" not in ao.as_dataset(copy="none").coords
 
 
 def test_io_core_p10b_010_metadata_promotion_default_targets_are_contract_locked(
@@ -450,10 +450,10 @@ def test_io_core_p10b_010_metadata_promotion_default_targets_are_contract_locked
         [str(first), str(second)],
         opts=CsvIngestOptions(time_col="time", metadata_columns=("subject", "path_note")),
     )
-    assert ao.unsafe_data.attrs["subject"] == "S1"
-    assert "subject" not in ao.unsafe_data.coords
-    assert "path_note" not in ao.unsafe_data.attrs
-    assert "path_note" not in ao.unsafe_data.coords
+    assert ao.as_dataset(copy="none").attrs["subject"] == "S1"
+    assert "subject" not in ao.as_dataset(copy="none").coords
+    assert "path_note" not in ao.as_dataset(copy="none").attrs
+    assert "path_note" not in ao.as_dataset(copy="none").coords
 
 
 def test_io_core_p10b_025_generated_metadata_attrs_can_share_csv_data_names(
@@ -471,8 +471,8 @@ def test_io_core_p10b_025_generated_metadata_attrs_can_share_csv_data_names(
 
     ao = read_csv_logs(str(path), opts=CsvIngestOptions(time_col="time"))
 
-    assert ao.unsafe_data["io_time_source"].values.tolist() == [[1.0, 2.0]]
-    assert ao.unsafe_data.attrs["io_time_source"] == "time"
+    assert ao.as_dataset(copy="none")["io_time_source"].values.tolist() == [[1.0, 2.0]]
+    assert ao.as_dataset(copy="none").attrs["io_time_source"] == "time"
 
 
 @pytest.mark.parametrize(
@@ -635,7 +635,7 @@ def test_io_core_p10b_030_csv_header_uses_standard_logical_record_grammar(
         opts=CsvIngestOptions(time_col="time", value_columns=(field_name,)),
     )
 
-    assert ao.unsafe_data[field_name].values.tolist() == [[1.0]]
+    assert ao.as_dataset(copy="none")[field_name].values.tolist() == [[1.0]]
 
 
 @pytest.mark.parametrize(
@@ -684,7 +684,7 @@ def test_io_hard_p10b_081_csv_reader_accepts_quoted_commas_and_multiline_fields(
         opts=CsvIngestOptions(time_col="time", value_columns=("value",)),
     )
 
-    assert ao.unsafe_data["value"].values.tolist() == [[1.0, 2.0]]
+    assert ao.as_dataset(copy="none")["value"].values.tolist() == [[1.0, 2.0]]
 
 
 def test_io_hard_p10b_051_csv_ingest_validates_header_after_blank_lines(
@@ -916,7 +916,7 @@ def test_io_hard_p10b_037_csv_ingest_uses_resolved_paths_and_wraps_resolution_er
     )
 
     ao = read_csv_logs("ignored", opts=CsvIngestOptions(time_col="time"))
-    assert ao.unsafe_data["value"].values.tolist() == [[1.0]]
+    assert ao.as_dataset(copy="none")["value"].values.tolist() == [[1.0]]
 
     monkeypatch.undo()
     with pytest.raises(ValueError, match="tal.io.read_csv_logs: failed resolving input path"):
@@ -1001,7 +1001,7 @@ def test_io_perf_p10b_006_csv_ingest_releases_records_before_grid_allocation(
 
     assert all(reference() is None for reference in previous_refs)
     assert spool_dirs and all(not path.exists() for path in spool_dirs)
-    assert ao.unsafe_data["value"].values.tolist() == [[1.0], [2.0]]
+    assert ao.as_dataset(copy="none")["value"].values.tolist() == [[1.0], [2.0]]
 
 
 def test_io_perf_p10b_011_csv_scalar_metadata_fails_at_second_distinct_value(

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import ComponentRegistryOptions, ComponentSpec, define_components, read_components
 from tal.core.orchestration.alignment import align_exact_for_plan
@@ -331,7 +332,7 @@ def build_paired_components_dataset(
         opts=ComponentRegistryOptions(registry=registry, replace=True),
         validate=validate,
     )
-    return with_registry.unsafe_data
+    return analysis_object_dataset(with_registry)
 
 
 def clear_component_registry(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
@@ -344,7 +345,7 @@ def clear_component_registry(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         )
     except ValueError as exc:
         raise ValueError(f"{owner}: failed to clear component registry metadata: {exc}") from exc
-    return cleaned.unsafe_data
+    return analysis_object_dataset(cleaned)
 
 
 __all__ = [

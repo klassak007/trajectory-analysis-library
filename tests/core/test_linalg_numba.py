@@ -166,7 +166,7 @@ def test_linalg_f2c_002_lstsq_normal_path_uses_block_backend(monkeypatch: pytest
     rhs = _vector(np.tile(np.asarray([1.0, 2.0, 3.0, 4.0]), (512, 1)))
     out = solve(left, rhs, opts=SolveOptions(method="lstsq"))
     assert seen == [LSTSQ_BACKEND_NUMBA]
-    assert out.unsafe_data["datavar"].sizes["batch"] == 512
+    assert out.as_dataset(copy="none")["datavar"].sizes["batch"] == 512
 
 
 def test_linalg_f2c_003_lstsq_no_numba_block_fallback_parity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,7 +185,7 @@ def test_linalg_f2c_003_lstsq_no_numba_block_fallback_parity(monkeypatch: pytest
     out = solve(_matrix(left_values), _vector(rhs_values), opts=SolveOptions(method="lstsq"))
     expected = _baseline_lstsq_block(left_values, rhs_values, rcond=None, rhs_is_vector=True)
     assert seen == [LSTSQ_BACKEND_NUMPY_BLOCK]
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, expected)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, expected)
     with pytest.raises(ValueError, match=r"linalg\.solve: block 'a' must include 2 trailing core dimensions"):
         lstsq_block_backend(
             np.asarray([1.0]),
@@ -220,8 +220,8 @@ def test_numba_opt_014_linalg_lstsq_default_migration_falls_back_without_numba(
     left = _matrix(np.asarray([[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]]))
     rhs = _vector(np.asarray([[1.0, 2.0, 4.0]]))
     out = solve(left, rhs, opts=SolveOptions(method="lstsq"))
-    expected = _baseline_lstsq_block(left.unsafe_data["x"].values, rhs.unsafe_data["x"].values, rcond=None, rhs_is_vector=True)
-    np.testing.assert_allclose(out.unsafe_data["datavar"].values, expected)
+    expected = _baseline_lstsq_block(left.as_dataset(copy="none")["x"].values, rhs.as_dataset(copy="none")["x"].values, rcond=None, rhs_is_vector=True)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["datavar"].values, expected)
 
 
 def test_numba_opt_015_linalg_lstsq_explicit_numba_still_fails_closed_after_migration(

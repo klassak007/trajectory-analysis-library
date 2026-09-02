@@ -28,28 +28,27 @@ ao = AnalysisObject.from_data(
 )
 out = ao.param.at([0.05, 0.15], on="time_s")
 
-safe_snapshot = ao.data
-backing_store = ao.unsafe_data
-roles = read_roles(backing_store)
-param_name = read_param_coord_name(backing_store)
-before_schema = ao.unsafe_data.attrs["tal"]
-after_schema = out.unsafe_data.attrs["tal"]
+safe_snapshot = ao.as_dataset()
+out_snapshot = out.as_dataset()
+roles = read_roles(safe_snapshot)
+param_name = read_param_coord_name(safe_snapshot)
+before_schema = safe_snapshot.attrs["tal"]
+after_schema = out_snapshot.attrs["tal"]
 ```
 
-Use the safe copy for notebook inspection and exploratory display. Use
-`unsafe_data` when you need to inspect the exact backing dataset or schema
-being consumed by an operation.
+Use the safe copy for notebook inspection and exploratory display. When a large
+payload makes copying undesirable and inspection is strictly read-only, request
+one shallow snapshot explicitly and keep the AO open while using lazy data.
 
 ## Debugging Flow
 
-1. Inspect `ao.unsafe_data.dims`, `ao.unsafe_data.sizes`, and
-   `ao.unsafe_data.coords`.
-2. Inspect `read_roles(ao.unsafe_data)` and
-   `read_param_coord_name(ao.unsafe_data)`.
-3. Compare `ao.unsafe_data.attrs["tal"]` before and after the operation.
-4. Check `ao.frames.ids()` before frame-aware spatial operations.
+1. Capture one `snapshot = ao.as_dataset()`.
+2. Inspect `snapshot.dims`, `snapshot.sizes`, and `snapshot.coords`.
+3. Inspect `read_roles(snapshot)` and `read_param_coord_name(snapshot)`.
+4. Compare `snapshot.attrs["tal"]` with the output snapshot.
+5. Check `ao.frames.ids()` before frame-aware spatial operations.
 
-In notebooks, `display(ao.unsafe_data)` and `display(out.unsafe_data)` are
+In notebooks, `display(ao.as_dataset())` and `display(out.as_dataset())` are
 often enough to spot missing coordinates or unexpected topology changes.
 
 ## Visualization

@@ -53,7 +53,7 @@ def _assert_mapping_identical(
 ) -> None:
     assert list(left.keys()) == list(right.keys())
     for key in left:
-        xr.testing.assert_identical(left[key].unsafe_data, right[key].unsafe_data)
+        xr.testing.assert_identical(left[key].as_dataset(copy="none"), right[key].as_dataset(copy="none"))
 
 
 def test_combine_decompose_core_001_roundtrip_assemble_then_decompose_index_mode() -> None:
@@ -67,7 +67,7 @@ def test_combine_decompose_core_001_roundtrip_assemble_then_decompose_index_mode
     expected_keys = [(0, 0), (0, 1), (1, 0), (1, 1)]
     assert list(out.keys()) == expected_keys
     for key, expected in zip(expected_keys, leaves):
-        xr.testing.assert_allclose(out[key].unsafe_data["x"], expected.unsafe_data["x"])
+        xr.testing.assert_allclose(out[key].as_dataset(copy="none")["x"], expected.as_dataset(copy="none")["x"])
 
 
 def test_combine_decompose_core_002_roundtrip_assemble_then_decompose_label_mode() -> None:
@@ -81,13 +81,13 @@ def test_combine_decompose_core_002_roundtrip_assemble_then_decompose_label_mode
     expected_keys = [("top", "left"), ("top", "right"), ("bottom", "left"), ("bottom", "right")]
     assert list(out.keys()) == expected_keys
     for key, expected in zip(expected_keys, leaves):
-        xr.testing.assert_allclose(out[key].unsafe_data["x"], expected.unsafe_data["x"])
+        xr.testing.assert_allclose(out[key].as_dataset(copy="none")["x"], expected.as_dataset(copy="none")["x"])
 
 
 def test_combine_decompose_core_003_requires_declared_roles_and_prefix_core_dims() -> None:
     """ID: COMBINE_DECOMPOSE_CORE_003_requires_declared_roles_and_prefix_core_dims."""
     base = _vector_leaf(offset=0.0)
-    raw_ds = base.unsafe_data.copy(deep=True)
+    raw_ds = base.as_dataset(copy="none").copy(deep=True)
     raw_ds.attrs = {}
     raw = AnalysisObject(raw_ds)
     with pytest.raises(ValueError, match="declared roles"):
@@ -106,7 +106,7 @@ def test_combine_decompose_core_004_label_mode_requires_present_unique_labels() 
             opts=CoreDecomposeOptions(core_dims=("axis",), key_mode="label"),
             validate=True,
         )
-    dup_ds = _vector_leaf().unsafe_data.assign_coords({"axis": [0, 0, 1]})
+    dup_ds = _vector_leaf().as_dataset(copy="none").assign_coords({"axis": [0, 0, 1]})
     dup = AnalysisObject.from_data(
         dup_ds,
         sequence_dim="sample",
@@ -129,10 +129,10 @@ def test_combine_decompose_core_005_leaf_roles_preserve_sequence_batch_and_remai
         validate=True,
     )
     leaf = out[(0, 0)]
-    roles = read_roles(validate_schema_if_needed(leaf.unsafe_data))
+    roles = read_roles(validate_schema_if_needed(leaf.as_dataset(copy="none")))
     assert roles == (True, "sample", ("trial",), ("axis",))
-    assert leaf.unsafe_data.attrs["tal"]["core"]["param_coord"] == {"name": "tau"}
-    assert leaf.unsafe_data.attrs["tal"]["core"]["validity"]["sequence_size_coord"] == "sample_size"
+    assert leaf.as_dataset(copy="none").attrs["tal"]["core"]["param_coord"] == {"name": "tau"}
+    assert leaf.as_dataset(copy="none").attrs["tal"]["core"]["validity"]["sequence_size_coord"] == "sample_size"
 
 
 def test_combine_decompose_core_006_accessor_decompose_core_self_semantics() -> None:
@@ -147,7 +147,7 @@ def test_combine_decompose_core_006_accessor_decompose_core_self_semantics() -> 
 def test_combine_decompose_core_007_single_numeric_var_required() -> None:
     """ID: COMBINE_DECOMPOSE_CORE_007_single_numeric_var_required."""
     base = _vector_leaf(offset=0.0)
-    multi_ds = base.unsafe_data.copy(deep=True)
+    multi_ds = base.as_dataset(copy="none").copy(deep=True)
     multi_ds["y"] = multi_ds["x"] + 1.0
     multi = AnalysisObject.from_data(
         multi_ds,
@@ -164,7 +164,7 @@ def test_combine_decompose_core_007_single_numeric_var_required() -> None:
 
 def test_combine_decompose_core_008_label_mode_duplicate_nan_labels_rejected() -> None:
     """ID: COMBINE_DECOMPOSE_CORE_008_label_mode_duplicate_nan_labels_rejected."""
-    dup_nan_ds = _vector_leaf().unsafe_data.assign_coords({"axis": np.asarray([float("nan"), float("nan"), 1.0], dtype=object)})
+    dup_nan_ds = _vector_leaf().as_dataset(copy="none").assign_coords({"axis": np.asarray([float("nan"), float("nan"), 1.0], dtype=object)})
     dup_nan = AnalysisObject.from_data(
         dup_nan_ds,
         sequence_dim="sample",

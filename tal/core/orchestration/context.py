@@ -7,6 +7,7 @@ import numpy as np
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..schema_read import (
     read_param_coord_name,
     read_roles,
@@ -323,7 +324,7 @@ def resolve_dataset_context(
     (True, 'sample', (), 'celsius', ('sample',))
     """
     opts = options if options is not None else DatasetContextOptions()
-    ds = validate_schema_if_needed(ao.unsafe_data)
+    ds = validate_schema_if_needed(analysis_object_dataset(ao))
     roles_declared, sequence_dim, batch_dims, core_dims = _resolve_context_roles(
         ds,
         opts=opts,

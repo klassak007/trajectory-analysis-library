@@ -37,7 +37,7 @@ ao = AnalysisObject.from_data(
 
 head = ao.isel(sample=slice(0, 3))
 trial_t0 = ao.sel(trial="t0")
-positive = ao.where(ao.unsafe_data["signal"] > 0.0)
+positive = ao.where(ao.as_dataset()["signal"] > 0.0)
 index = ao.param.index([0.18, 0.52], on="time_s")
 nearest = ao.param.sel([0.18, 0.52], on="time_s")
 interp = ao.param.at([0.18, 0.52], on="time_s", opts=ParamEvalOptions(method="linear"))
@@ -68,9 +68,9 @@ three ask TAL to interpret `time_s` as the query domain.
 
 ## Quick Checks
 
-- Inspect `ao.unsafe_data.sizes`.
-- Inspect `ao.unsafe_data.coords["time_s"]`.
-- Compare `index`, `nearest.unsafe_data`, and `interp.unsafe_data` to confirm
+- Inspect `ao.as_dataset().sizes`.
+- Inspect `ao.as_dataset().coords["time_s"]`.
+- Compare `index`, `nearest.as_dataset()`, and `interp.as_dataset()` to confirm
   whether you wanted sample lookup or interpolation.
 
 ## See Also

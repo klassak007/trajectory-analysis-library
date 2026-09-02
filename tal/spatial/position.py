@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
@@ -100,7 +101,7 @@ def _add_positions(left_input: object, right_input: object, *, owner: str) -> "P
     right = _coerce_position_operand(right_input, owner=owner, side="right")
     plan = resolve_position_add_intent(left, right, owner=owner)
     numeric = linalg_add(left, right)
-    finalized = _finalize_position_addition(numeric.unsafe_data, plan=plan, owner=owner)
+    finalized = _finalize_position_addition(analysis_object_dataset(numeric), plan=plan, owner=owner)
     return Position._from_validated(finalized)
 
 
@@ -116,7 +117,7 @@ class Position(AnalysisObject):
 
     def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
         source = _coerce_position_source(data, owner="spatial.position.__init__")
-        super().__init__(source.unsafe_data)
+        super().__init__(analysis_object_dataset(source))
         self._normalize_metadata(owner="spatial.position.__init__")
         self._enforce_invariants(owner="spatial.position.__init__")
 
@@ -135,11 +136,11 @@ class Position(AnalysisObject):
         return obj
 
     def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = _normalize_position_metadata(self.unsafe_data, owner=owner)
+        normalized = _normalize_position_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)
 
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_position_dataset_invariants(self.unsafe_data, owner=owner)
+        _enforce_position_dataset_invariants(analysis_object_dataset(self), owner=owner)
 
     def as_delta(self, *, validate: bool = True) -> "Position":
         """Return this position re-tagged with ``intent="delta"`` semantics.
@@ -177,7 +178,7 @@ class Position(AnalysisObject):
         True
         """
         ds = set_position_intent(
-            self.unsafe_data,
+            analysis_object_dataset(self),
             intent="delta",
             validate=False,
             owner="spatial.position.as_delta",

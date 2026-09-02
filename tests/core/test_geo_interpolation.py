@@ -44,7 +44,7 @@ def _stub_conversions(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _position_values(value: GeodeticPosition) -> np.ndarray:
-    arr = value.unsafe_data["position"].transpose("sample", "lla")
+    arr = value.as_dataset(copy="none")["position"].transpose("sample", "lla")
     return np.asarray(arr)
 
 
@@ -65,7 +65,7 @@ def test_geo_core_g3_007_geodetic_resample_to_preserves_lla_type(monkeypatch: py
     out = _lla().param.resample_to([0.0, 5.0, 10.0], on="time_s")
 
     assert isinstance(out, GeodeticPosition)
-    assert out.unsafe_data.sizes["sample"] == 3
+    assert out.as_dataset(copy="none").sizes["sample"] == 3
 
 
 def test_geo_core_g3_008_geodetic_interp_like_uses_geodetic_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,19 +92,19 @@ def test_geo_core_g3_009_interpolation_handles_antimeridian_shortest_path(monkey
     out = _lla().param.at([5.0], on="time_s", opts=GeodeticInterpolationOptions(longitude_wrap="[-180, 180)"))
 
     np.testing.assert_allclose(_position_values(out), [[0.0, -180.0, 5.0]])
-    assert out.unsafe_data.attrs["tal"]["ext"]["geo"]["longitude_wrap"] == "[-180, 180)"
+    assert out.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["longitude_wrap"] == "[-180, 180)"
 
 
 def test_geo_core_g3_010_interpolation_preserves_dask_laziness(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: GEO_CORE_G3_010_interpolation_preserves_dask_laziness."""
     _stub_geod(monkeypatch)
     source = _lla()
-    ds = source.unsafe_data.copy(deep=True)
+    ds = source.as_dataset(copy="none").copy(deep=True)
     ds["position"] = ds["position"].copy(data=da.from_array(ds["position"].data, chunks=(1, 3)))
 
     out = GeodeticPosition(ds).param.at([5.0], on="time_s", validate=False)
 
-    assert is_dask_collection(out.unsafe_data["position"].data)
+    assert is_dask_collection(out.as_dataset(copy="none")["position"].data)
 
 
 def test_geo_core_g3_011_ecef_linear_interpolation_roundtrips_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -188,7 +188,7 @@ def test_geo_interpolation_accepts_valid_geodetic_local_origin_when_unused() -> 
 def test_geo_hard_g3_005_no_hidden_interpolation_in_generic_ops() -> None:
     """ID: GEO_HARD_G3_005_no_hidden_interpolation_in_generic_ops."""
     source = _lla()
-    generic = AnalysisObject._from_unvalidated(source.unsafe_data)
+    generic = AnalysisObject._from_unvalidated(source.as_dataset(copy="none"))
 
     out = generic.param.at([5.0], on="time_s")
 

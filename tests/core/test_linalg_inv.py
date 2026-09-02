@@ -87,12 +87,12 @@ def test_linalg_matrix_005_matrix_inv_square_semantics() -> None:
     left = Matrix(_matrix_ao(values, row="eq", col="sol"))
     out = inv(left)
     out_method = left.inv()
-    expected = _expected_inv(left.unsafe_data["x"], row="eq", col="sol")
+    expected = _expected_inv(left.as_dataset(copy="none")["x"], row="eq", col="sol")
     assert isinstance(out, Matrix)
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
-    assert list(out.unsafe_data.data_vars) == ["datavar"]
-    assert not any("_inv" in name for name in out.unsafe_data.data_vars)
-    xr.testing.assert_identical(out.unsafe_data, out_method.unsafe_data)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
+    assert list(out.as_dataset(copy="none").data_vars) == ["datavar"]
+    assert not any("_inv" in name for name in out.as_dataset(copy="none").data_vars)
+    xr.testing.assert_identical(out.as_dataset(copy="none"), out_method.as_dataset(copy="none"))
 
 
 def test_linalg_core_015_matrix_inv_swaps_core_axes_truthfully() -> None:
@@ -100,8 +100,8 @@ def test_linalg_core_015_matrix_inv_swaps_core_axes_truthfully() -> None:
     values = np.tile(np.asarray([[4.0, 1.0], [1.0, 3.0]], dtype=float), (2, 2, 1, 1))
     left = Matrix(_matrix_ao(values, row="row", col="col"))
     out = inv(left)
-    assert _core_dims(out.unsafe_data) == ("col", "row")
-    assert out.unsafe_data["datavar"].dims[-2:] == ("col", "row")
+    assert _core_dims(out.as_dataset(copy="none")) == ("col", "row")
+    assert out.as_dataset(copy="none")["datavar"].dims[-2:] == ("col", "row")
 
 
 def test_linalg_core_016_matrix_inv_batch_core_without_sequence_supported() -> None:
@@ -109,11 +109,11 @@ def test_linalg_core_016_matrix_inv_batch_core_without_sequence_supported() -> N
     values = np.tile(np.asarray([[3.0, 1.0], [1.0, 2.0]], dtype=float), (3, 1, 1))
     left = _matrix_batch_core_ao(values, batch="trial", row="row", col="col")
     out = inv(left)
-    expected = _expected_inv(left.unsafe_data["x"], row="row", col="col")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
+    expected = _expected_inv(left.as_dataset(copy="none")["x"], row="row", col="col")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
     from tal.core.schema_read import read_roles
 
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim is None
     assert batch_dims == ("trial",)
@@ -141,7 +141,7 @@ def test_linalg_hard_034_inv_chunked_inputs_fail_fast_no_eager() -> None:
     values = np.tile(np.asarray([[3.0, 1.0], [1.0, 2.0]], dtype=float), (2, 2, 1, 1))
     left = _matrix_ao(values, row="eq", col="sol")
     left_chunked = AnalysisObject.from_data(
-        left.unsafe_data.chunk({"sample": 1}),
+        left.as_dataset(copy="none").chunk({"sample": 1}),
         sequence_dim="sample",
         batch_dims=("trial",),
         core_dims=("eq", "sol"),
@@ -156,8 +156,8 @@ def test_linalg_hard_035_inv_integer_inputs_preserve_float_or_complex_output() -
     values = np.tile(np.asarray([[2, 0], [0, 2]], dtype=np.int64), (2, 2, 1, 1))
     left = Matrix(_matrix_ao(values, row="eq", col="sol"))
     out = inv(left)
-    expected = _expected_inv(left.unsafe_data["x"], row="eq", col="sol")
-    data = out.unsafe_data["datavar"]
+    expected = _expected_inv(left.as_dataset(copy="none")["x"], row="eq", col="sol")
+    data = out.as_dataset(copy="none")["datavar"]
     assert data.dtype.kind in {"f", "c"}
     xr.testing.assert_allclose(data, expected)
     expected_values = np.tile(np.asarray([[0.5, 0.0], [0.0, 0.5]], dtype=float), (2, 2, 1, 1))
@@ -169,7 +169,7 @@ def test_linalg_hard_036_inv_plain_ao_inputs_fallback_to_array() -> None:
     values = np.tile(np.asarray([[3.0, 1.0], [1.0, 2.0]], dtype=float), (2, 2, 1, 1))
     left_ao = _matrix_ao(values, row="eq", col="sol")
     out = inv(left_ao)
-    out_ds = inv(left_ao.unsafe_data)
+    out_ds = inv(left_ao.as_dataset(copy="none"))
     assert type(out) is Array
     assert type(out_ds) is Array
 
@@ -179,9 +179,9 @@ def test_linalg_hard_037_inv_builtin_wrapper_type_routing_preserves_values() -> 
     values = np.tile(np.asarray([[5.0, 2.0], [1.0, 3.0]], dtype=float), (2, 2, 1, 1))
     left = Matrix(_matrix_ao(values, row="eq", col="sol"))
     out = inv(left)
-    expected = _expected_inv(left.unsafe_data["x"], row="eq", col="sol")
+    expected = _expected_inv(left.as_dataset(copy="none")["x"], row="eq", col="sol")
     assert isinstance(out, Matrix)
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
 
 
 def test_linalg_hard_042_linalgerror_inv_normalized_owner_prefixed() -> None:
@@ -197,8 +197,8 @@ def test_linalg_hard_046_inv_mixed_dtype_complex64_numpy_dtype_parity() -> None:
     values = np.tile(np.asarray([[1.0 + 2.0j, 0.0], [0.0, 2.0 - 1.0j]], dtype=np.complex64), (2, 2, 1, 1))
     left = Matrix(_matrix_ao(values, row="eq", col="sol"))
     out = inv(left)
-    expected = _expected_inv(left.unsafe_data["x"], row="eq", col="sol")
-    data = out.unsafe_data["datavar"]
+    expected = _expected_inv(left.as_dataset(copy="none")["x"], row="eq", col="sol")
+    data = out.as_dataset(copy="none")["datavar"]
     assert data.dtype == expected.dtype
     xr.testing.assert_allclose(data, expected)
 

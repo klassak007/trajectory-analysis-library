@@ -151,7 +151,7 @@ class ComponentsAccessor:
         ... )
         >>> tagged = ao.components.define(opts=ComponentRegistryOptions({"xy": ComponentSpec("axis", ("x", "y"))}))
         >>> parts = tagged.components.extract(opts=ComponentExtractOptions(names=("xy",)))
-        >>> parts["xy"].unsafe_data["vec"].sizes["axis"]
+        >>> parts["xy"].as_dataset()["vec"].sizes["axis"]
         2
         """
         return extract_components(self._ao, opts=opts, validate=validate)
@@ -208,7 +208,7 @@ class ComponentsAccessor:
         ...     validate=True,
         ... )
         >>> out = base.components.patch({"xy": patch}, opts=ComponentPatchOptions(on_overlap="replace"))
-        >>> out.unsafe_data["vec"].sel(axis="x").item()
+        >>> out.as_dataset()["vec"].sel(axis="x").item()
         9.0
         """
         return patch_components(self._ao, components, opts=opts, validate=validate)
@@ -266,7 +266,7 @@ class ComponentsAccessor:
         ... )
         >>> opts = ComponentComposeOptions({"x": ComponentSpec("axis", ("x",)), "y": ComponentSpec("axis", ("y",))})
         >>> out = x.components.compose({"x": x, "y": y}, opts=opts)
-        >>> tuple(out.unsafe_data.coords["axis"].values.tolist())
+        >>> tuple(out.as_dataset().coords["axis"].values.tolist())
         ('x', 'y')
         """
         return compose_components(components, opts=opts, validate=validate)

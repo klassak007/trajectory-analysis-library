@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
+from ..core.dataset_ownership import analysis_object_dataset
 from ..core.typed_lifecycle import TypedAnalysisObject
 from .lifecycle import ARRAY_LIFECYCLE, ArrayInitOptions, declared_roles, normalize_core_dims
 
@@ -34,7 +35,7 @@ class Array(TypedAnalysisObject):
     LIFECYCLE = ARRAY_LIFECYCLE
 
     def _declared_roles(self, *, owner: str) -> tuple[str | None, tuple[str, ...], tuple[str, ...]]:
-        return declared_roles(self.unsafe_data, owner=owner)
+        return declared_roles(analysis_object_dataset(self), owner=owner)
 
     def _declared_role_context(self, *, owner: str) -> tuple[str | None, tuple[str, ...]]:
         sequence_dim, batch_dims, _ = self._declared_roles(owner=owner)
@@ -69,7 +70,7 @@ class Array(TypedAnalysisObject):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> arr.set_core_dims("axis").unsafe_data["v"].dims
+        >>> arr.set_core_dims("axis").as_dataset()["v"].dims
         ('sample', 'axis')
         """
         owner = "Array.set_core_dims"
@@ -112,7 +113,7 @@ class Array(TypedAnalysisObject):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> read_roles(arr.set_vector_axis("axis").unsafe_data)[3]
+        >>> read_roles(arr.set_vector_axis("axis").as_dataset())[3]
         ('axis',)
         """
         return self.set_core_dims(dim)
@@ -149,7 +150,7 @@ class Array(TypedAnalysisObject):
         ...     core_dims=("row", "col"),
         ...     validate=True,
         ... ))
-        >>> read_roles(arr.set_matrix_axes("row", "col").unsafe_data)[3]
+        >>> read_roles(arr.set_matrix_axes("row", "col").as_dataset())[3]
         ('row', 'col')
         """
         if not isinstance(row_dim, str):
@@ -189,7 +190,7 @@ class Array(TypedAnalysisObject):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> read_roles(arr.as_core("axis").unsafe_data)[3]
+        >>> read_roles(arr.as_core("axis").as_dataset())[3]
         ('axis',)
         """
         return self.set_core_dims(*dims)
@@ -223,7 +224,7 @@ class Array(TypedAnalysisObject):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> read_roles(arr.axis("axis").unsafe_data)[3]
+        >>> read_roles(arr.axis("axis").as_dataset())[3]
         ('axis',)
         """
         return self.set_vector_axis(dim)
@@ -259,7 +260,7 @@ class Array(TypedAnalysisObject):
         ...     core_dims=("row", "col"),
         ...     validate=True,
         ... ))
-        >>> read_roles(arr.rc("row", "col").unsafe_data)[3]
+        >>> read_roles(arr.rc("row", "col").as_dataset())[3]
         ('row', 'col')
         """
         return self.set_matrix_axes(row_dim, col_dim)
@@ -336,7 +337,7 @@ class Array(TypedAnalysisObject):
         >>> from tal.linalg import Array
         >>> x = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> y = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-        >>> Array.assemble_core([x, y], core_dims=("axis",), core_labels=(("x", "y"),)).unsafe_data.sizes["axis"]
+        >>> Array.assemble_core([x, y], core_dims=("axis",), core_labels=(("x", "y"),)).as_dataset().sizes["axis"]
         2
         """
         from .ops import assemble_core
@@ -350,7 +351,7 @@ class Array(TypedAnalysisObject):
         )
         if cls is Array:
             return out
-        return cls._from_validated(out.unsafe_data)
+        return cls._from_validated(analysis_object_dataset(out))
 
     @classmethod
     def stack_core(
@@ -394,7 +395,7 @@ class Array(TypedAnalysisObject):
         >>> from tal.linalg import Array
         >>> x = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> y = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-        >>> Array.stack_core([x, y], core_dim="axis", core_labels=("x", "y")).unsafe_data.sizes["axis"]
+        >>> Array.stack_core([x, y], core_dim="axis", core_labels=("x", "y")).as_dataset().sizes["axis"]
         2
         """
         from .ops import stack_core
@@ -408,7 +409,7 @@ class Array(TypedAnalysisObject):
         )
         if cls is Array:
             return out
-        return cls._from_validated(out.unsafe_data)
+        return cls._from_validated(analysis_object_dataset(out))
 
     @classmethod
     def block_core(
@@ -459,7 +460,7 @@ class Array(TypedAnalysisObject):
         >>> x = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> y = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> out = Array.block_core([[x], [y]], row_dim="row", col_dim="col")
-        >>> (out.unsafe_data.sizes["row"], out.unsafe_data.sizes["col"])
+        >>> (out.as_dataset().sizes["row"], out.as_dataset().sizes["col"])
         (2, 1)
         """
         from .ops import block_core
@@ -475,7 +476,7 @@ class Array(TypedAnalysisObject):
         )
         if cls is Array:
             return out
-        return cls._from_validated(out.unsafe_data)
+        return cls._from_validated(analysis_object_dataset(out))
 
     @classmethod
     def concat_core(
@@ -522,7 +523,7 @@ class Array(TypedAnalysisObject):
         >>> x = Array(AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0]])}, coords={"sample": [0], "axis": ["x"]}), sequence_dim="sample", core_dims=("axis",), validate=True))
         >>> y = Array(AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[2.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True))
         >>> out = Array.concat_core([x, y], opts=CoreConcatOptions(core_dim="axis"))
-        >>> out.unsafe_data.sizes["axis"]
+        >>> out.as_dataset().sizes["axis"]
         2
         """
         from .ops import concat_core
@@ -534,7 +535,7 @@ class Array(TypedAnalysisObject):
         )
         if cls is Array:
             return out
-        return cls._from_validated(out.unsafe_data)
+        return cls._from_validated(analysis_object_dataset(out))
 
     def decompose_core(
         self,
@@ -625,7 +626,7 @@ class Array(TypedAnalysisObject):
         >>> from tal.linalg import Array
         >>> base = Array(AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0, 2.0]])}, coords={"sample": [0], "axis": ["x", "y"]}), sequence_dim="sample", core_dims=("axis",), validate=True))
         >>> patch = Array(AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[9.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True))
-        >>> base.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).unsafe_data["v"].sel(axis="y").item()
+        >>> base.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).as_dataset()["v"].sel(axis="y").item()
         9.0
         """
         from .ops import overlay_core

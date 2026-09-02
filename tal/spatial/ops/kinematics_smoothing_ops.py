@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..kernels.kinematics_temporal_kernels import (
     gaussian_partial_renorm_kernel,
     local_poly_smooth_kernel,
@@ -97,7 +99,7 @@ def _smoothing_spec_for_source(source: object, *, owner: str) -> TemporalOutputS
     from ..velocity import AngularVelocity, LinearVelocity
 
     if isinstance(source, Position):
-        intent = get_position_intent(source.unsafe_data, owner=owner)
+        intent = get_position_intent(analysis_object_dataset(source), owner=owner)
         return TemporalOutputSpec(Position, get_position_rep, set_position_rep, None, intent)
     if isinstance(source, LinearVelocity):
         return TemporalOutputSpec(LinearVelocity, get_linear_velocity_rep, set_linear_velocity_rep, "linear_velocity", None)

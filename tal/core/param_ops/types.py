@@ -37,7 +37,7 @@ class ParamSelectOptions:
     ...     param_coord="time",
     ...     validate=True,
     ... )
-    >>> ao.param.sel([1.0], on="time", opts=ParamSelectOptions()).unsafe_data["value"].item()
+    >>> ao.param.sel([1.0], on="time", opts=ParamSelectOptions()).as_dataset()["value"].item()
     10.0
     """
 
@@ -66,7 +66,7 @@ class ParamEvalOptions:
     ...     param_coord="time",
     ...     validate=True,
     ... )
-    >>> ao.param.at([0.5], on="time", opts=ParamEvalOptions(method="linear")).unsafe_data["value"].item()
+    >>> ao.param.at([0.5], on="time", opts=ParamEvalOptions(method="linear")).as_dataset()["value"].item()
     5.0
     """
 
@@ -118,7 +118,7 @@ class ParamSyncOptions:
     ...     validate=True,
     ... )
     >>> synced = synchronize([left], opts=ParamSyncOptions(join="left", how="interp"))
-    >>> synced[0].unsafe_data.sizes["sample"]
+    >>> synced[0].as_dataset().sizes["sample"]
     2
     """
 

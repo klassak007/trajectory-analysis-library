@@ -4,6 +4,7 @@ from itertools import product
 
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from .finalize import finalize_combine_output
 from .normalize import normalize_inputs, resolve_contexts
 from .options import coerce_core_decompose_options
@@ -118,7 +119,7 @@ def _base_finalize_source(context: CombineContext) -> "AnalysisObject":
     source = context.ao
     if source.__class__ is AnalysisObject:
         return source
-    return AnalysisObject._from_validated(source.unsafe_data)
+    return AnalysisObject._from_validated(analysis_object_dataset(source))
 
 
 def _finalize_leaf(

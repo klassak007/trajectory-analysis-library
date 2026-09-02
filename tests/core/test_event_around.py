@@ -44,19 +44,19 @@ def _chunked_ao_series(*, values: list[float], time: list[float], chunks: int = 
 
 
 def _sequence_dim(ao: AnalysisObject) -> str:
-    roles = ao.unsafe_data.attrs["tal"]["core"]["roles"]
+    roles = ao.as_dataset(copy="none").attrs["tal"]["core"]["roles"]
     return str(roles["sequence_dim"])
 
 
 def _event_dim(ao: AnalysisObject) -> str:
-    roles = ao.unsafe_data.attrs["tal"]["core"]["roles"]
+    roles = ao.as_dataset(copy="none").attrs["tal"]["core"]["roles"]
     batch_dims = tuple(roles["batch_dims"])
     assert len(batch_dims) >= 1
     return str(batch_dims[-1])
 
 
 def _validity_coord_name(ao: AnalysisObject) -> str:
-    validity = ao.unsafe_data.attrs["tal"]["core"]["validity"]
+    validity = ao.as_dataset(copy="none").attrs["tal"]["core"]["validity"]
     return str(validity["sequence_size_coord"])
 
 
@@ -67,17 +67,17 @@ def test_event_around_001_condition_enter_windows() -> None:
     out = ao.events.around(cond, opts=AroundOptions(edge="enter", dt=1.0, pre=1.0, post=1.0))
     seq = _sequence_dim(out)
     event_dim = _event_dim(out)
-    assert out.unsafe_data.sizes[event_dim] == 2
-    np.testing.assert_allclose(out.unsafe_data.coords[seq].values, np.asarray([-1.0, 0.0, 1.0], dtype="float64"))
-    np.testing.assert_allclose(out.unsafe_data.coords["event_time"].values, np.asarray([1.0, 4.0], dtype="float64"))
-    np.testing.assert_array_equal(out.unsafe_data.coords["event_edge_code"].values, np.asarray([1, 1], dtype="int8"))
+    assert out.as_dataset(copy="none").sizes[event_dim] == 2
+    np.testing.assert_allclose(out.as_dataset(copy="none").coords[seq].values, np.asarray([-1.0, 0.0, 1.0], dtype="float64"))
+    np.testing.assert_allclose(out.as_dataset(copy="none").coords["event_time"].values, np.asarray([1.0, 4.0], dtype="float64"))
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["event_edge_code"].values, np.asarray([1, 1], dtype="int8"))
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel({event_dim: 0}).values,
+        out.as_dataset(copy="none")["value"].isel({event_dim: 0}).values,
         np.asarray([0.0, 1.0, 1.0], dtype="float64"),
         equal_nan=True,
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel({event_dim: 1}).values,
+        out.as_dataset(copy="none")["value"].isel({event_dim: 1}).values,
         np.asarray([0.0, 2.0, np.nan], dtype="float64"),
         equal_nan=True,
     )
@@ -90,24 +90,24 @@ def test_event_around_002_explicit_event_times_windows() -> None:
     out = ao.events.around(events, opts=AroundOptions(dt=0.5, pre=0.5, post=0.5))
     seq = _sequence_dim(out)
     event_dim = _event_dim(out)
-    assert out.unsafe_data.sizes[event_dim] == 2
-    np.testing.assert_allclose(out.unsafe_data.coords[seq].values, np.asarray([-0.5, 0.0, 0.5], dtype="float64"))
-    np.testing.assert_allclose(out.unsafe_data.coords["event_time"].values, np.asarray([1.5, 3.0], dtype="float64"))
-    np.testing.assert_array_equal(out.unsafe_data.coords["event_edge_code"].values, np.asarray([3, 3], dtype="int8"))
+    assert out.as_dataset(copy="none").sizes[event_dim] == 2
+    np.testing.assert_allclose(out.as_dataset(copy="none").coords[seq].values, np.asarray([-0.5, 0.0, 0.5], dtype="float64"))
+    np.testing.assert_allclose(out.as_dataset(copy="none").coords["event_time"].values, np.asarray([1.5, 3.0], dtype="float64"))
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["event_edge_code"].values, np.asarray([3, 3], dtype="int8"))
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["event_sample_index_before"].values,
+        out.as_dataset(copy="none").coords["event_sample_index_before"].values,
         np.asarray([-1, -1], dtype="int64"),
     )
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["event_sample_index_after"].values,
+        out.as_dataset(copy="none").coords["event_sample_index_after"].values,
         np.asarray([-1, -1], dtype="int64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel({event_dim: 0}).values,
+        out.as_dataset(copy="none")["value"].isel({event_dim: 0}).values,
         np.asarray([1.0, 1.5, 2.0], dtype="float64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel({event_dim: 1}).values,
+        out.as_dataset(copy="none")["value"].isel({event_dim: 1}).values,
         np.asarray([2.5, 3.0, 3.5], dtype="float64"),
     )
 
@@ -165,11 +165,11 @@ def test_event_around_003_grouped_ragged_windows_truthful_validity() -> None:
     event_dim = _event_dim(out)
     size_name = _validity_coord_name(out)
     np.testing.assert_array_equal(
-        out.unsafe_data.coords[size_name].values,
+        out.as_dataset(copy="none").coords[size_name].values,
         np.asarray([[1, 1], [1, 0]], dtype="int64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel(trial=1, **{event_dim: 1}).values,
+        out.as_dataset(copy="none")["value"].isel(trial=1, **{event_dim: 1}).values,
         np.asarray([np.nan], dtype="float64"),
         equal_nan=True,
     )
@@ -206,11 +206,11 @@ def test_event_around_003a_grouped_sequence_only_clock_broadcasts_across_batch()
     out = ao.events.around(cond, opts=AroundOptions(edge="enter", dt=1.0, pre=0.0, post=0.0))
     event_dim = _event_dim(out)
     np.testing.assert_allclose(
-        out.unsafe_data.coords["event_time"].isel({event_dim: 0}).values,
+        out.as_dataset(copy="none").coords["event_time"].isel({event_dim: 0}).values,
         np.asarray([1.0, 2.0], dtype="float64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel({event_dim: 0}).values,
+        out.as_dataset(copy="none")["value"].isel({event_dim: 0}).values,
         np.asarray([[1.0], [1.0]], dtype="float64"),
     )
 
@@ -222,27 +222,27 @@ def test_event_around_004_stacked_layout_flattens_event_tau_in_packed_order() ->
     out = ao.events.around(cond, opts=AroundOptions(layout="stacked", edge="enter", dt=1.0, pre=1.0, post=1.0))
     seq = _sequence_dim(out)
     size_name = _validity_coord_name(out)
-    assert out.unsafe_data.sizes[seq] == 6
+    assert out.as_dataset(copy="none").sizes[seq] == 6
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["window_event_index"].values,
+        out.as_dataset(copy="none").coords["window_event_index"].values,
         np.asarray([0, 0, 0, 1, 1, 1], dtype="int64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data.coords["window_tau"].values,
+        out.as_dataset(copy="none").coords["window_tau"].values,
         np.asarray([-1.0, 0.0, 1.0, -1.0, 0.0, 1.0], dtype="float64"),
         equal_nan=True,
     )
     np.testing.assert_allclose(
-        out.unsafe_data.coords["event_time"].values,
+        out.as_dataset(copy="none").coords["event_time"].values,
         np.asarray([1.0, 1.0, 1.0, 4.0, 4.0, 4.0], dtype="float64"),
         equal_nan=True,
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].values,
+        out.as_dataset(copy="none")["value"].values,
         np.asarray([0.0, 1.0, 1.0, 0.0, 2.0, np.nan], dtype="float64"),
         equal_nan=True,
     )
-    assert int(out.unsafe_data.coords[size_name].values) == 6
+    assert int(out.as_dataset(copy="none").coords[size_name].values) == 6
 
 
 def test_event_around_005_stacked_layout_parity_with_segments_values() -> None:
@@ -254,8 +254,8 @@ def test_event_around_005_stacked_layout_parity_with_segments_values() -> None:
     event_dim = _event_dim(segments)
     tau_dim = _sequence_dim(segments)
     stack_dim = _sequence_dim(stacked)
-    expected = segments.unsafe_data["value"].stack({"window": (event_dim, tau_dim)}).reset_index("window", drop=True)
-    got = stacked.unsafe_data["value"].rename({stack_dim: "window"})
+    expected = segments.as_dataset(copy="none")["value"].stack({"window": (event_dim, tau_dim)}).reset_index("window", drop=True)
+    got = stacked.as_dataset(copy="none")["value"].rename({stack_dim: "window"})
     np.testing.assert_allclose(got.values, expected.values, equal_nan=True)
 
 
@@ -312,14 +312,14 @@ def test_event_around_006_stacked_grouped_ragged_validity_truthful() -> None:
     )
     seq = _sequence_dim(out)
     size_name = _validity_coord_name(out)
-    assert out.unsafe_data.sizes[seq] == 2
-    np.testing.assert_array_equal(out.unsafe_data.coords[size_name].values, np.asarray([2, 1], dtype="int64"))
+    assert out.as_dataset(copy="none").sizes[seq] == 2
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords[size_name].values, np.asarray([2, 1], dtype="int64"))
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["window_event_index"].isel(trial=1).values,
+        out.as_dataset(copy="none").coords["window_event_index"].isel(trial=1).values,
         np.asarray([0, -1], dtype="int64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data.coords["window_tau"].isel(trial=1).values,
+        out.as_dataset(copy="none").coords["window_tau"].isel(trial=1).values,
         np.asarray([0.0, np.nan], dtype="float64"),
         equal_nan=True,
     )
@@ -414,7 +414,7 @@ def test_event_around_004a_compatible_unowned_valid_coord_does_not_trigger_reser
     )
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.around(cond, opts=AroundOptions(edge="enter", dt=1.0, pre=0.0, post=0.0))
-    assert "value" in out.unsafe_data.data_vars
+    assert "value" in out.as_dataset(copy="none").data_vars
 
 
 def test_event_around_hard_005_explicit_source_invalid_shape_rejected() -> None:
@@ -433,10 +433,10 @@ def test_event_around_hard_006_condition_empty_anchor_set_returns_empty_output()
     out = ao.events.around(cond, opts=AroundOptions(dt=1.0, pre=1.0, post=1.0))
     seq = _sequence_dim(out)
     event_dim = _event_dim(out)
-    assert out.unsafe_data.sizes[event_dim] == 0
-    assert out.unsafe_data.sizes[seq] == 3
+    assert out.as_dataset(copy="none").sizes[event_dim] == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 3
     for name in ("event_time", "event_edge_code", "event_sample_index_before", "event_sample_index_after"):
-        assert out.unsafe_data.coords[name].sizes[event_dim] == 0
+        assert out.as_dataset(copy="none").coords[name].sizes[event_dim] == 0
 
 
 def test_event_around_hard_007_explicit_empty_anchor_set_returns_empty_output() -> None:
@@ -446,9 +446,9 @@ def test_event_around_hard_007_explicit_empty_anchor_set_returns_empty_output() 
     out = ao.events.around(anchors, opts=AroundOptions(dt=1.0, pre=1.0, post=1.0))
     seq = _sequence_dim(out)
     event_dim = _event_dim(out)
-    assert out.unsafe_data.sizes[event_dim] == 0
-    assert out.unsafe_data.sizes[seq] == 3
-    assert out.unsafe_data.coords["event_time"].sizes[event_dim] == 0
+    assert out.as_dataset(copy="none").sizes[event_dim] == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 3
+    assert out.as_dataset(copy="none").coords["event_time"].sizes[event_dim] == 0
 
 
 def test_event_around_hard_008_grouped_explicit_anchor_preserves_batch_topology() -> None:
@@ -475,10 +475,10 @@ def test_event_around_hard_008_grouped_explicit_anchor_preserves_batch_topology(
     )
     out = ao.events.around(anchors, opts=AroundOptions(dt=0.5, pre=0.5, post=0.5))
     event_dim = _event_dim(out)
-    assert out.unsafe_data.sizes["trial"] == 2
-    assert out.unsafe_data.sizes[event_dim] == 1
+    assert out.as_dataset(copy="none").sizes["trial"] == 2
+    assert out.as_dataset(copy="none").sizes[event_dim] == 1
     np.testing.assert_allclose(
-        out.unsafe_data.coords["event_time"].isel({event_dim: 0}).values,
+        out.as_dataset(copy="none").coords["event_time"].isel({event_dim: 0}).values,
         np.asarray([0.5, 1.5], dtype="float64"),
     )
 
@@ -530,8 +530,8 @@ def test_event_around_hard_011_grouped_explicit_batch_event_layout_preserved() -
     )
     out = ao.events.around(anchors, opts=AroundOptions(dt=0.5, pre=0.0, post=0.0))
     event_dim = _event_dim(out)
-    assert out.unsafe_data.sizes[event_dim] == 2
-    np.testing.assert_allclose(out.unsafe_data.coords["event_time"].values, anchors.values)
+    assert out.as_dataset(copy="none").sizes[event_dim] == 2
+    np.testing.assert_allclose(out.as_dataset(copy="none").coords["event_time"].values, anchors.values)
 
 
 def test_event_around_hard_012_stacked_empty_anchor_returns_empty_output() -> None:
@@ -541,8 +541,8 @@ def test_event_around_hard_012_stacked_empty_anchor_returns_empty_output() -> No
     out = ao.events.around(cond, opts=AroundOptions(layout="stacked", dt=1.0, pre=1.0, post=1.0))
     seq = _sequence_dim(out)
     size_name = _validity_coord_name(out)
-    assert out.unsafe_data.sizes[seq] == 0
-    assert int(out.unsafe_data.coords[size_name].values) == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 0
+    assert int(out.as_dataset(copy="none").coords[size_name].values) == 0
 
 
 def test_event_around_hard_013_stacked_metadata_namespace_collision_failfast() -> None:
@@ -597,8 +597,8 @@ def test_event_around_hard_015_stacked_explicit_grouped_zero_lane_deterministic(
     )
     out = ao.events.around(anchors, opts=AroundOptions(layout="stacked", dt=1.0, pre=0.0, post=0.0))
     seq = _sequence_dim(out)
-    assert out.unsafe_data.sizes["trial"] == 0
-    assert out.unsafe_data.sizes[seq] == 2
+    assert out.as_dataset(copy="none").sizes["trial"] == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 2
 
 
 def test_event_around_hard_016_stacked_no_hidden_eager_count_discovery() -> None:
@@ -607,7 +607,7 @@ def test_event_around_hard_016_stacked_no_hidden_eager_count_discovery() -> None
     ao = _chunked_ao_series(values=[0.0, 1.0, 2.0], time=[0.0, 1.0, 2.0])
     anchors = xr.DataArray(da.from_array(np.asarray([0.5, 1.5], dtype="float64"), chunks=2), dims=("anchor",))
     out = ao.events.around(anchors, opts=AroundOptions(layout="stacked", dt=1.0, pre=0.0, post=0.0))
-    assert out.unsafe_data["value"].chunks is not None
+    assert out.as_dataset(copy="none")["value"].chunks is not None
 
 
 def test_event_around_hard_017_stacked_zero_lane_batch_coord_dtype_preserved() -> None:
@@ -634,9 +634,9 @@ def test_event_around_hard_017_stacked_zero_lane_batch_coord_dtype_preserved() -
     )
     segments = ao.events.around(anchors, opts=AroundOptions(layout="segments", dt=1.0, pre=0.0, post=0.0))
     stacked = ao.events.around(anchors, opts=AroundOptions(layout="stacked", dt=1.0, pre=0.0, post=0.0))
-    assert segments.unsafe_data.coords["trial"].dtype == ds.coords["trial"].dtype
-    assert stacked.unsafe_data.coords["trial"].dtype == ds.coords["trial"].dtype
-    assert stacked.unsafe_data.coords["trial"].dtype == segments.unsafe_data.coords["trial"].dtype
+    assert segments.as_dataset(copy="none").coords["trial"].dtype == ds.coords["trial"].dtype
+    assert stacked.as_dataset(copy="none").coords["trial"].dtype == ds.coords["trial"].dtype
+    assert stacked.as_dataset(copy="none").coords["trial"].dtype == segments.as_dataset(copy="none").coords["trial"].dtype
 
 
 def test_event_around_hard_018_stacked_zero_lane_batch_coord_values_parity_with_source() -> None:
@@ -662,7 +662,7 @@ def test_event_around_hard_018_stacked_zero_lane_batch_coord_values_parity_with_
         coords={"trial": np.asarray([], dtype=object), "anchor": np.asarray([0, 1], dtype="int64")},
     )
     stacked = ao.events.around(anchors, opts=AroundOptions(layout="stacked", dt=1.0, pre=0.0, post=0.0))
-    np.testing.assert_array_equal(stacked.unsafe_data.coords["trial"].values, ds.coords["trial"].values)
+    np.testing.assert_array_equal(stacked.as_dataset(copy="none").coords["trial"].values, ds.coords["trial"].values)
 
 
 def test_event_hard_018_around_finalize_owner_preserves_param_and_validity() -> None:
@@ -671,8 +671,8 @@ def test_event_hard_018_around_finalize_owner_preserves_param_and_validity() -> 
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.around(cond, opts=AroundOptions(layout="segments", edge="enter", dt=1.0, pre=0.0, post=0.0))
     seq = _sequence_dim(out)
-    core = out.unsafe_data.attrs["tal"]["core"]
+    core = out.as_dataset(copy="none").attrs["tal"]["core"]
     assert core["param_coord"]["name"] == seq
     validity = core["validity"]
     assert isinstance(validity, dict)
-    assert str(validity["sequence_size_coord"]) in out.unsafe_data.coords
+    assert str(validity["sequence_size_coord"]) in out.as_dataset(copy="none").coords

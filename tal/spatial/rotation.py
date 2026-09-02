@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
@@ -40,8 +41,7 @@ from .conversion.finalize import (
 )
 from .policies.frame import resolve_compose_output_frames
 from .ops.frame_api_ops import rotation_class_solve_path_transform
-from .ops.quat_role_dim_ops import resolve_quat_dim_with_role_fallback
-from .ops.quat_role_dim_ops import resolve_rotation_component_dims_for_reduce
+from .ops.quat_role_dim_ops import resolve_quat_dim_with_role_fallback, resolve_rotation_component_dims_for_reduce
 from .metadata import (
     get_rotation_rep,
     normalize_configuration_relation_semantics,
@@ -56,7 +56,6 @@ from .policies.wrap import wrap_as
 if TYPE_CHECKING:
     from tal.frames import Frame
     from tal.core.param_ops.types import ParamEvalOptions
-
     from .path_solve import PathSolveOptions
     from .temporal.options import RotationTemporalOptions
 
@@ -394,8 +393,8 @@ def _rotation_compose_with_owner(
 ) -> "Rotation":
     left._enforce_invariants(owner=owner)
     right._enforce_invariants(owner=owner)
-    parent, child = resolve_compose_output_frames(left.unsafe_data, right.unsafe_data, owner=owner)
-    left_rep = get_rotation_rep(left.unsafe_data, owner=owner)
+    left_rep = get_rotation_rep(left_ds := analysis_object_dataset(left), owner=owner)
+    parent, child = resolve_compose_output_frames(left_ds, analysis_object_dataset(right), owner=owner)
     left_quat = left.as_quat(validate=False)
     right_quat = right.as_quat(validate=False)
     selection = select_topology_policy_with_intents(
@@ -411,8 +410,8 @@ def _rotation_compose_with_owner(
     )
     policy = selection.policy
     composed_quat, quat_dim = _compose_quat_datasets(
-        left_quat.unsafe_data,
-        right_quat.unsafe_data,
+        analysis_object_dataset(left_quat),
+        analysis_object_dataset(right_quat),
         owner=owner,
         policy=policy,
     )
@@ -428,10 +427,10 @@ def _rotation_inverse_with_owner(
     owner: str,
 ) -> "Rotation":
     rotation._enforce_invariants(owner=owner)
-    source_rep = get_rotation_rep(rotation.unsafe_data, owner=owner)
+    source_rep = get_rotation_rep(source := analysis_object_dataset(rotation), owner=owner)
     source_quat = rotation.as_quat(validate=False)
-    inverse_quat, quat_dim = _inverse_quat_dataset(source_quat.unsafe_data, owner=owner)
-    parent, child = get_frames(rotation.unsafe_data)
+    inverse_quat, quat_dim = _inverse_quat_dataset(analysis_object_dataset(source_quat), owner=owner)
+    parent, child = get_frames(source)
     inverse_quat = set_frames(inverse_quat, parent=child, child=parent, validate=False)
     result = _convert_quat_result_to_rep(inverse_quat, quat_dim=quat_dim, target_rep=source_rep, owner=owner)
     return _wrap_rotation_output(result, validate=validate)
@@ -451,7 +450,7 @@ class Rotation(AnalysisObject):
 
     def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
         source = _coerce_rotation_source(data, owner="spatial.rotation.__init__")
-        super().__init__(source.unsafe_data)
+        super().__init__(analysis_object_dataset(source))
         self._normalize_metadata(owner="spatial.rotation.__init__")
         self._enforce_invariants(owner="spatial.rotation.__init__")
 
@@ -470,15 +469,15 @@ class Rotation(AnalysisObject):
         return obj
     
     def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = _normalize_rotation_metadata(self.unsafe_data, owner=owner)
+        normalized = _normalize_rotation_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)
 
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_rotation_dataset_invariants(self.unsafe_data, owner=owner)
+        _enforce_rotation_dataset_invariants(analysis_object_dataset(self), owner=owner)
 
     def _required_component_dims_for_reduce(self) -> tuple[str, ...]:
         return resolve_rotation_component_dims_for_reduce(
-            self.unsafe_data,
+            analysis_object_dataset(self),
             owner="spatial.rotation._required_component_dims_for_reduce",
         )
     
@@ -515,19 +514,20 @@ class Rotation(AnalysisObject):
         ...     core_dims=("quat",),
         ...     validate=True,
         ... )
-        >>> Rotation(ao).to_rep("matrix").unsafe_data["rotation"].shape[-2:]
+        >>> Rotation(ao).to_rep("matrix").as_dataset()["rotation"].shape[-2:]
         (3, 3)
         """
         owner = "spatial.rotation.to_rep"
         target = _normalize_target_rep(rep, owner=owner)
         self._enforce_invariants(owner=owner)
-        current = get_rotation_rep(self.unsafe_data, owner=owner)
+        source = analysis_object_dataset(self)
+        current = get_rotation_rep(source, owner=owner)
         if target == current:
-            return _wrap_rotation_output(self.unsafe_data, validate=validate)
+            return _wrap_rotation_output(source, validate=validate)
         if target == "matrix":
-            converted = _convert_quat_to_matrix(self.unsafe_data, owner=owner)
+            converted = _convert_quat_to_matrix(source, owner=owner)
         else:
-            converted = _convert_matrix_to_quat(self.unsafe_data, owner=owner)
+            converted = _convert_matrix_to_quat(source, owner=owner)
         return _wrap_rotation_output(converted, validate=validate)
     
     def as_quat(self, *, validate: bool = True) -> "Rotation":
@@ -559,7 +559,7 @@ class Rotation(AnalysisObject):
         ...     core_dims=("quat",),
         ...     validate=True,
         ... )
-        >>> Rotation(ao).as_quat().unsafe_data["rotation"].shape[-1]
+        >>> Rotation(ao).as_quat().as_dataset()["rotation"].shape[-1]
         4
         """
         return self.to_rep("quat", validate=validate)
@@ -593,7 +593,7 @@ class Rotation(AnalysisObject):
         ...     core_dims=("quat",),
         ...     validate=True,
         ... )
-        >>> Rotation(ao).as_matrix().unsafe_data["rotation"].shape[-2:]
+        >>> Rotation(ao).as_matrix().as_dataset()["rotation"].shape[-2:]
         (3, 3)
         """
         return self.to_rep("matrix", validate=validate)
@@ -696,7 +696,7 @@ class Rotation(AnalysisObject):
         ...     core_dims=("quat",),
         ...     validate=True,
         ... )
-        >>> Rotation(ao).inverse().unsafe_data["rotation"].shape
+        >>> Rotation(ao).inverse().as_dataset()["rotation"].shape
         (1, 4)
         """
         owner = "spatial.rotation.inverse"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.axis_map import resolve_role_axis_map
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..orchestration.resolve import resolve_param_runtime_context
@@ -97,12 +98,13 @@ def _resolve_ao_operand(
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{owner}: failed to align AO operand on context clock.") from exc
-    data_vars = list(aligned.unsafe_data.data_vars)
+    aligned_ds = analysis_object_dataset(aligned)
+    data_vars = list(aligned_ds.data_vars)
     if len(data_vars) != 1:
         raise ValueError(
             f"{owner}: AO operand must resolve to exactly one numeric data variable, got {len(data_vars)}."
         )
-    resolved = aligned.unsafe_data.data_vars[data_vars[0]]
+    resolved = aligned_ds.data_vars[data_vars[0]]
     to_context = {dst: src for src, dst in to_target.items()}
     return rename_dims_collision_safe(resolved, mapping=to_context)
 

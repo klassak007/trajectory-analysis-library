@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
@@ -151,9 +152,9 @@ def _resolve_pose_position_input_specs(
 ) -> PoseApplyOperandSpecs:
     translation, rotation = pose.decompose(validate=False)
     quat_rotation = rotation.as_quat(validate=False)
-    target_ds = validate_schema_if_needed(target.unsafe_data)
-    translation_ds = validate_schema_if_needed(translation.unsafe_data)
-    quat_ds = validate_schema_if_needed(quat_rotation.unsafe_data)
+    target_ds = validate_schema_if_needed(analysis_object_dataset(target))
+    translation_ds = validate_schema_if_needed(analysis_object_dataset(translation))
+    quat_ds = validate_schema_if_needed(analysis_object_dataset(quat_rotation))
     target_var, target_dim = resolve_single_numeric_var_single_core_dim(target_ds, owner=owner, what="Position target")
     translation_var, translation_dim = resolve_single_numeric_var_single_core_dim(
         translation_ds,
@@ -335,7 +336,7 @@ def _apply_pose_to_spatial_target(
     )
     rotation = _rotation_with_selection_intents(rotation, selection=selection)
     out = _rotation_apply_with_owner(rotation, target, validate=False, owner=owner)
-    out_ds = set_frames(out.unsafe_data, parent=parent, child=child, validate=False)
+    out_ds = set_frames(analysis_object_dataset(out), parent=parent, child=child, validate=False)
     return wrap_like(target, out_ds, validate=validate)
 
 
@@ -368,7 +369,7 @@ def _pose_apply_with_owner(
         )
     pose._enforce_invariants(owner=owner)
     target._enforce_invariants(owner=owner)
-    parent, child = resolve_apply_output_frames(pose.unsafe_data, target.unsafe_data, owner=owner)
+    parent, child = resolve_apply_output_frames(analysis_object_dataset(pose), analysis_object_dataset(target), owner=owner)
     if isinstance(target, Position):
         return _apply_pose_to_position(
             pose,

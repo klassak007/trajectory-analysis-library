@@ -189,7 +189,7 @@ def matmul(
     ...     core_dims=("col",),
     ...     validate=True,
     ... ))
-    >>> matmul(A, v, opts=MatmulOptions()).unsafe_data["datavar"].values.tolist()
+    >>> matmul(A, v, opts=MatmulOptions()).as_dataset()["datavar"].values.tolist()
     [[8.0, 15.0]]
     """
     owner = "linalg.matmul"

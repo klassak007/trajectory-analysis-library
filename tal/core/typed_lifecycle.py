@@ -7,6 +7,7 @@ from typing import ClassVar, Literal, Self
 import xarray as xr
 
 from .analysis_object import AnalysisObject
+from .dataset_ownership import analysis_object_dataset
 
 LifecyclePhase = Literal["init", "from_validated", "from_unvalidated"]
 
@@ -310,7 +311,7 @@ class TypedAnalysisObject(AnalysisObject):
     ...     validate=True,
     ... )
     >>> temp = Temperature(base)
-    >>> temp.unsafe_data.attrs["tal"]["ext"]["thermal"]["kind"]
+    >>> temp.as_dataset().attrs["tal"]["ext"]["thermal"]["kind"]
     'temperature'
     """
 
@@ -341,7 +342,7 @@ class TypedAnalysisObject(AnalysisObject):
         ...         owner_prefix="thermal.Temperature",
         ...     )
         >>> temp = Temperature(xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]}))
-        >>> temp.unsafe_data.attrs["tal"]["version"]
+        >>> temp.as_dataset().attrs["tal"]["version"]
         1
         """
         self._init_typed(data, options=None)
@@ -388,14 +389,16 @@ class TypedAnalysisObject(AnalysisObject):
         source = spec.coerce_source(data, ctx)
         if not isinstance(source, AnalysisObject):
             raise TypeError(f"{ctx.owner}: lifecycle source coercer returned {type(source).__name__}; expected AnalysisObject.")
-        AnalysisObject.__init__(self, source.unsafe_data)
-        self._bind_from_hook(spec.apply_init_options(self.unsafe_data, ctx), ctx=ctx, hook="apply_init_options")
+        AnalysisObject.__init__(self, analysis_object_dataset(source))
+        initialized = spec.apply_init_options(analysis_object_dataset(self), ctx)
+        self._bind_from_hook(initialized, ctx=ctx, hook="apply_init_options")
         self._run_typed_lifecycle(ctx)
 
     def _run_typed_lifecycle(self, ctx: TypedLifecycleContext) -> None:
         spec = self.__class__._lifecycle_spec()
-        self._bind_from_hook(spec.normalize(self.unsafe_data, ctx), ctx=ctx, hook="normalize")
-        spec.enforce(self.unsafe_data, ctx)
+        source = analysis_object_dataset(self)
+        self._bind_from_hook(spec.normalize(source, ctx), ctx=ctx, hook="normalize")
+        spec.enforce(analysis_object_dataset(self), ctx)
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> Self:
@@ -433,7 +436,7 @@ class TypedAnalysisObject(AnalysisObject):
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> isinstance(Temperature._from_validated(base.unsafe_data), Temperature)
+        >>> isinstance(Temperature._from_validated(base.as_dataset()), Temperature)
         True
         """
         obj = super()._from_validated(ds)
@@ -482,11 +485,11 @@ class TypedAnalysisObject(AnalysisObject):
     def _normalize_metadata(self, *, owner: str) -> None:
         ctx = TypedLifecycleContext(owner=owner, phase="init", options=None)
         spec = self.__class__._lifecycle_spec()
-        self._bind_from_hook(spec.normalize(self.unsafe_data, ctx), ctx=ctx, hook="normalize")
+        self._bind_from_hook(spec.normalize(analysis_object_dataset(self), ctx), ctx=ctx, hook="normalize")
 
     def _enforce_invariants(self, *, owner: str) -> None:
         ctx = TypedLifecycleContext(owner=owner, phase="init", options=None)
-        self.__class__._lifecycle_spec().enforce(self.unsafe_data, ctx)
+        self.__class__._lifecycle_spec().enforce(analysis_object_dataset(self), ctx)
 
 
 __all__ = [

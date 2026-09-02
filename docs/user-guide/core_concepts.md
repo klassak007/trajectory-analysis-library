@@ -73,9 +73,10 @@ ao = AnalysisObject.from_data(
     validate=True,
 )
 
-roles = read_roles(ao.unsafe_data)
-param_name = read_param_coord_name(ao.unsafe_data)
-size_name = read_sequence_size_coord_name(ao.unsafe_data)
+snapshot = ao.as_dataset()
+roles = read_roles(snapshot)
+param_name = read_param_coord_name(snapshot)
+size_name = read_sequence_size_coord_name(snapshot)
 ```
 
 This object has two trials, three structural sample slots, a per-trial
@@ -110,9 +111,10 @@ schema and make the role declaration match the dataset you actually have.
 
 ## Quick Checks
 
-- Inspect `ao.unsafe_data.sizes` and `ao.unsafe_data.coords`.
+- Capture one `snapshot = ao.as_dataset()`, then inspect `snapshot.sizes` and
+  `snapshot.coords`.
 - Read `roles`, `param_name`, and `size_name` after construction.
-- Inspect `ao.unsafe_data.attrs["tal"]` when an operation does not seem to
+- Inspect `snapshot.attrs["tal"]` when an operation does not seem to
   honor the dimensions you expected.
 
 ## See Also

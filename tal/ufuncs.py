@@ -17,7 +17,7 @@ Examples
 ...     validate=True,
 ... )
 >>> out = ufuncs.add(ao, 1.0)
->>> out.unsafe_data["value"].values.tolist()
+>>> out.as_dataset()["value"].values.tolist()
 [2.0, 3.0]
 """
 

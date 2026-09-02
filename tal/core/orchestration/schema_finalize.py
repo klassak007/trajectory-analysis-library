@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..metadata_optional import canonicalize_optional_names
 from ..schema import merge_schema, set_param_coord, set_roles, set_validity
 from .finalize import finalize_like, rewrap_unvalidated_like
@@ -175,7 +176,7 @@ def finalize_with_schema(
     ...     validate=True,
     ...     owner="thermal.to_kelvin",
     ... )
-    >>> out.unsafe_data.attrs["tal"]["core"]["roles"]["sequence_dim"]
+    >>> out.as_dataset().attrs["tal"]["core"]["roles"]["sequence_dim"]
     'sample'
     """
     candidate = ds
@@ -199,7 +200,7 @@ def finalize_with_schema(
     tmp = rewrap_unvalidated_like(source_ao, candidate, owner=owner)
     if clear_returns_unvalidated and resolved_spec.sequence_dim is None:
         return tmp
-    return finalize_like(tmp, tmp.unsafe_data, validate=validate, owner=owner)
+    return finalize_like(tmp, analysis_object_dataset(tmp), validate=validate, owner=owner)
 
 
 __all__ = [

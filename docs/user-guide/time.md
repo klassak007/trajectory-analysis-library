@@ -94,10 +94,10 @@ tolerance for datetime64 params must be timedelta-like.
 
 ## Quick Checks
 
-- Inspect `imu_at.unsafe_data.coords["time_s"]`.
-- Inspect `imu_rs.unsafe_data.sizes`.
-- Compare `synced_imu.unsafe_data.coords["time_s"]` and
-  `synced_gps.unsafe_data.coords["time_s"]`.
+- Inspect `imu_at.as_dataset().coords["time_s"]`.
+- Inspect `imu_rs.as_dataset().sizes`.
+- Compare `synced_imu.as_dataset().coords["time_s"]` and
+  `synced_gps.as_dataset().coords["time_s"]`.
 
 ## See Also
 

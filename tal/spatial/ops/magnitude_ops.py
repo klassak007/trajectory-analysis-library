@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.runtime_checks import (
     require_exact_labels,
@@ -31,7 +32,7 @@ def _coerce_array_output(value: object, *, owner: str) -> Array:
         raise TypeError(f"{owner}: expected Array output; got {type(value).__name__}.")
     if type(value) is Array:
         return value
-    return Array._from_unvalidated(value.unsafe_data)
+    return Array._from_unvalidated(analysis_object_dataset(value))
 
 
 def spatial_vector_norm(
@@ -64,8 +65,8 @@ def _resolve_rotation_quat_payload(
         quat = rotation.as_quat(validate=False)
     except (TypeError, ValueError) as exc:
         raise type(exc)(f"{owner}: {exc}") from exc
-    source_ao = AnalysisObject._from_unvalidated(quat.unsafe_data)
-    source_ds = source_ao.unsafe_data
+    source_ao = AnalysisObject._from_unvalidated(analysis_object_dataset(quat))
+    source_ds = analysis_object_dataset(source_ao)
     var_name = select_single_numeric_var(source_ds, owner=owner, what="Rotation magnitude")
     quat_dim = resolve_quat_dim_with_role_fallback(
         source_ds,
@@ -156,7 +157,7 @@ def _finalize_rotation_angle_magnitude(
         owner=owner,
         validate=True,
     )
-    return Array._from_validated(finalized.unsafe_data)
+    return Array._from_validated(analysis_object_dataset(finalized))
 
 
 def rotation_angle_magnitude(

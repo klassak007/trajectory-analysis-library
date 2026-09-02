@@ -725,7 +725,7 @@ class Velocity(TypedAnalysisObject):
         Examples
         --------
         >>> velocity = Velocity.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> sorted(velocity.unsafe_data.data_vars)  # doctest: +SKIP
+        >>> sorted(velocity.as_dataset().data_vars)  # doctest: +SKIP
         ['angular_velocity', 'linear_velocity']
         """
         return family_from_linear_angular(
@@ -795,7 +795,7 @@ class Velocity(TypedAnalysisObject):
         Examples
         --------
         >>> velocity = Velocity.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> velocity.to_rep("vector6").unsafe_data["velocity"].shape[-1]  # doctest: +SKIP
+        >>> velocity.to_rep("vector6").as_dataset()["velocity"].shape[-1]  # doctest: +SKIP
         6
         """
         return family_to_rep(
@@ -828,7 +828,7 @@ class Velocity(TypedAnalysisObject):
         Examples
         --------
         >>> velocity = Velocity.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> sorted(velocity.as_components().unsafe_data.data_vars)  # doctest: +SKIP
+        >>> sorted(velocity.as_components().as_dataset().data_vars)  # doctest: +SKIP
         ['angular_velocity', 'linear_velocity']
         """
         return family_as_components(
@@ -860,7 +860,7 @@ class Velocity(TypedAnalysisObject):
         Examples
         --------
         >>> velocity = Velocity.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> velocity.as_vector6().unsafe_data["velocity"].shape[-1]  # doctest: +SKIP
+        >>> velocity.as_vector6().as_dataset()["velocity"].shape[-1]  # doctest: +SKIP
         6
         """
         return family_as_vector6(

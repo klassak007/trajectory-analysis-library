@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import (
     require_exact_labels,
@@ -206,7 +207,7 @@ class TopocentricDirection(TypedAnalysisObject):
     ... )
     >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
     >>> direction = TopocentricDirection(ao)
-    >>> sorted(direction.unsafe_data.data_vars)
+    >>> sorted(direction.as_dataset().data_vars)
     ['altitude_deg', 'azimuth_deg', 'direction']
     """
 
@@ -264,14 +265,15 @@ class TopocentricDirection(TypedAnalysisObject):
         ... )
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
         >>> vector = TopocentricDirection(ao).to_vector3()
-        >>> tuple(vector.unsafe_data.coords["axis"].to_numpy().tolist())
+        >>> tuple(vector.as_dataset().coords["axis"].to_numpy().tolist())
         ('x', 'y', 'z')
         """
         owner = "astro.TopocentricDirection.to_vector3"
         resolved_axis = _require_non_empty_string(axis, field="axis", owner=owner)
         resolved_var = _require_non_empty_string(output_var, field="output_var", owner=owner)
+        source_ds = analysis_object_dataset(self)
         ds, sequence_dim, batch_dims = _vector3_dataset(
-            self.unsafe_data,
+            source_ds,
             axis=resolved_axis,
             output_var=resolved_var,
             owner=owner,
@@ -281,15 +283,16 @@ class TopocentricDirection(TypedAnalysisObject):
             sequence_dim=sequence_dim,
             batch_dims=batch_dims,
             core_dims=(resolved_axis,),
-            param_coord=read_param_coord_name(self.unsafe_data),
-            sequence_size_coord=read_sequence_size_coord_name(self.unsafe_data),
+            param_coord=read_param_coord_name(source_ds),
+            sequence_size_coord=read_sequence_size_coord_name(source_ds),
             validate=validate,
         )
         from tal.linalg import Vector3
 
+        ao_ds = analysis_object_dataset(ao)
         if validate:
-            return Vector3._from_validated(ao.unsafe_data)
-        return Vector3._from_unvalidated(ao.unsafe_data)
+            return Vector3._from_validated(ao_ds)
+        return Vector3._from_unvalidated(ao_ds)
 
 
 __all__ = ["TopocentricDirection"]

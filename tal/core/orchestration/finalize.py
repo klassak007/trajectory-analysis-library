@@ -80,9 +80,10 @@ def finalize_like(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> out_ds = source.unsafe_data.assign(celsius=source.unsafe_data["celsius"] + 1.0)
+    >>> source_ds = source.as_dataset()
+    >>> out_ds = source_ds.assign(celsius=source_ds["celsius"] + 1.0)
     >>> out = finalize_like(source, out_ds, validate=True, owner="thermal.bias_temperature")
-    >>> out.unsafe_data.attrs["tal"]["core"]["roles"]["sequence_dim"]
+    >>> out.as_dataset().attrs["tal"]["core"]["roles"]["sequence_dim"]
     'sample'
     """
     _ = owner

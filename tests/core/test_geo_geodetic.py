@@ -36,7 +36,7 @@ def _lla_dataset(values: np.ndarray | None = None, *, labels: tuple[str, str, st
         param_coord="time_s",
         sequence_size_coord="group_size",
         validate=True,
-    ).unsafe_data.copy(deep=True)
+    ).as_dataset(copy="none").copy(deep=True)
 
 
 def _ecef_dataset(values: np.ndarray | None = None) -> xr.Dataset:
@@ -46,7 +46,7 @@ def _ecef_dataset(values: np.ndarray | None = None) -> xr.Dataset:
         {"position": (("sample", "axis"), values)},
         coords={"sample": np.arange(values.shape[0]), "axis": ["x", "y", "z"]},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True).unsafe_data.copy(deep=True)
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True).as_dataset(copy="none").copy(deep=True)
 
 
 def _as_dataarray_with_schema(ds: xr.Dataset) -> xr.DataArray:
@@ -101,7 +101,7 @@ def test_geo_core_g1_002_geodetic_position_requires_lla_core_labels() -> None:
 
 def test_geo_core_g1_003_geodetic_metadata_normalizes_defaults() -> None:
     """ID: GEO_CORE_G1_003_geodetic_metadata_normalizes_defaults."""
-    geo = GeodeticPosition(_lla_dataset()).unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo = GeodeticPosition(_lla_dataset()).as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo == {
         "kind": "geodetic_position",
         "crs": "EPSG:4979",
@@ -117,16 +117,16 @@ def test_geo_core_g1_004_lla_to_ecef_known_wgs84_fixture() -> None:
     _require_pyproj()
     lla = GeodeticPosition.from_lla(_lla_dataset(values=np.asarray([[0.0, 0.0, 0.0]])))
     ecef = lla.to_ecef()
-    np.testing.assert_allclose(ecef.unsafe_data["position"], [[6378137.0, 0.0, 0.0]], atol=1e-6)
-    assert list(ecef.unsafe_data["axis"].values) == ["x", "y", "z"]
+    np.testing.assert_allclose(ecef.as_dataset(copy="none")["position"], [[6378137.0, 0.0, 0.0]], atol=1e-6)
+    assert list(ecef.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
 
 
 def test_geo_core_g1_005_ecef_to_lla_known_wgs84_fixture() -> None:
     """ID: GEO_CORE_G1_005_ecef_to_lla_known_wgs84_fixture."""
     _require_pyproj()
     lla = GeodeticPosition.from_ecef(_ecef_dataset())
-    np.testing.assert_allclose(lla.unsafe_data["position"], [[0.0, 0.0, 0.0]], atol=1e-8)
-    assert list(lla.unsafe_data["lla"].values) == ["lat", "lon", "alt"]
+    np.testing.assert_allclose(lla.as_dataset(copy="none")["position"], [[0.0, 0.0, 0.0]], atol=1e-8)
+    assert list(lla.as_dataset(copy="none")["lla"].values) == ["lat", "lon", "alt"]
 
 
 def test_geo_core_g1_006_lla_ecef_roundtrip_within_tolerance() -> None:
@@ -134,20 +134,20 @@ def test_geo_core_g1_006_lla_ecef_roundtrip_within_tolerance() -> None:
     _require_pyproj()
     lla = GeodeticPosition.from_lla(_lla_dataset())
     roundtrip = GeodeticPosition.from_ecef(lla.to_ecef())
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"], atol=1e-6)
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"], atol=1e-6)
 
 
 def test_geo_core_g1_007_conversion_preserves_roles_param_and_validity() -> None:
     """ID: GEO_CORE_G1_007_conversion_preserves_roles_param_and_validity."""
     _require_pyproj()
     ecef = GeodeticPosition(_lla_dataset()).to_ecef()
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ecef.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(ecef.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ()
     assert core_dims == ("axis",)
-    assert read_param_coord_name(ecef.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(ecef.unsafe_data) == "group_size"
+    assert read_param_coord_name(ecef.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(ecef.as_dataset(copy="none")) == "group_size"
 
 
 def test_geo_core_g1_008_conversion_preserves_frame_metadata() -> None:
@@ -155,8 +155,8 @@ def test_geo_core_g1_008_conversion_preserves_frame_metadata() -> None:
     _require_pyproj()
     ds = set_frames(_lla_dataset(), parent="earth_ecef", child="sensor", validate=False)
     ecef = GeodeticPosition(ds).to_ecef()
-    assert get_frames(ecef.unsafe_data) == ("earth_ecef", "sensor")
-    assert ecef.unsafe_data.attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "earth_ecef"
+    assert get_frames(ecef.as_dataset(copy="none")) == ("earth_ecef", "sensor")
+    assert ecef.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "earth_ecef"
 
 
 def test_geo_core_g1_009_conversion_preserves_dask_laziness() -> None:
@@ -165,7 +165,7 @@ def test_geo_core_g1_009_conversion_preserves_dask_laziness() -> None:
     ds = _lla_dataset()
     ds["position"] = ds["position"].copy(data=da.from_array(ds["position"].data, chunks=(1, 3)))
     ecef = GeodeticPosition(ds).to_ecef(validate=False)
-    assert is_dask_collection(ecef.unsafe_data["position"].data)
+    assert is_dask_collection(ecef.as_dataset(copy="none")["position"].data)
 
 
 def test_geo_core_g1_010_from_ecef_accepts_cartesian_position() -> None:
@@ -198,7 +198,7 @@ def test_geo_conversion_orchestration_roundtrips_with_backend_stub(monkeypatch: 
     lla = GeodeticPosition(_lla_dataset(values=values))
     ecef = lla.to_ecef()
     roundtrip = GeodeticPosition.from_ecef(ecef)
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
 def test_geo_from_ecef_opts_none_preserves_inferred_custom_frame(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,10 +211,10 @@ def test_geo_from_ecef_opts_none_preserves_inferred_custom_frame(monkeypatch: py
     ecef = lla.to_ecef(opts=GeodeticOptions(ecef_frame="custom_ecef"))
     roundtrip = GeodeticPosition.from_ecef(ecef)
 
-    assert get_frames(ecef.unsafe_data) == ("custom_ecef", "receiver")
-    assert get_frames(roundtrip.unsafe_data) == ("custom_ecef", "receiver")
-    assert roundtrip.unsafe_data.attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "custom_ecef"
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+    assert get_frames(ecef.as_dataset(copy="none")) == ("custom_ecef", "receiver")
+    assert get_frames(roundtrip.as_dataset(copy="none")) == ("custom_ecef", "receiver")
+    assert roundtrip.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"]["relation"]["expressed_in"] == "custom_ecef"
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
 def test_geo_from_ecef_rejects_superseded_ecef_position_metadata_with_explicit_opts(
@@ -260,7 +260,7 @@ def test_geo_from_ecef_raw_position_allows_explicit_opts_without_geo_metadata(
         Position(_ecef_dataset()),
         opts=GeodeticOptions(ecef_frame=None),
     )
-    np.testing.assert_allclose(lla.unsafe_data["position"], [[6378136.0, -2.0, -3.0]])
+    np.testing.assert_allclose(lla.as_dataset(copy="none")["position"], [[6378136.0, -2.0, -3.0]])
 
 
 def test_geo_from_ecef_raw_position_default_options_without_geo_metadata(
@@ -269,7 +269,7 @@ def test_geo_from_ecef_raw_position_default_options_without_geo_metadata(
     """Direct from_ecef keeps the existing no-provenance default behavior."""
     _install_geo_backend_stub(monkeypatch)
     lla = GeodeticPosition.from_ecef(Position(_ecef_dataset()))
-    np.testing.assert_allclose(lla.unsafe_data["position"], [[6378136.0, -2.0, -3.0]])
+    np.testing.assert_allclose(lla.as_dataset(copy="none")["position"], [[6378136.0, -2.0, -3.0]])
 
 
 def test_geo_core_g1_011_geo_optional_dependency_group_declared() -> None:

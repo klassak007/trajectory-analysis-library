@@ -170,7 +170,7 @@ class ParamAccessor:
         ...     validate=True,
         ... )
         >>> selected = ao.param.sel([0.2, 1.8], on="time", opts=ParamSelectOptions(method="nearest"))
-        >>> selected.unsafe_data["value"].values.tolist()
+        >>> selected.as_dataset()["value"].values.tolist()
         [0.0, 4.0]
         """
         from .select import select_param
@@ -245,7 +245,7 @@ class ParamAccessor:
         ...     validate=True,
         ... )
         >>> out = ao.param.at([0.5, 1.5], on="time", opts=ParamEvalOptions(method="linear"))
-        >>> out.unsafe_data["value"].values.tolist()
+        >>> out.as_dataset()["value"].values.tolist()
         [0.5, 2.5]
         """
         from .evaluate import evaluate_param
@@ -320,7 +320,7 @@ class ParamAccessor:
         ...     validate=True,
         ... )
         >>> out = ao.param.resample_to([0.0, 0.5, 1.0], on="time", opts=ParamEvalOptions(method="linear"))
-        >>> out.unsafe_data["value"].values.tolist()
+        >>> out.as_dataset()["value"].values.tolist()
         [0.0, 0.5, 1.0]
         """
         from .resample import resample_param
@@ -405,7 +405,7 @@ class ParamAccessor:
         ...     validate=True,
         ... )
         >>> out = source.param.interp_like(target, on="time", opts=ParamEvalOptions(method="linear"))
-        >>> out.unsafe_data["value"].values.tolist()
+        >>> out.as_dataset()["value"].values.tolist()
         [0.0, 4.0]
         """
         from .interp_like import interp_like_param

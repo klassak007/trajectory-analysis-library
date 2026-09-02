@@ -542,7 +542,7 @@ def test_event_cond_014_scalar_operand_dtype_independent_of_context_clock(clock:
     """ID: EVENT_COND_014_scalar_operand_dtype_independent_of_context_clock."""
     ao = _ao_with_clock(clock)
     scalar = np.float32(0.5)
-    context_clock = ao.unsafe_data.coords["time"]
+    context_clock = ao.as_dataset(copy="none").coords["time"]
     resolved = event_eval_mod._broadcast_scalar_operand(
         scalar,
         clock=context_clock,
@@ -605,7 +605,7 @@ def test_event_cond_017_scalar_metadata_does_not_leak_into_mask() -> None:
         core_dims=(),
         param_coord="time",
     )
-    clock = ao.unsafe_data.coords["time"]
+    clock = ao.as_dataset(copy="none").coords["time"]
     scalar = event_eval_mod._broadcast_scalar_operand(
         np.float32(0.5),
         clock=clock,
@@ -690,7 +690,7 @@ def test_event_perf_002_invalid_scalar_fails_before_broadcast(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ID: EVENT_PERF_002_invalid_scalar_fails_before_broadcast."""
-    clock = _ao_with_clock(np.asarray([0, 1], dtype="int64")).unsafe_data.coords["time"]
+    clock = _ao_with_clock(np.asarray([0, 1], dtype="int64")).as_dataset(copy="none").coords["time"]
 
     def reject_broadcast(*args: object, **kwargs: object) -> xr.DataArray:
         raise AssertionError("invalid scalar must fail before xr.full_like")
@@ -745,7 +745,7 @@ def test_event_perf_001_scalar_operand_broadcast_preserves_dask_laziness(
         raise AssertionError("unexpected eager compute")
 
     monkeypatch.setattr(da.Array, "compute", _fail_compute, raising=True)
-    context_clock = ao.unsafe_data.coords["time"]
+    context_clock = ao.as_dataset(copy="none").coords["time"]
     scalar_operand = event_eval_mod._broadcast_scalar_operand(
         np.float32(0.5),
         clock=context_clock,

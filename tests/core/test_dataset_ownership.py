@@ -12,13 +12,13 @@ import xarray as xr
 
 from tal.core import AnalysisObject
 from tal.core.dataset_ownership import (
+    analysis_object_dataset,
     coerce_dataset_copy_mode,
     dataset_to_dataarray_view,
     dataset_view,
     deep_public_dataset,
     isolate_external_dataset,
     metadata_isolated_dataset,
-    raw_dataset_reference,
 )
 
 
@@ -170,11 +170,9 @@ def test_dataset_ownership_004_copy_views_do_not_steal_close_callback() -> None:
     shallow.close()
     assert closed == []
 
-    raw = raw_dataset_reference(source)
-    assert raw is source
     assert dataset_view(source, copy="none", owner="ownership.test") is source
-    raw.close()
-    raw.close()
+    source.close()
+    source.close()
     assert closed == ["source"]
 
 
@@ -203,6 +201,11 @@ class _TaskCounter(Callback):
 
     def _record(self, key: object, _dsk: object, _state: object) -> None:
         self.keys.append(key)
+
+
+class _CopyBomb:
+    def __deepcopy__(self, _memo: dict[int, object]) -> object:
+        raise RuntimeError("irrelevant metadata was copied")
 
 
 def test_dataset_ownership_006_dask_views_remain_lazy() -> None:
@@ -263,6 +266,48 @@ def test_dataset_ownership_007_dataarray_conversion_uses_same_modes() -> None:
     assert source.coords["sample"].encoding["nested"]["items"] == [
         "sample-encoding"
     ]
+
+
+@pytest.mark.parametrize("mode", ["deep", "shallow", "none"])
+def test_dataset_ownership_016_dataarray_cardinality_precedes_copy(
+    mode: str,
+) -> None:
+    """ID: DATASET_OWNERSHIP_016_dataarray_cardinality_precedes_copy."""
+    source = xr.Dataset(
+        {"left": ("sample", [1.0]), "right": ("sample", [2.0])},
+        attrs={"copy_bomb": _CopyBomb()},
+    )
+
+    with pytest.raises(ValueError, match="requires exactly one data variable"):
+        dataset_to_dataarray_view(
+            source,
+            name=None,
+            copy=mode,  # type: ignore[arg-type]
+            owner="ownership.test",
+        )
+
+
+@pytest.mark.parametrize("mode", ["deep", "shallow"])
+def test_dataset_ownership_017_dataarray_copy_lowers_projection_first(
+    mode: str,
+) -> None:
+    """ID: DATASET_OWNERSHIP_017_dataarray_copy_lowers_projection_first."""
+    source = xr.Dataset(
+        {"value": ("sample", [1.0, 2.0])},
+        coords={"sample": [0, 1], "unused": ("other", [3.0])},
+        attrs={"copy_bomb": _CopyBomb()},
+    )
+    source.coords["unused"].attrs["copy_bomb"] = _CopyBomb()
+
+    out = dataset_to_dataarray_view(
+        source,
+        name=None,
+        copy=mode,  # type: ignore[arg-type]
+        owner="ownership.test",
+    )
+
+    assert tuple(out.coords) == ("sample",)
+    assert "copy_bomb" not in out.attrs
 
 
 def test_dataset_ownership_008_deep_view_preserves_pandas_index_subclass() -> None:
@@ -369,7 +414,8 @@ def test_dataset_ownership_011_indexed_ingress_is_detached(
     expected = _coordinate_snapshots(source)
 
     ao = construct(source)
-    backing = ao.unsafe_data
+    backing = analysis_object_dataset(ao)
+    assert backing is ao.as_dataset(copy="none")
     _assert_index_groups_detached(source, backing)
     _mutate_index_coordinates(source)
 
@@ -387,9 +433,9 @@ def test_dataset_ownership_012_public_deep_views_detach_index_groups(
 ) -> None:
     """ID: DATASET_OWNERSHIP_012_public_deep_views_detach_index_groups."""
     ao = AnalysisObject(build_source())
-    backing = ao.unsafe_data
+    backing = analysis_object_dataset(ao)
     expected = _coordinate_snapshots(backing)
-    views = (ao.data, ao.as_dataset(), ao.to_dataarray())
+    views = (ao.as_dataset(), ao.to_dataarray())
 
     for view in views:
         _assert_index_groups_detached(backing, view)

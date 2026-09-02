@@ -53,7 +53,7 @@ def _grouping_bins_with_na_ao() -> AnalysisObject:
 def test_group_core_p9b_002_padded_layout_preserves_ragged_schema_truthfulness() -> None:
     """ID: GROUP_CORE_P9B_002_padded_layout_preserves_ragged_schema_truthfulness."""
     ao = _grouping_ao()
-    out = ao.group.groupby("label").padded().unsafe_data
+    out = ao.group.groupby("label").padded().as_dataset(copy="none")
     declared, sequence_dim, batch_dims, core_dims = read_roles(out)
     assert declared
     assert sequence_dim == "sample"
@@ -73,7 +73,7 @@ def test_group_core_p9b_002_padded_layout_preserves_ragged_schema_truthfulness()
 def test_group_core_p9b_003_stacked_layout_is_deterministic_and_schema_safe() -> None:
     """ID: GROUP_CORE_P9B_003_stacked_layout_is_deterministic_and_schema_safe."""
     ao = _grouping_ao()
-    out = ao.group.groupby("label").stacked().unsafe_data
+    out = ao.group.groupby("label").stacked().as_dataset(copy="none")
     declared, sequence_dim, batch_dims, core_dims = read_roles(out)
     assert declared
     assert sequence_dim == "group_member"
@@ -104,7 +104,7 @@ def test_group_core_p9b_003_stacked_layout_is_deterministic_and_schema_safe() ->
 def test_group_core_p9b_005_group_and_member_ordering_are_stable_and_deterministic() -> None:
     """ID: GROUP_CORE_P9B_005_group_and_member_ordering_are_stable_and_deterministic."""
     ao = _grouping_ao()
-    out = ao.group.groupby_bins("time_s", bins=np.array([-0.5, 0.5, 1.5, 2.5], dtype=float)).padded().unsafe_data
+    out = ao.group.groupby_bins("time_s", bins=np.array([-0.5, 0.5, 1.5, 2.5], dtype=float)).padded().as_dataset(copy="none")
     np.testing.assert_array_equal(out.coords["group_key"].to_numpy(), np.array([0.0, 1.0, 2.0], dtype=float))
     signal = out["signal"].to_numpy()
     np.testing.assert_allclose(signal[0], np.array([11.0, 21.0], dtype=float), equal_nan=True)
@@ -114,7 +114,7 @@ def test_group_core_p9b_005_group_and_member_ordering_are_stable_and_determinist
 
 def test_group_core_p9b_009_padded_sequence_coord_uses_member_rank_not_source_labels() -> None:
     """ID: GROUP_CORE_P9B_009_padded_sequence_coord_uses_member_rank_not_source_labels."""
-    source = _grouping_ao().unsafe_data
+    source = _grouping_ao().as_dataset(copy="none")
     ao = AnalysisObject.from_data(
         source.assign_coords({"sample": np.array([10, 20, 30], dtype=int)}),
         sequence_dim="sample",
@@ -122,7 +122,7 @@ def test_group_core_p9b_009_padded_sequence_coord_uses_member_rank_not_source_la
         core_dims=(),
         param_coord="time_s",
     )
-    out = ao.group.groupby("label").padded().unsafe_data
+    out = ao.group.groupby("label").padded().as_dataset(copy="none")
     np.testing.assert_array_equal(out.coords["sample"].to_numpy(), np.array([0, 1, 2], dtype=np.int64))
     np.testing.assert_allclose(
         out["signal"].sel(group_key="A").to_numpy(),
@@ -138,7 +138,7 @@ def test_group_core_p9b_010_groupby_bins_custom_labels_preserve_interval_order()
         "time_s",
         bins=np.array([-0.5, 0.5, 1.5, 2.5], dtype=float),
         labels=["low", "mid", "high"],
-    ).padded().unsafe_data
+    ).padded().as_dataset(copy="none")
     np.testing.assert_array_equal(out.coords["group_key"].to_numpy(), np.array(["low", "mid", "high"], dtype=object))
 
 
@@ -150,10 +150,10 @@ def test_group_core_p9b_011_include_empty_groups_controls_bin_universe_for_padde
     grouped = ao.group.groupby_bins("time_s", bins=bins, labels=labels)
     keep_empty = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=True)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     drop_empty = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     np.testing.assert_array_equal(
         keep_empty.coords["group_key"].to_numpy(),
         np.array(["low", "mid", "high", "very_high"], dtype=object),
@@ -172,7 +172,7 @@ def test_group_core_p9b_011_include_empty_groups_controls_bin_universe_for_padde
     keep_empty_batch = grouped_preserve.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=True),
         validate=True,
-    ).unsafe_data
+    ).as_dataset(copy="none")
     np.testing.assert_array_equal(
         keep_empty_batch.coords["group_key"].to_numpy(),
         np.array(["low", "mid", "high", "very_high"], dtype=object),
@@ -196,10 +196,10 @@ def test_group_core_p9b_012_groupby_bins_group_na_retains_na_label_and_members()
     )
     out_drop = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     out_keep = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=True)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     np.testing.assert_array_equal(
         out_drop.coords["group_key"].to_numpy(),
         np.array(["low", "mid", "NA"], dtype=object),
@@ -235,7 +235,7 @@ def test_group_core_p9b_013_bin_domain_labels_precede_observed_non_domain_labels
     )
     out = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     np.testing.assert_array_equal(
         out.coords["group_key"].to_numpy(),
         np.array([0.0, 1.0, "NA"], dtype=object),
@@ -254,7 +254,7 @@ def test_group_hard_p9b_004_include_empty_groups_false_excludes_globally_empty_b
         opts=GroupByOptions(preserve_batch=True),
     ).padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     assert "very_high" not in set(out.coords["group_key"].to_numpy().tolist())
 
 
@@ -274,7 +274,7 @@ def test_group_hard_p9b_005_include_empty_groups_false_keeps_observed_na_group_l
     )
     out = grouped.padded(
         opts=GroupMaterializeOptions(layout="padded", include_empty_groups=False)
-    ).unsafe_data
+    ).as_dataset(copy="none")
     values = out.coords["group_key"].to_numpy().tolist()
     assert "high" not in values
     assert "NA" in values
@@ -283,7 +283,7 @@ def test_group_hard_p9b_005_include_empty_groups_false_keeps_observed_na_group_l
 def test_group_core_p9b_006_generated_grouping_names_are_stable_by_contract() -> None:
     """ID: GROUP_CORE_P9B_006_generated_grouping_names_are_stable_by_contract."""
     ao = _grouping_ao()
-    out = ao.group.groupby("label").stacked().unsafe_data
+    out = ao.group.groupby("label").stacked().as_dataset(copy="none")
     assert "group_key" in out.coords
     assert "group_member" in out.dims
     assert "sequence_index" in out.coords
@@ -292,7 +292,7 @@ def test_group_core_p9b_006_generated_grouping_names_are_stable_by_contract() ->
 def test_group_core_p9b_007_preserve_batch_padded_uses_global_group_key_union() -> None:
     """ID: GROUP_CORE_P9B_007_preserve_batch_padded_uses_global_group_key_union."""
     ao = _grouping_ao()
-    out = ao.group.groupby("label", opts=GroupByOptions(preserve_batch=True)).padded().unsafe_data
+    out = ao.group.groupby("label", opts=GroupByOptions(preserve_batch=True)).padded().as_dataset(copy="none")
     declared, sequence_dim, batch_dims, _ = read_roles(out)
     assert declared
     assert sequence_dim == "sample"
@@ -311,7 +311,7 @@ def test_group_core_p9b_007_preserve_batch_padded_uses_global_group_key_union() 
 def test_group_core_p9b_008_preserve_batch_stacked_keeps_batch_dims_and_provenance() -> None:
     """ID: GROUP_CORE_P9B_008_preserve_batch_stacked_keeps_batch_dims_and_provenance."""
     ao = _grouping_ao()
-    out = ao.group.groupby("label", opts=GroupByOptions(preserve_batch=True)).stacked().unsafe_data
+    out = ao.group.groupby("label", opts=GroupByOptions(preserve_batch=True)).stacked().as_dataset(copy="none")
     declared, sequence_dim, batch_dims, _ = read_roles(out)
     assert declared
     assert sequence_dim == "group_member"

@@ -6,6 +6,7 @@ from collections.abc import Callable
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.schema_errors import SchemaError
 from tal.frames import Frame, FrameGraph, find_path, fold_path, get_active_frame_graph
@@ -145,13 +146,14 @@ def _normalize_rotation_edge(
         rotation = rotation.as_quat(validate=False)
     except (TypeError, ValueError, SchemaError) as exc:
         raise ValueError(f"{owner}: edge resolver must return Rotation-coercible payload.") from exc
-    edge_parent, edge_child = get_frames(rotation.unsafe_data)
+    source = analysis_object_dataset(rotation)
+    edge_parent, edge_child = get_frames(source)
     if strict and is_framed(edge_parent, edge_child) and (edge_parent, edge_child) != (parent.id, child.id):
         raise ValueError(
             f"{owner}: framed edge payload must match (parent={parent.id!r}, child={child.id!r}); "
             f"got {(edge_parent, edge_child)!r}."
         )
-    cleared = set_frames(rotation.unsafe_data, parent=None, child=None, validate=False)
+    cleared = set_frames(source, parent=None, child=None, validate=False)
     return Rotation._from_unvalidated(cleared)
 
 
@@ -168,13 +170,14 @@ def _normalize_pose_edge(
         pose = pose.as_components(validate=False)
     except (TypeError, ValueError, SchemaError) as exc:
         raise ValueError(f"{owner}: edge resolver must return Pose-coercible payload.") from exc
-    edge_parent, edge_child = get_frames(pose.unsafe_data)
+    source = analysis_object_dataset(pose)
+    edge_parent, edge_child = get_frames(source)
     if strict and is_framed(edge_parent, edge_child) and (edge_parent, edge_child) != (parent.id, child.id):
         raise ValueError(
             f"{owner}: framed edge payload must match (parent={parent.id!r}, child={child.id!r}); "
             f"got {(edge_parent, edge_child)!r}."
         )
-    cleared = set_frames(pose.unsafe_data, parent=None, child=None, validate=False)
+    cleared = set_frames(source, parent=None, child=None, validate=False)
     return Pose._from_unvalidated(cleared)
 
 
@@ -186,7 +189,7 @@ def _rotation_identity(*, parent: str, child: str, owner: str) -> Rotation:
         name="rotation",
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name="rotation"), sequence_dim="sample", core_dims=("quat",), validate=True)
-    ds = set_rotation_rep(ao.unsafe_data, rep="quat", validate=False, owner=owner)
+    ds = set_rotation_rep(analysis_object_dataset(ao), rep="quat", validate=False, owner=owner)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
     return Rotation._from_validated(ds)
 
@@ -202,7 +205,7 @@ def _pose_identity(*, parent: str, child: str, owner: str) -> Pose:
     position = Position(ao)
     rotation = _rotation_identity(parent=parent, child=child, owner=owner)
     pose = Pose.from_components(rotation, position, validate=False).as_components(validate=False)
-    ds = set_pose_rep(pose.unsafe_data, rep="components", validate=False, owner=owner)
+    ds = set_pose_rep(analysis_object_dataset(pose), rep="components", validate=False, owner=owner)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
     return Pose._from_validated(ds)
 
@@ -262,7 +265,7 @@ def solve_rotation_path_transform_impl(
     )
     if result is None:
         return _rotation_identity(parent=dst_frame.id, child=src_frame.id, owner=owner)
-    out = set_rotation_rep(result.unsafe_data, rep="quat", validate=False, owner=owner)
+    out = set_rotation_rep(analysis_object_dataset(result), rep="quat", validate=False, owner=owner)
     out = set_frames(out, parent=dst_frame.id, child=src_frame.id, validate=False)
     return Rotation._from_validated(out)
 
@@ -310,7 +313,7 @@ def solve_pose_path_transform_impl(
     )
     if result is None:
         return _pose_identity(parent=dst_frame.id, child=src_frame.id, owner=owner)
-    out = set_pose_rep(result.unsafe_data, rep="components", validate=False, owner=owner)
+    out = set_pose_rep(analysis_object_dataset(result), rep="components", validate=False, owner=owner)
     out = set_frames(out, parent=dst_frame.id, child=src_frame.id, validate=False)
     return Pose._from_validated(out)
 

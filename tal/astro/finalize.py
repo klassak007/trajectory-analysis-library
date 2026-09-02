@@ -3,6 +3,7 @@ from __future__ import annotations
 import xarray as xr
 
 from tal.core import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
 
 from .direction import TopocentricDirection
@@ -55,7 +56,7 @@ def finalize_topocentric_direction(
         optional_sources=_optional_sources(context),
     )
     normalized = normalize_topocentric_metadata(
-        finalized.unsafe_data,
+        analysis_object_dataset(finalized),
         backend=backend,
         time_scale=time_scale or context.time.scale,
         validate=False,

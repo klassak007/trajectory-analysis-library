@@ -57,17 +57,21 @@ Key rules:
 - When no roles are declared, runtime consumers treat the object as core-only
   by default.
 
-## Data Access
+## Data Access and Lifetime
 
-| Attribute or Method | Contract |
+| Method | Contract |
 | --- | --- |
-| `ao.data` | Mutation-safe deep copy of the underlying dataset. |
-| `ao.as_dataset()` | Mutation-safe dataset copy. |
-| `ao.unsafe_data` | Internal backing dataset reference for low-level inspection. |
-| `ao.to_dataarray(name=None)` | Convert a single-variable AO to a `DataArray`; multi-variable datasets fail. |
+| `ao.as_dataset()` | Deep, mutation-safe snapshot; Dask arrays remain lazy and non-owning. |
+| `ao.as_dataset(copy="shallow")` | Independent xarray structure and metadata sharing payload buffers or graphs. |
+| `ao.as_dataset(copy="none")` | Exact backing Dataset; mutation and closing affect the AO. |
+| `ao.to_dataarray(name=None, copy="deep")` | Apply the same copy policy to a single-variable conversion. |
+| `ao.close()` | Release a lazy backing resource at most once. |
 
-Prefer `ao.data` in notebooks and user code. Use `ao.unsafe_data` only when you
-need to inspect the exact backing store or schema consumed by operations.
+Prefer the default deep snapshot in user code. Use shallow mode for deliberate
+read-only zero-copy interoperation. Raw mode is an expert ownership crossing:
+the returned Dataset is the AO's backing object. Deep/shallow lazy views and
+all lazy DataArray facades require the source AO to remain open until their
+work completes.
 
 ## Accessors
 
@@ -181,6 +185,7 @@ safety and hashability.
    tal.AnalysisObject
    tal.AnalysisObject.as_dataset
    tal.AnalysisObject.to_dataarray
+   tal.AnalysisObject.close
    tal.AnalysisObject.isel
    tal.AnalysisObject.sel
    tal.AnalysisObject.where

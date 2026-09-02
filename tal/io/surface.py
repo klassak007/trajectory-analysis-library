@@ -65,9 +65,9 @@ class AnalysisObjectIOAccessor:
         ...         str(store), opts=AOZarrReadOptions(chunks={})
         ...     )
         ...     try:
-        ...         values = loaded.unsafe_data["value"].compute().values.tolist()
+        ...         values = loaded.as_dataset()["value"].compute().values.tolist()
         ...     finally:
-        ...         loaded.unsafe_data.close()
+        ...         loaded.close()
         >>> values
         [1.0, 2.0]
         """
@@ -128,9 +128,9 @@ def _from_zarr(
     ...         str(store), opts=AOZarrReadOptions(chunks={})
     ...     )
     ...     try:
-    ...         values = loaded.unsafe_data["value"].compute().values.tolist()
+    ...         values = loaded.as_dataset()["value"].compute().values.tolist()
     ...     finally:
-    ...         loaded.unsafe_data.close()
+    ...         loaded.close()
     >>> values
     [1.0, 2.0]
     """

@@ -28,7 +28,7 @@ def _make_tagged_ao(*, parent: str = "world", child: str = "camera") -> Analysis
 
 
 def _with_invalid_roles(ao: AnalysisObject) -> AnalysisObject:
-    broken_ds = ao.unsafe_data.copy(deep=True)
+    broken_ds = ao.as_dataset(copy="none").copy(deep=True)
     broken_tal = dict(broken_ds.attrs["tal"])
     broken_core = dict(broken_tal.get("core", {}))
     broken_core["roles"] = {"sequence_dim": 123, "batch_dims": [], "core_dims": []}
@@ -186,7 +186,7 @@ def test_frame_hard_024_ao_frames_rename_frame_atomic_no_graph_mutation_on_metad
     graph = FrameGraph()
     frame_bind(ao, graph=graph, create_missing=True, on_conflict="error")
 
-    broken_ds = ao.unsafe_data.copy(deep=True)
+    broken_ds = ao.as_dataset(copy="none").copy(deep=True)
     broken_tal = dict(broken_ds.attrs["tal"])
     broken_ext = dict(broken_tal.get("ext", {}))
     broken_frames = dict(broken_ext.get("frames", {}))

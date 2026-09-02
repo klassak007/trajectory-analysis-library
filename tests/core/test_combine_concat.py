@@ -134,10 +134,10 @@ def test_combine_concat_batch_001_new_outer_batch_dim_roles_updated() -> None:
         sizes=[3, 3],
     )
     out = left.combine.concat_batch([right], opts=BatchConcatOptions(batch_dim="session", sequence_join="inner"))
-    roles = out.data.attrs["tal"]["core"]["roles"]
+    roles = out.as_dataset().attrs["tal"]["core"]["roles"]
     assert roles["sequence_dim"] == "sample"
     assert roles["batch_dims"] == ["session", "trial"]
-    assert "session" in out.data.dims
+    assert "session" in out.as_dataset().dims
 
 
 def test_combine_concat_batch_002_batch_labels_validation() -> None:
@@ -157,12 +157,12 @@ def test_combine_concat_batch_003_param_coord_shared_vs_batched_shape() -> None:
     shared_a = _ao_unbatched(tau=[0.0, 1.0, 2.0], value=[0.0, 1.0, 2.0])
     shared_b = _ao_unbatched(tau=[0.0, 1.0, 2.0], value=[10.0, 11.0, 12.0])
     shared = shared_a.combine.concat_batch([shared_b], opts=BatchConcatOptions(batch_dim="session"))
-    assert tuple(shared.data.coords["tau"].dims) == ("sample",)
+    assert tuple(shared.as_dataset().coords["tau"].dims) == ("sample",)
     varied = shared_a.combine.concat_batch(
         [_ao_unbatched(tau=[3.0, 4.0, 5.0], value=[10.0, 11.0, 12.0])],
         opts=BatchConcatOptions(batch_dim="session"),
     )
-    assert tuple(varied.data.coords["tau"].dims) == ("session", "sample")
+    assert tuple(varied.as_dataset().coords["tau"].dims) == ("session", "sample")
 
 
 def test_combine_concat_batch_004_validity_truthful_after_outer_sequence_join() -> None:
@@ -180,10 +180,10 @@ def test_combine_concat_batch_004_validity_truthful_after_outer_sequence_join() 
         sizes=[2],
     )
     out = left.combine.concat_batch([right], opts=BatchConcatOptions(batch_dim="session", sequence_join="outer"))
-    core = out.data.attrs["tal"]["core"]
+    core = out.as_dataset().attrs["tal"]["core"]
     assert core["validity"]["sequence_size_coord"] == "group_size"
-    np.testing.assert_array_equal(out.data.coords["group_size"].sel(session=0).values, [3, 0])
-    np.testing.assert_array_equal(out.data.coords["group_size"].sel(session=1).values, [0, 2])
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].sel(session=0).values, [3, 0])
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].sel(session=1).values, [0, 2])
 
 
 def test_combine_concat_batch_005_preserve_declared_scalar_sequence_size_on_batch_concat() -> None:
@@ -201,8 +201,8 @@ def test_combine_concat_batch_005_preserve_declared_scalar_sequence_size_on_batc
         size_name="n_valid",
     )
     out = left.combine.concat_batch([right], opts=BatchConcatOptions(batch_dim="session"))
-    np.testing.assert_array_equal(out.data.coords["n_valid"].values, [2, 3])
-    assert out.data.attrs["tal"]["core"]["validity"]["sequence_size_coord"] == "n_valid"
+    np.testing.assert_array_equal(out.as_dataset().coords["n_valid"].values, [2, 3])
+    assert out.as_dataset().attrs["tal"]["core"]["validity"]["sequence_size_coord"] == "n_valid"
 
 
 def test_combine_concat_seq_001_append_lengths_sum_to_sequence_size() -> None:
@@ -220,7 +220,7 @@ def test_combine_concat_seq_001_append_lengths_sum_to_sequence_size() -> None:
         sizes=[2, 1],
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(batch_join="inner", overlap="error"))
-    np.testing.assert_array_equal(out.data.coords["group_size"].values, [5, 3])
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].values, [5, 3])
 
 
 def test_combine_concat_seq_002_overlap_error_boundary_check() -> None:
@@ -258,8 +258,8 @@ def test_combine_concat_seq_004_overlap_sort_masks_invalid_padding() -> None:
         sizes=[2, 1],
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(batch_join="inner", overlap="sort"))
-    assert bool(out.data.coords["valid"].sel(trial="b").isel(sample=3).item()) is False
-    assert np.isnan(out.data["value"].sel(trial="b").isel(sample=3).item())
+    assert bool(out.as_dataset().coords["valid"].sel(trial="b").isel(sample=3).item()) is False
+    assert np.isnan(out.as_dataset()["value"].sel(trial="b").isel(sample=3).item())
 
 
 def test_combine_concat_seq_016_overlap_sort_keeps_invalid_tail_stable() -> None:
@@ -348,7 +348,7 @@ def test_combine_concat_seq_006_no_internal_invalid_gaps_after_packing() -> None
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(batch_join="inner", overlap="error"))
     for trial in ["a", "b"]:
-        valid = np.asarray(out.data.coords["valid"].sel(trial=trial).values, dtype=bool)
+        valid = np.asarray(out.as_dataset().coords["valid"].sel(trial=trial).values, dtype=bool)
         if not valid.size:
             continue
         false_idx = np.flatnonzero(~valid)
@@ -373,8 +373,8 @@ def test_combine_concat_seq_007_invalid_tail_only_and_sequence_coords_masked() -
         sizes=[2, 1],
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(batch_join="inner", overlap="error"))
-    assert bool(out.data.coords["valid"].sel(trial="b", sample=3).item()) is False
-    assert np.isnan(out.data.coords["tau"].sel(trial="b", sample=3).item())
+    assert bool(out.as_dataset().coords["valid"].sel(trial="b", sample=3).item()) is False
+    assert np.isnan(out.as_dataset().coords["tau"].sel(trial="b", sample=3).item())
 
 
 def test_combine_concat_batch_006_duplicate_sequence_labels_fail_fast_tal_error() -> None:
@@ -415,7 +415,7 @@ def test_combine_concat_seq_008_temp_dim_namespace_collisions_avoided() -> None:
     left = AnalysisObject.from_data(ds_a, sequence_dim="sample", batch_dims=(), core_dims=(), param_coord="tau")
     right = AnalysisObject.from_data(ds_b, sequence_dim="sample", batch_dims=(), core_dims=(), param_coord="tau")
     out = left.combine.concat_sequence([right], opts=SequenceConcatOptions(overlap="error"))
-    np.testing.assert_allclose(out.data["value"].values, [0.0, 1.0, 2.0, 3.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [0.0, 1.0, 2.0, 3.0])
 
 
 def test_combine_concat_seq_009_duplicate_batch_labels_fail_fast_tal_error() -> None:
@@ -458,9 +458,9 @@ def test_combine_concat_seq_010_multi_batch_join_mixed_topology_tal_owned() -> N
         [unbatched],
         opts=SequenceConcatOptions(batch_join="outer", overlap="error"),
     )
-    assert set(out.data["value"].dims) == {"trial", "sensor", "sample"}
-    assert out.data.sizes["sample"] == 5
-    np.testing.assert_allclose(out.data["value"].sel(trial="a", sensor="s0").values, [0.0, 1.0, 2.0, 30.0, 40.0])
+    assert set(out.as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
+    assert out.as_dataset().sizes["sample"] == 5
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="a", sensor="s0").values, [0.0, 1.0, 2.0, 30.0, 40.0])
 
 
 def test_orch_topo_parity_004_concat_topology_restore_behavior_parity() -> None:
@@ -477,9 +477,9 @@ def test_orch_topo_parity_004_concat_topology_restore_behavior_parity() -> None:
         offset=50.0,
     )
     out = grouped.combine.concat_sequence([other], opts=SequenceConcatOptions(batch_join="inner", overlap="error"))
-    assert set(out.data["value"].dims) == {"trial", "sensor", "sample"}
-    assert list(out.data.coords["trial"].values) == ["a", "b"]
-    assert list(out.data.coords["sensor"].values) == ["s0", "s1"]
+    assert set(out.as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
+    assert list(out.as_dataset().coords["trial"].values) == ["a", "b"]
+    assert list(out.as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_combine_concat_batch_007_mixed_topology_order_independent() -> None:
@@ -498,10 +498,10 @@ def test_combine_concat_batch_007_mixed_topology_order_independent() -> None:
     opts = BatchConcatOptions(batch_dim="run", sequence_join="inner")
     out_a = grouped.combine.concat_batch([unbatched], opts=opts)
     out_b = unbatched.combine.concat_batch([grouped], opts=opts)
-    assert {"run", "trial", "sample"} <= set(out_a.data.dims)
-    assert {"run", "trial", "sample"} <= set(out_b.data.dims)
-    assert out_a.data.sizes["run"] == 2
-    assert out_b.data.sizes["run"] == 2
+    assert {"run", "trial", "sample"} <= set(out_a.as_dataset().dims)
+    assert {"run", "trial", "sample"} <= set(out_b.as_dataset().dims)
+    assert out_a.as_dataset().sizes["run"] == 2
+    assert out_b.as_dataset().sizes["run"] == 2
 
 
 def test_combine_meta_001_param_coord_dim_permutation_preserved() -> None:
@@ -586,11 +586,11 @@ def test_combine_concat_seq_011_outer_synthetic_rows_invalid_without_size_coord(
         values=[[20.0, 21.0]],
     )
     out = left.combine.concat_sequence([right], opts=SequenceConcatOptions(batch_join="outer", overlap="error"))
-    assert out.data.sizes["sample"] == 2
-    np.testing.assert_array_equal(out.data.coords["valid"].sel(trial="a").values, [True, True])
-    np.testing.assert_array_equal(out.data.coords["valid"].sel(trial="b").values, [True, True])
-    np.testing.assert_allclose(out.data["value"].sel(trial="a").values, [0.0, 1.0])
-    np.testing.assert_allclose(out.data["value"].sel(trial="b").values, [20.0, 21.0])
+    assert out.as_dataset().sizes["sample"] == 2
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].sel(trial="a").values, [True, True])
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].sel(trial="b").values, [True, True])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="a").values, [0.0, 1.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="b").values, [20.0, 21.0])
 
 
 def test_combine_concat_seq_012_overlap_error_checks_across_empty_segments() -> None:
@@ -623,8 +623,8 @@ def test_combine_concat_seq_013_sort_empty_batch_topology_no_crash() -> None:
         sequence_size_coord="group_size",
     )
     out = empty.combine.concat_sequence([empty], opts=SequenceConcatOptions(batch_join="inner", overlap="sort"))
-    assert out.data.sizes["trial"] == 0
-    assert out.data.sizes["sample"] == 0
+    assert out.as_dataset().sizes["trial"] == 0
+    assert out.as_dataset().sizes["sample"] == 0
 
 
 def test_combine_concat_seq_014_unbatched_scalar_sequence_size_respected() -> None:
@@ -640,9 +640,9 @@ def test_combine_concat_seq_014_unbatched_scalar_sequence_size_respected() -> No
         size=2,
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(overlap="error"))
-    assert out.data.sizes["sample"] == 4
-    np.testing.assert_allclose(out.data["value"].values, [0.0, 1.0, 10.0, 11.0])
-    assert int(out.data.coords["group_size"].item()) == 4
+    assert out.as_dataset().sizes["sample"] == 4
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [0.0, 1.0, 10.0, 11.0])
+    assert int(out.as_dataset().coords["group_size"].item()) == 4
 
 
 def test_combine_concat_seq_015_overlap_error_rejects_non_finite_param() -> None:
@@ -736,7 +736,7 @@ def test_combine_concat_seq_019_outer_missing_rows_size_coord_does_not_false_fai
         sizes=[1],
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(batch_join="outer", overlap="error"))
-    sizes = out.data.coords["group_size"]
+    sizes = out.as_dataset().coords["group_size"]
     assert int(sizes.sel(trial="a").item()) == 3
     assert int(sizes.sel(trial="b").item()) == 1
 
@@ -756,7 +756,7 @@ def test_combine_concat_seq_020_outer_missing_rows_label_mapping_is_by_label_not
         sizes=[1, 2],
     )
     out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(batch_join="outer", overlap="error"))
-    sizes = out.data.coords["group_size"]
+    sizes = out.as_dataset().coords["group_size"]
     assert int(sizes.sel(trial="a").item()) == 4
     assert int(sizes.sel(trial="b").item()) == 1
     assert int(sizes.sel(trial="c").item()) == 1
@@ -888,11 +888,11 @@ def test_combine_concat_seq_022_valid_reserved_owned_after_concat_sequence() -> 
     left = _ao_unbatched(tau=[0.0, 2.0], value=[1.0, 2.0], size=2)
     right = _ao_unbatched(tau=[1.0, 3.0], value=[10.0, 20.0], size=2)
     out = left.combine.concat_sequence([right], opts=SequenceConcatOptions(overlap="sort"))
-    attrs = out.unsafe_data.coords["valid"].attrs
+    attrs = out.as_dataset(copy="none").coords["valid"].attrs
     assert attrs.get("tal_reserved_owner") == "param_ops"
     assert attrs.get("tal_reserved_name") == "valid"
     chained = out.param.sel([0.5, 2.5])
-    np.testing.assert_array_equal(chained.data.coords["valid"].values, [True, True])
+    np.testing.assert_array_equal(chained.as_dataset().coords["valid"].values, [True, True])
 
 
 def test_combine_concat_seq_023_unbatched_concat_sequence_drops_internal_flat_coord() -> None:
@@ -900,8 +900,8 @@ def test_combine_concat_seq_023_unbatched_concat_sequence_drops_internal_flat_co
     left = _ao_unbatched(tau=[0.0, 1.0], value=[0.0, 1.0], size=2)
     right = _ao_unbatched(tau=[2.0, 3.0], value=[10.0, 11.0], size=2)
     out = left.combine.concat_sequence([right], opts=SequenceConcatOptions(overlap="error"))
-    assert "__tal_batch__" not in out.unsafe_data.dims
-    assert "__tal_batch__" not in out.unsafe_data.coords
+    assert "__tal_batch__" not in out.as_dataset(copy="none").dims
+    assert "__tal_batch__" not in out.as_dataset(copy="none").coords
 
 
 def test_combine_concat_seq_024_overlap_sort_restores_sequence_xindex() -> None:
@@ -909,8 +909,8 @@ def test_combine_concat_seq_024_overlap_sort_restores_sequence_xindex() -> None:
     left = _ao_unbatched(tau=[0.0, 2.0], value=[1.0, 2.0], size=2)
     right = _ao_unbatched(tau=[1.0, 3.0], value=[10.0, 20.0], size=2)
     out = left.combine.concat_sequence([right], opts=SequenceConcatOptions(overlap="sort"))
-    assert "sample" in out.unsafe_data.indexes
-    assert float(out.unsafe_data.sel(sample=1)["value"].item()) == 10.0
+    assert "sample" in out.as_dataset(copy="none").indexes
+    assert float(out.as_dataset(copy="none").sel(sample=1)["value"].item()) == 10.0
 
 
 def test_combine_concat_seq_025_invalid_slots_sample_index_forced_to_minus_one() -> None:
@@ -928,8 +928,8 @@ def test_combine_concat_seq_025_invalid_slots_sample_index_forced_to_minus_one()
         sizes=[2, 1],
     ).param.sel(slice(0.5, 2.0), opts=ParamSelectOptions(layout="packed"))
     out = left.combine.concat_sequence([right], opts=SequenceConcatOptions(batch_join="inner", overlap="sort"))
-    valid = out.data.coords["valid"].values.astype(bool)
-    sample_index = out.data.coords["sample_index"].values
+    valid = out.as_dataset().coords["valid"].values.astype(bool)
+    sample_index = out.as_dataset().coords["sample_index"].values
     invalid = np.logical_not(valid)
     assert bool(np.any(invalid))
     np.testing.assert_array_equal(sample_index[invalid], np.full(sample_index[invalid].shape, -1, dtype="int64"))

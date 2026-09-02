@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Callable
 from tal.frames import Frame
 from tal.utils.frame_schema import get_frames, set_frames
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..metadata import (
     get_acceleration_rep,
     get_expressed_in,
@@ -41,7 +43,7 @@ def _wrap_owner_error(exc: Exception, *, owner: str) -> Exception:
 
 
 def _with_relation_semantics(source, ds, *, expressed_in: str, owner: str):
-    inertial = get_instantaneous_inertial(source.unsafe_data, owner=owner)
+    inertial = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
     out = set_expressed_in(ds, expressed_in=expressed_in, validate=False, owner=owner)
     return set_instantaneous_inertial(
         out,
@@ -67,7 +69,7 @@ def _canonicalize_vector_source_basis(
     source_in_basis = wrap_like(
         source,
         set_frames(
-            source.unsafe_data,
+            analysis_object_dataset(source),
             parent=src_expressed_in,
             child=src_child,
             validate=False,
@@ -84,7 +86,7 @@ def _canonicalize_vector_source_basis(
     canonical = pose_apply(basis_to_parent, source_in_basis, validate=False, owner=owner)
     ds = _with_relation_semantics(
         source,
-        canonical.unsafe_data,
+        analysis_object_dataset(canonical),
         expressed_in=src_parent,
         owner=owner,
     )
@@ -101,7 +103,7 @@ def _run_vector_to_frame(source, request: FamilyFrameRequest, *, owner: str):
     if dst_id == src_parent:
         ds = _with_relation_semantics(
             source,
-            source.unsafe_data,
+            analysis_object_dataset(source),
             expressed_in=src_expressed_in,
             owner=owner,
         )
@@ -163,9 +165,9 @@ def _run_vector_to_frame_non_identity(
         owner=owner,
     )
     out = _pose_apply_with_owner(solved, prepared, validate=False, owner=owner)
-    out_parent, _ = get_frames(out.unsafe_data)
+    out_parent, _ = get_frames(out_ds := analysis_object_dataset(out))
     expressed = src_parent if out_parent is None else out_parent
-    ds = _with_relation_semantics(source, out.unsafe_data, expressed_in=expressed, owner=owner)
+    ds = _with_relation_semantics(source, out_ds, expressed_in=expressed, owner=owner)
     return wrap_like(source, ds, validate=request.validate)
 
 
@@ -180,7 +182,7 @@ def _run_vector_express_in(source, request: FamilyFrameRequest, *, owner: str):
     if dst_id == src_expressed_in:
         ds = _with_relation_semantics(
             source,
-            source.unsafe_data,
+            analysis_object_dataset(source),
             expressed_in=dst_id,
             owner=owner,
         )
@@ -198,18 +200,18 @@ def _run_vector_express_in(source, request: FamilyFrameRequest, *, owner: str):
         validate=False,
         owner=owner,
     )
-    ds = set_frames(out.unsafe_data, parent=src_parent, child=src_child, validate=False)
+    ds = set_frames(analysis_object_dataset(out), parent=src_parent, child=src_child, validate=False)
     ds = _with_relation_semantics(source, ds, expressed_in=dst_id, owner=owner)
     return wrap_like(source, ds, validate=request.validate)
 
 
 def _velocity_family_parts(source: Velocity, *, validate: bool, owner: str):
-    rep = get_velocity_rep(source.unsafe_data, owner=owner)
+    rep = get_velocity_rep(analysis_object_dataset(source), owner=owner)
     return rep, source.linear(validate=validate), source.angular(validate=validate)
 
 
 def _acceleration_family_parts(source: Acceleration, *, validate: bool, owner: str):
-    rep = get_acceleration_rep(source.unsafe_data, owner=owner)
+    rep = get_acceleration_rep(analysis_object_dataset(source), owner=owner)
     return rep, source.linear(validate=validate), source.angular(validate=validate)
 
 
@@ -227,8 +229,8 @@ def _finalize_family_relation_semantics(
     validate: bool,
     owner: str,
 ):
-    inertial = get_instantaneous_inertial(source.unsafe_data, owner=owner)
-    ds = set_expressed_in(out.unsafe_data, expressed_in=expressed_in, validate=False, owner=owner)
+    inertial = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
+    ds = set_expressed_in(analysis_object_dataset(out), expressed_in=expressed_in, validate=False, owner=owner)
     ds = set_instantaneous_inertial(
         ds,
         instantaneous_inertial=inertial,
@@ -254,7 +256,7 @@ def _run_family_pair_operation(
     angular_out = member_runner(angular, request, owner=f"{request.owner}.angular")
     out = compose(linear_out, angular_out, validate=request.validate)
     out = _restore_rep(out, source_rep=rep, validate=request.validate)
-    expressed_in = get_expressed_in(linear_out.unsafe_data, owner=request.owner)
+    expressed_in = get_expressed_in(analysis_object_dataset(linear_out), owner=request.owner)
     return _finalize_family_relation_semantics(
         source=request.source,
         out=out,

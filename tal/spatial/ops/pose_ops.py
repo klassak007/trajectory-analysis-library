@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import ComponentRegistryOptions, define_components
 from tal.core.orchestration.alignment import align_exact_for_plan
@@ -139,7 +140,7 @@ def _build_pose_matrix_output(
         **kwargs,
     )
     cleared = define_components(base, opts=ComponentRegistryOptions(registry={}, replace=True), validate=False)
-    output = set_pose_rep(cleared.unsafe_data, rep="matrix", validate=False, owner=owner)
+    output = set_pose_rep(analysis_object_dataset(cleared), rep="matrix", validate=False, owner=owner)
     parent, child = resolve_components_shared_frames(
         rotation_ds,
         position_ds,
@@ -212,10 +213,10 @@ def _wrap_components_from_arrays(
         **base_kwargs,
     )
     parent, child = get_frames(source)
-    pos_ds = set_frames(set_position_rep(pos_ao.unsafe_data, rep="cart", validate=False, owner=owner), parent=parent, child=child, validate=False)
-    rot_ds = set_frames(rot_ao.unsafe_data, parent=parent, child=child, validate=False)
+    pos_ds = set_frames(set_position_rep(analysis_object_dataset(pos_ao), rep="cart", validate=False, owner=owner), parent=parent, child=child, validate=False)
+    rot_ds = set_frames(analysis_object_dataset(rot_ao), parent=parent, child=child, validate=False)
     components = _pose_cls().from_components(Rotation._from_unvalidated(rot_ds), Position._from_unvalidated(pos_ds), validate=False)
-    return set_pose_rep(components.unsafe_data, rep="components", validate=False, owner=owner)
+    return set_pose_rep(analysis_object_dataset(components), rep="components", validate=False, owner=owner)
 
 
 def _components_to_matrix_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
@@ -237,7 +238,7 @@ def _components_to_matrix_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
         policy=policy,
     )
     row_dim, col_dim = allocate_dim_pair(
-        existing_dims=dataset_dim_names(pose.unsafe_data),
+        existing_dims=dataset_dim_names(analysis_object_dataset(pose)),
         first_candidates=("row", "pose_row"),
         first_base="pose_row",
         first_what="pose row dim",
@@ -261,8 +262,8 @@ def _components_to_matrix_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
         col_dim=col_dim,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
-        position_ds=position.unsafe_data,
-        rotation_ds=rotation.unsafe_data,
+        position_ds=analysis_object_dataset(position),
+        rotation_ds=analysis_object_dataset(rotation),
         policy=policy,
         owner=owner,
     )
@@ -275,11 +276,13 @@ def _resolve_components_to_matrix_inputs(
     policy: TopologyPolicy,
 ) -> tuple[Position, Rotation, str, str, xr.DataArray, xr.DataArray, str | None, tuple[str, ...]]:
     position, rotation = _canonical_components(pose, owner=owner)
-    pos_var, pos_dim = resolve_single_numeric_var_single_core_dim(position.unsafe_data, owner=owner, what="Pose position")
-    rot_var, quat_dim = resolve_single_numeric_var_single_core_dim(rotation.unsafe_data, owner=owner, what="Pose rotation")
+    position_ds = analysis_object_dataset(position)
+    rotation_ds = analysis_object_dataset(rotation)
+    pos_var, pos_dim = resolve_single_numeric_var_single_core_dim(position_ds, owner=owner, what="Pose position")
+    rot_var, quat_dim = resolve_single_numeric_var_single_core_dim(rotation_ds, owner=owner, what="Pose rotation")
     plan = resolve_binary_topology(
         _topology_operand(
-            position.unsafe_data,
+            position_ds,
             var_name=pos_var,
             core_dims=(pos_dim,),
             index=0,
@@ -288,7 +291,7 @@ def _resolve_components_to_matrix_inputs(
             policy=policy,
         ),
         _topology_operand(
-            rotation.unsafe_data,
+            rotation_ds,
             var_name=rot_var,
             core_dims=(quat_dim,),
             index=1,
@@ -309,7 +312,7 @@ def _resolve_components_to_matrix_inputs(
 
 
 def _matrix_to_components_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
-    source = pose.unsafe_data
+    source = analysis_object_dataset(pose)
     declared, seq_dim, batch_dims, core_dims = read_roles(source)
     if not declared:
         raise ValueError(f"{owner}: Pose matrix layout requires declared roles.")
@@ -347,9 +350,10 @@ def _matrix_to_components_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
 
 
 def _pose_to_rep_dataset(pose: "Pose", *, target_rep: str, owner: str) -> xr.Dataset:
-    current = get_pose_rep(pose.unsafe_data, owner=owner)
+    source = analysis_object_dataset(pose)
+    current = get_pose_rep(source, owner=owner)
     if current == target_rep:
-        return pose.unsafe_data
+        return source
     if target_rep == "components":
         return _matrix_to_components_dataset(pose, owner=owner)
     return _components_to_matrix_dataset(pose, owner=owner)
@@ -442,8 +446,8 @@ def _build_composed_position_dataset(
     owner: str,
 ) -> xr.Dataset:
     param, size = _resolve_series_optional_coord_names(
-        left_pos.unsafe_data,
-        right_pos.unsafe_data,
+        analysis_object_dataset(left_pos),
+        analysis_object_dataset(right_pos),
         owner=owner,
         allow_one_sided_inherit=policy.mode == "semantic_broadcast",
     )
@@ -469,8 +473,8 @@ def _pose_compose_with_owner(
 ) -> "Pose":
     pose._enforce_invariants(owner=owner)
     right._enforce_invariants(owner=owner)
-    parent, child = resolve_compose_output_frames(pose.unsafe_data, right.unsafe_data, owner=owner)
-    left_rep = get_pose_rep(pose.unsafe_data, owner=owner)
+    left_rep = get_pose_rep(source := analysis_object_dataset(pose), owner=owner)
+    parent, child = resolve_compose_output_frames(source, analysis_object_dataset(right), owner=owner)
     (left_pos, left_rot), (right_pos, right_rot) = _canonical_components(pose, owner=owner), _canonical_components(right, owner=owner)
     policy = _pose_compose_policy(pose=pose, right=right, owner=owner)
     left_var, left_dim, right_dim, right_quat_dim, left_t, right_t, right_q, sequence_dim, batch_dims = _prepare_pose_compose_inputs(
@@ -507,7 +511,7 @@ def _pose_compose_with_owner(
         policy=policy,
         owner=owner,
     )
-    out_rot_ds = set_frames(out_rot.unsafe_data, parent=parent, child=child, validate=False)
+    out_rot_ds = set_frames(analysis_object_dataset(out_rot), parent=parent, child=child, validate=False)
     components = _pose_cls().from_components(Rotation._from_unvalidated(out_rot_ds), Position._from_unvalidated(out_pos_ds), validate=False)
     return _wrap_pose_output(_pose_to_rep_dataset(components, target_rep=left_rep, owner=owner), validate=validate, owner=owner)
 
@@ -524,13 +528,16 @@ def _pose_inverse_with_owner(
     owner: str,
 ) -> "Pose":
     pose._enforce_invariants(owner=owner)
-    source_rep = get_pose_rep(pose.unsafe_data, owner=owner)
+    source = analysis_object_dataset(pose)
+    source_rep = get_pose_rep(source, owner=owner)
     position, rotation = _canonical_components(pose, owner=owner)
-    pos_var, pos_dim = resolve_single_numeric_var_single_core_dim(position.unsafe_data, owner=owner, what="Pose translation")
-    quat_var, quat_dim = resolve_single_numeric_var_single_core_dim(rotation.unsafe_data, owner=owner, what="Pose rotation")
+    position_ds = analysis_object_dataset(position)
+    rotation_ds = analysis_object_dataset(rotation)
+    pos_var, pos_dim = resolve_single_numeric_var_single_core_dim(position_ds, owner=owner, what="Pose translation")
+    quat_var, quat_dim = resolve_single_numeric_var_single_core_dim(rotation_ds, owner=owner, what="Pose rotation")
     out_t = apply_pose_inverse_translation_kernel(
-        position.unsafe_data[pos_var],
-        rotation.unsafe_data[quat_var],
+        position_ds[pos_var],
+        rotation_ds[quat_var],
         pos_dim=pos_dim,
         quat_dim=quat_dim,
         owner=owner,
@@ -539,15 +546,15 @@ def _pose_inverse_with_owner(
         out_rot = rotation.inverse(validate=False)
     except ValueError as exc:
         raise ValueError(f"{owner}: pose inverse rotation failed: {exc}") from exc
-    declared, seq_dim, batch_dims, _ = read_roles(position.unsafe_data)
+    declared, seq_dim, batch_dims, _ = read_roles(position_ds)
     if not declared:
         raise ValueError(f"{owner}: Pose inverse requires declared roles.")
-    param = read_param_coord_name(position.unsafe_data)
-    size = read_sequence_size_coord_name(position.unsafe_data)
+    param = read_param_coord_name(position_ds)
+    size = read_sequence_size_coord_name(position_ds)
     out_pos_ds = _build_position_dataset(out_t, var_name=pos_var, core_dim=pos_dim, sequence_dim=seq_dim, batch_dims=batch_dims, param_coord=param, sequence_size_coord=size, owner=owner)
-    parent, child = get_frames(pose.unsafe_data)
+    parent, child = get_frames(source)
     out_pos_ds = set_frames(out_pos_ds, parent=child, child=parent, validate=False)
-    out_rot_ds = set_frames(out_rot.unsafe_data, parent=child, child=parent, validate=False)
+    out_rot_ds = set_frames(analysis_object_dataset(out_rot), parent=child, child=parent, validate=False)
     components = _pose_cls().from_components(Rotation._from_unvalidated(out_rot_ds), Position._from_unvalidated(out_pos_ds), validate=False)
     return _wrap_pose_output(_pose_to_rep_dataset(components, target_rep=source_rep, owner=owner), validate=validate, owner=owner)
 

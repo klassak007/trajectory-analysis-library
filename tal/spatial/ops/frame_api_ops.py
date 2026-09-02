@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 from tal.frames import Frame
 from tal.utils.frame_schema import get_frames
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..policies.wrap import wrap_like
 
 if TYPE_CHECKING:
@@ -15,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def _require_position_parent(position: "Position", *, owner: str) -> str:
-    parent, _ = get_frames(position.unsafe_data)
+    parent, _ = get_frames(analysis_object_dataset(position))
     if parent is None:
         raise ValueError(f"{owner}: Position.to_frame requires framed input with parent frame id.")
     return parent
@@ -54,14 +56,14 @@ def position_to_frame(
         owner=owner,
     )
     if destination == source_parent:
-        return wrap_like(position, position.unsafe_data, validate=validate)
+        return wrap_like(position, analysis_object_dataset(position), validate=validate)
     result = _pose_apply_with_owner(
         solved,
         position,
         validate=False,
         owner=owner,
     )
-    return wrap_like(position, result.unsafe_data, validate=validate)
+    return wrap_like(position, analysis_object_dataset(result), validate=validate)
 
 
 def rotation_class_solve_path_transform(
@@ -84,8 +86,8 @@ def rotation_class_solve_path_transform(
         owner=owner,
     )
     if validate:
-        return cls._from_validated(solved.unsafe_data)
-    return cls._from_unvalidated(solved.unsafe_data)
+        return cls._from_validated(analysis_object_dataset(solved))
+    return cls._from_unvalidated(analysis_object_dataset(solved))
 
 
 def pose_class_solve_path_transform(
@@ -108,8 +110,8 @@ def pose_class_solve_path_transform(
         owner=owner,
     )
     if validate:
-        return cls._from_validated(solved.unsafe_data)
-    return cls._from_unvalidated(solved.unsafe_data)
+        return cls._from_validated(analysis_object_dataset(solved))
+    return cls._from_unvalidated(analysis_object_dataset(solved))
 
 
 __all__ = [

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
@@ -124,11 +125,12 @@ def _wrap_rotation_apply_kernel(values: np.ndarray, quat: np.ndarray, *, owner: 
 
 
 def _velocity_components_for_apply(target: Velocity, *, owner: str) -> tuple[LinearVelocity, AngularVelocity, str]:
-    rep = get_velocity_rep(target.unsafe_data, owner=owner)
+    source = analysis_object_dataset(target)
+    rep = get_velocity_rep(source, owner=owner)
     if rep == "components":
         return target.linear(validate=False), target.angular(validate=False), rep
     linear_ds, angular_ds = unpack_vector6_to_linear_angular_datasets(
-        target.unsafe_data,
+        source,
         owner=owner,
         opts=VELOCITY_VECTOR6_OPTS,
         set_linear_rep=_set_linear_velocity_cart_rep,
@@ -142,11 +144,12 @@ def _acceleration_components_for_apply(
     *,
     owner: str,
 ) -> tuple[LinearAcceleration, AngularAcceleration, str]:
-    rep = get_acceleration_rep(target.unsafe_data, owner=owner)
+    source = analysis_object_dataset(target)
+    rep = get_acceleration_rep(source, owner=owner)
     if rep == "components":
         return target.linear(validate=False), target.angular(validate=False), rep
     linear_ds, angular_ds = unpack_vector6_to_linear_angular_datasets(
-        target.unsafe_data,
+        source,
         owner=owner,
         opts=ACCELERATION_VECTOR6_OPTS,
         set_linear_rep=_set_linear_acceleration_cart_rep,
@@ -178,8 +181,8 @@ def _velocity_output_for_rep(
     )
     policy = selection.policy
     out_ds = pack_linear_angular_to_vector6_dataset(
-        out.linear(validate=False).unsafe_data,
-        out.angular(validate=False).unsafe_data,
+        analysis_object_dataset(out.linear(validate=False)),
+        analysis_object_dataset(out.angular(validate=False)),
         owner=owner,
         opts=VELOCITY_VECTOR6_OPTS,
         set_spatial_rep=_set_velocity_vector6_rep,
@@ -211,8 +214,8 @@ def _acceleration_output_for_rep(
     )
     policy = selection.policy
     out_ds = pack_linear_angular_to_vector6_dataset(
-        out.linear(validate=False).unsafe_data,
-        out.angular(validate=False).unsafe_data,
+        analysis_object_dataset(out.linear(validate=False)),
+        analysis_object_dataset(out.angular(validate=False)),
         owner=owner,
         opts=ACCELERATION_VECTOR6_OPTS,
         set_spatial_rep=_set_acceleration_vector6_rep,
@@ -228,9 +231,9 @@ def _apply_to_vector_target(
     validate: bool,
     owner: str,
 ) -> object:
-    target_ds = validate_schema_if_needed(target.unsafe_data)
+    target_ds = validate_schema_if_needed(analysis_object_dataset(target))
     quat_rotation = rotation.as_quat(validate=False)
-    quat_ds = validate_schema_if_needed(quat_rotation.unsafe_data)
+    quat_ds = validate_schema_if_needed(analysis_object_dataset(quat_rotation))
     selection = select_topology_policy_with_intents(
         (rotation, target),
         owner=owner,
@@ -259,7 +262,7 @@ def _apply_to_vector_target(
     )
     out_ds = rotated.to_dataset(name=target_var)
     out_ds = transfer_dataset_attrs(target_ds, out_ds, validate=False)
-    parent, child = resolve_apply_output_frames(rotation.unsafe_data, target_ds, owner=owner)
+    parent, child = resolve_apply_output_frames(analysis_object_dataset(rotation), target_ds, owner=owner)
     out_ds = set_frames(out_ds, parent=parent, child=child, validate=False)
     return wrap_like(target, out_ds, validate=validate)
 
@@ -348,7 +351,7 @@ def _apply_to_spatial_target(
         angular_out = _apply_to_vector_target(rotation, angular_in, validate=False, owner=owner)
         out = _velocity_output_for_rep(linear_out, angular_out, rep=rep, owner=owner)
         if validate:
-            return Velocity._from_validated(out.unsafe_data)
+            return Velocity._from_validated(analysis_object_dataset(out))
         return out
     if isinstance(target, Acceleration):
         linear_in, angular_in, rep = _acceleration_components_for_apply(target, owner=owner)
@@ -356,7 +359,7 @@ def _apply_to_spatial_target(
         angular_out = _apply_to_vector_target(rotation, angular_in, validate=False, owner=owner)
         out = _acceleration_output_for_rep(linear_out, angular_out, rep=rep, owner=owner)
         if validate:
-            return Acceleration._from_validated(out.unsafe_data)
+            return Acceleration._from_validated(analysis_object_dataset(out))
         return out
     raise TypeError(f"{owner}: unsupported spatial target type {type(target).__name__!r}.")
 
@@ -375,7 +378,7 @@ def _rotation_apply_with_owner(
         )
     rotation._enforce_invariants(owner=owner)
     target._enforce_invariants(owner=owner)
-    _ = resolve_apply_output_frames(rotation.unsafe_data, target.unsafe_data, owner=owner)
+    _ = resolve_apply_output_frames(analysis_object_dataset(rotation), analysis_object_dataset(target), owner=owner)
     if isinstance(target, _VECTOR_TARGET_TYPES):
         return _apply_to_vector_target(rotation, target, validate=validate, owner=owner)
     return _apply_to_spatial_target(rotation, target, validate=validate, owner=owner)

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
 from tal.core.orchestration.topology import TopologyOperand, TopologyPolicy
@@ -70,7 +71,7 @@ def build_position_dataset(
         translation.to_dataset(name=var_name),
         **kwargs,
     )
-    return set_position_rep(ao.unsafe_data, rep="cart", validate=False, owner=owner)
+    return set_position_rep(analysis_object_dataset(ao), rep="cart", validate=False, owner=owner)
 
 
 def topology_operand(
@@ -107,17 +108,17 @@ def resolve_pose_compose_specs(
     owner: str,
 ) -> PoseComposeTopologySpecs:
     left_var, left_dim = resolve_single_numeric_var_single_core_dim(
-        left_pos.unsafe_data,
+        analysis_object_dataset(left_pos),
         owner=owner,
         what="left pose translation",
     )
     right_var, right_dim = resolve_single_numeric_var_single_core_dim(
-        right_pos.unsafe_data,
+        analysis_object_dataset(right_pos),
         owner=owner,
         what="right pose translation",
     )
     right_quat_var, right_quat_dim = resolve_single_numeric_var_single_core_dim(
-        right_rot.unsafe_data,
+        analysis_object_dataset(right_rot),
         owner=owner,
         what="right pose rotation",
     )
@@ -142,7 +143,7 @@ def pose_compose_topology_operands(
 ) -> tuple[TopologyOperand, TopologyOperand, TopologyOperand]:
     return (
         topology_operand(
-            left_pos.unsafe_data,
+            analysis_object_dataset(left_pos),
             var_name=specs.left_var,
             core_dims=(specs.left_dim,),
             index=0,
@@ -151,7 +152,7 @@ def pose_compose_topology_operands(
             policy=policy,
         ),
         topology_operand(
-            right_pos.unsafe_data,
+            analysis_object_dataset(right_pos),
             var_name=specs.right_var,
             core_dims=(specs.right_dim,),
             index=1,
@@ -160,7 +161,7 @@ def pose_compose_topology_operands(
             policy=policy,
         ),
         topology_operand(
-            right_rot.unsafe_data,
+            analysis_object_dataset(right_rot),
             var_name=specs.right_quat_var,
             core_dims=(specs.right_quat_dim,),
             index=2,

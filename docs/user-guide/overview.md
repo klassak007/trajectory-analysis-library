@@ -75,7 +75,7 @@ its public operations can consume deliberately:
 | frame metadata | Tracking parent/child frame IDs for spatial quantities. |
 | spatial metadata | Recording representation and expression-frame semantics. |
 
-For construction patterns and `ao.data` vs `ao.unsafe_data`, see
+For construction patterns and Dataset copy modes, see
 {doc}`creating_trajectory_objects` and {doc}`viewing`.
 
 ## A First Example
@@ -162,7 +162,7 @@ This overview names the main surfaces without duplicating their full guides.
 
 | Task | Surface | Details |
 | --- | --- | --- |
-| Create and inspect AOs | `AnalysisObject.from_data(...)`, `ao.data`, `ao.unsafe_data` | {doc}`creating_trajectory_objects`, {doc}`viewing`, {doc}`../api/analysis-object` |
+| Create and inspect AOs | `AnalysisObject.from_data(...)`, `ao.as_dataset(copy=...)`, `ao.close()` | {doc}`creating_trajectory_objects`, {doc}`viewing`, {doc}`../api/analysis-object` |
 | Select, mask, and reduce | `ao.sel(...)`, `ao.isel(...)`, `ao.where(...)`, AO reducers | {doc}`indexing`, {doc}`../api/reducers` |
 | Interpolate or resample by a parameter | `ao.param.index(...)`, `ao.param.sel(...)`, `ao.param.at(...)`, `ao.param.resample_to(...)`, `ao.param.interp_like(...)` | {doc}`time`, {doc}`../api/timebase` |
 | Combine or align AOs | `ao.combine.concat_batch(...)`, `ao.combine.concat_sequence(...)`, `ao.combine.merge(...)`, `ao.combine.align(...)` | {doc}`numpy`, {doc}`../api/analysis-object` |

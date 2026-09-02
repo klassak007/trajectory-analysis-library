@@ -142,8 +142,8 @@ def example_guide_overview_basic_workflow() -> None:
     )
     resampled = ao.param.at([0.5, 1.5, 2.5], on="time")
     mean_position = ao.mean(dim="sample")
-    assert resampled.unsafe_data.sizes["sample"] == 3
-    assert mean_position.unsafe_data["position"].dims == ("run", "axis")
+    assert resampled.as_dataset(copy="none").sizes["sample"] == 3
+    assert mean_position.as_dataset(copy="none")["position"].dims == ("run", "axis")
 
 
 def example_guide_core_concepts_roles() -> None:
@@ -166,13 +166,13 @@ def example_guide_core_concepts_roles() -> None:
         sequence_size_coord="group_size",
         validate=True,
     )
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ()
-    assert read_param_coord_name(ao.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(ao.unsafe_data) == "group_size"
+    assert read_param_coord_name(ao.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(ao.as_dataset(copy="none")) == "group_size"
 
 
 def example_guide_creating_sequence_ao() -> None:
@@ -229,11 +229,11 @@ def example_guide_creating_sequence_ao() -> None:
     updated = updated.set_roles(sequence_dim="sample", batch_dims=("trial",), core_dims=("axis",), validate=True)
     updated = updated.set_param_coord(name="time_s", validate=True)
     updated = updated.set_validity(sequence_size_coord="group_size", validate=True)
-    assert core_only.unsafe_data["value"].dims == ("axis",)
-    assert batch_core.unsafe_data["value"].dims == ("trial", "axis")
-    assert full.unsafe_data["position"].dims == ("trial", "sample", "axis")
-    assert read_param_coord_name(updated.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(updated.unsafe_data) == "group_size"
+    assert core_only.as_dataset(copy="none")["value"].dims == ("axis",)
+    assert batch_core.as_dataset(copy="none")["value"].dims == ("trial", "axis")
+    assert full.as_dataset(copy="none")["position"].dims == ("trial", "sample", "axis")
+    assert read_param_coord_name(updated.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(updated.as_dataset(copy="none")) == "group_size"
     assert full.to_dataarray(name="position").name == "position"
 
 
@@ -241,16 +241,16 @@ def example_guide_indexing_param_query() -> None:
     ao = _scalar_signal_ao()
     head = ao.isel(sample=slice(0, 3))
     trial_t0 = ao.sel(trial="t0")
-    positive = ao.where(ao.unsafe_data["signal"] > 0.0)
+    positive = ao.where(ao.as_dataset(copy="none")["signal"] > 0.0)
     index = ao.param.index([0.18, 0.52], on="time_s")
     nearest = ao.param.sel([0.18, 0.52], on="time_s")
     interp = ao.param.at([0.18, 0.52], on="time_s", opts=ParamEvalOptions(method="linear"))
-    assert head.unsafe_data.sizes["sample"] == 3
-    assert trial_t0.unsafe_data.sizes["sample"] == 6
-    assert positive.unsafe_data["signal"].isnull().any()
+    assert head.as_dataset(copy="none").sizes["sample"] == 3
+    assert trial_t0.as_dataset(copy="none").sizes["sample"] == 6
+    assert positive.as_dataset(copy="none")["signal"].isnull().any()
     assert index.sizes["query"] == 2
-    assert nearest.unsafe_data.sizes["sample"] == 2
-    assert interp.unsafe_data.sizes["sample"] == 2
+    assert nearest.as_dataset(copy="none").sizes["sample"] == 2
+    assert interp.as_dataset(copy="none").sizes["sample"] == 2
 
 
 def example_guide_time_synchronize() -> None:
@@ -266,10 +266,10 @@ def example_guide_time_synchronize() -> None:
         on="time_s",
         opts=ParamSyncOptions(join="domain", how="interp", batch_join="inner", query_dim="query"),
     )
-    assert imu_at.unsafe_data.sizes["sample"] == 3
-    assert imu_rs.unsafe_data.sizes["sample"] == 6
-    assert gps_on_imu.unsafe_data.sizes["sample"] == imu.unsafe_data.sizes["sample"]
-    np.testing.assert_allclose(synced_imu.unsafe_data.coords["time_s"], synced_gps.unsafe_data.coords["time_s"])
+    assert imu_at.as_dataset(copy="none").sizes["sample"] == 3
+    assert imu_rs.as_dataset(copy="none").sizes["sample"] == 6
+    assert gps_on_imu.as_dataset(copy="none").sizes["sample"] == imu.as_dataset(copy="none").sizes["sample"]
+    np.testing.assert_allclose(synced_imu.as_dataset(copy="none").coords["time_s"], synced_gps.as_dataset(copy="none").coords["time_s"])
 
 
 def _time_source(var_name: str, values: np.ndarray, time_s: np.ndarray) -> AnalysisObject:
@@ -310,11 +310,11 @@ def example_guide_events_windows() -> None:
     assert mask.dtype == bool
     assert "event" in events.dims
     assert "segment" in intervals.dims
-    assert "event_edge_code" in boundaries.unsafe_data.coords
-    assert masked.unsafe_data["speed_mps"].dims == ao.unsafe_data["speed_mps"].dims
-    assert stream.unsafe_data.sizes["stream_sample"] >= 1
-    assert around.unsafe_data.sizes["tau"] >= 1
-    assert "window_event_index" in around_stacked.unsafe_data.coords
+    assert "event_edge_code" in boundaries.as_dataset(copy="none").coords
+    assert masked.as_dataset(copy="none")["speed_mps"].dims == ao.as_dataset(copy="none")["speed_mps"].dims
+    assert stream.as_dataset(copy="none").sizes["stream_sample"] >= 1
+    assert around.as_dataset(copy="none").sizes["tau"] >= 1
+    assert "window_event_index" in around_stacked.as_dataset(copy="none").coords
 
 
 def example_guide_linalg_basic() -> None:
@@ -341,20 +341,20 @@ def example_guide_linalg_basic() -> None:
     Apinv = pinv(A)
     Apinv2 = A.pinv()
     vec3 = Vector3.from_xyz(x_component, 0.0, 1.0, axis="axis", output_var="vec3")
-    np.testing.assert_allclose(Av.unsafe_data["datavar"], Av2.unsafe_data["datavar"])
-    np.testing.assert_allclose(energy.unsafe_data["datavar"], energy2.unsafe_data["datavar"])
-    np.testing.assert_allclose(mag.unsafe_data["datavar"], mag2.unsafe_data["datavar"])
-    assert energy.unsafe_data["datavar"].dims == ("sample",)
-    assert mag.unsafe_data["datavar"].dims == ("sample",)
-    assert x.unsafe_data["datavar"].dims == ("sample", "col")
-    assert x2.unsafe_data["datavar"].dims == ("sample", "col")
-    assert sum_v.unsafe_data["datavar"].dims == ("sample", "col")
-    assert diff_v.unsafe_data["datavar"].dims == ("sample", "col")
-    assert Ainv.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert Ainv2.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert Apinv.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert Apinv2.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert tuple(vec3.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(Av.as_dataset(copy="none")["datavar"], Av2.as_dataset(copy="none")["datavar"])
+    np.testing.assert_allclose(energy.as_dataset(copy="none")["datavar"], energy2.as_dataset(copy="none")["datavar"])
+    np.testing.assert_allclose(mag.as_dataset(copy="none")["datavar"], mag2.as_dataset(copy="none")["datavar"])
+    assert energy.as_dataset(copy="none")["datavar"].dims == ("sample",)
+    assert mag.as_dataset(copy="none")["datavar"].dims == ("sample",)
+    assert x.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert x2.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert sum_v.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert diff_v.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert Ainv.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert Ainv2.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert Apinv.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert Apinv2.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert tuple(vec3.as_dataset(copy="none").coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
 
 
 def _matrix_vector_pair() -> tuple[Matrix, Vector]:
@@ -405,13 +405,13 @@ def example_guide_numpy_ufuncs() -> None:
     aligned_xy = x.a(on="sequence", sequence_join="inner") + y
     broadcast_bias = x + bias.b()
     condition = ufuncs.greater(x, 1.0)
-    np.testing.assert_allclose(sin_x.unsafe_data["value"], np.sin(x.unsafe_data["value"]))
-    np.testing.assert_allclose(exp_x.unsafe_data["value"], np.exp(x.unsafe_data["value"]))
-    np.testing.assert_allclose(sum_xy.unsafe_data["value"], x.unsafe_data["value"] + y.unsafe_data["value"])
-    np.testing.assert_allclose(aligned_xy.unsafe_data["value"], x.unsafe_data["value"] + y.unsafe_data["value"])
+    np.testing.assert_allclose(sin_x.as_dataset(copy="none")["value"], np.sin(x.as_dataset(copy="none")["value"]))
+    np.testing.assert_allclose(exp_x.as_dataset(copy="none")["value"], np.exp(x.as_dataset(copy="none")["value"]))
+    np.testing.assert_allclose(sum_xy.as_dataset(copy="none")["value"], x.as_dataset(copy="none")["value"] + y.as_dataset(copy="none")["value"])
+    np.testing.assert_allclose(aligned_xy.as_dataset(copy="none")["value"], x.as_dataset(copy="none")["value"] + y.as_dataset(copy="none")["value"])
     np.testing.assert_allclose(
-        broadcast_bias.unsafe_data["value"],
-        x.unsafe_data["value"] + np.asarray([10.0, 20.0]),
+        broadcast_bias.as_dataset(copy="none")["value"],
+        x.as_dataset(copy="none")["value"] + np.asarray([10.0, 20.0]),
     )
     assert isinstance(condition, Condition)
 
@@ -446,9 +446,9 @@ def example_guide_spatial_pose() -> None:
     assert isinstance(rotated, Position)
     assert isinstance(transformed, Position)
     assert isinstance(rot_q, Rotation)
-    assert pose_m.unsafe_data["pose_matrix"].shape[-2:] == (4, 4)
-    assert rot_at.unsafe_data.sizes["sample"] == 1
-    assert pose_rs.unsafe_data.sizes["sample"] == 5
+    assert pose_m.as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
+    assert rot_at.as_dataset(copy="none").sizes["sample"] == 1
+    assert pose_rs.as_dataset(copy="none").sizes["sample"] == 5
 
 
 def example_guide_geo_lla() -> None:
@@ -462,7 +462,7 @@ def example_guide_geo_lla() -> None:
         validate=True,
     )
     lla = GeodeticPosition.from_lla(ao)
-    geo_block = lla.unsafe_data.attrs["tal"]["ext"]["geo"]
+    geo_block = lla.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]
     assert geo_block["kind"] == "geodetic_position"
 
 
@@ -493,9 +493,9 @@ def example_guide_geo_conversion() -> None:
         ecef = lla.to_ecef()
         roundtrip = GeodeticPosition.from_ecef(ecef)
         via_module = geo_from_ecef(ecef)
-    assert list(ecef.unsafe_data["axis"].values) == ["x", "y", "z"]
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
-    np.testing.assert_allclose(via_module.unsafe_data["position"], lla.unsafe_data["position"])
+    assert list(ecef.as_dataset(copy="none")["axis"].values) == ["x", "y", "z"]
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
+    np.testing.assert_allclose(via_module.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
 def example_guide_geo_enu() -> None:
@@ -523,8 +523,8 @@ def example_guide_geo_enu() -> None:
         origin = LocalOrigin(45.0, -75.0, 100.0)
         enu = lla.to_enu(opts=ENUOptions(origin=origin, output_frame="site_enu"))
         ecef_again = enu.geo.to_ecef()
-    assert enu.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "enu"
-    assert ecef_again.unsafe_data.attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
+    assert enu.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["cartesian_system"] == "enu"
+    assert ecef_again.as_dataset(copy="none").attrs["tal"]["ext"]["geo"]["cartesian_system"] == "ecef"
 
 
 def example_guide_geo_distance() -> None:
@@ -549,8 +549,8 @@ def example_guide_geo_distance() -> None:
         lla = GeodeticPosition.from_lla(ao)
         distance = lla.distance_to(lla)
         bearing = lla.initial_bearing_to(lla, opts=GeodesicOptions())
-    assert "distance_m" in distance.unsafe_data.data_vars
-    assert "initial_bearing_deg" in bearing.unsafe_data.data_vars
+    assert "distance_m" in distance.as_dataset(copy="none").data_vars
+    assert "initial_bearing_deg" in bearing.as_dataset(copy="none").data_vars
 
 
 def example_guide_geo_interpolation() -> None:
@@ -635,8 +635,8 @@ def example_guide_astro_foundation() -> None:
         validate=True,
     )
     direction = TopocentricDirection(ao)
-    altitude = direction.unsafe_data["altitude_deg"]
-    azimuth = direction.unsafe_data["azimuth_deg"]
+    altitude = direction.as_dataset(copy="none")["altitude_deg"]
+    azimuth = direction.as_dataset(copy="none")["azimuth_deg"]
     assert opts.backend == "astropy"
     assert opts.time is not None
     assert opts.time.source == "utc_time"
@@ -657,9 +657,9 @@ def example_guide_astro_sun_direction() -> None:
     opts = SunDirectionOptions(iers=AstroIERSOptions(auto_download=False, degraded_accuracy="ignore"))
     sun = direction_to_sun(GeodeticPosition.from_lla(ao), time="2024-06-01T12:00:00", opts=opts)
     sun_xyz = sun.to_vector3()
-    assert sun.unsafe_data["direction"].dims == ("sample", "enu")
-    assert sun_xyz.unsafe_data["direction"].dims == ("sample", "axis")
-    assert sun.unsafe_data.attrs["tal"]["ext"]["astro"]["backend"] == "astropy"
+    assert sun.as_dataset(copy="none")["direction"].dims == ("sample", "enu")
+    assert sun_xyz.as_dataset(copy="none")["direction"].dims == ("sample", "axis")
+    assert sun.as_dataset(copy="none").attrs["tal"]["ext"]["astro"]["backend"] == "astropy"
 
 
 def example_guide_frames_basic() -> None:
@@ -709,12 +709,12 @@ def example_guide_viewing_schema() -> None:
         validate=True,
     )
     out = ao.param.at([0.05, 0.15], on="time_s")
-    safe_snapshot = ao.data
-    backing_store = ao.unsafe_data
+    safe_snapshot = ao.as_dataset()
+    backing_store = ao.as_dataset(copy="none")
     roles = read_roles(backing_store)
     param_name = read_param_coord_name(backing_store)
-    before_schema = ao.unsafe_data.attrs["tal"]
-    after_schema = out.unsafe_data.attrs["tal"]
+    before_schema = ao.as_dataset(copy="none").attrs["tal"]
+    after_schema = out.as_dataset(copy="none").attrs["tal"]
     assert safe_snapshot is not backing_store
     assert roles[1] == "sample"
     assert param_name == "time_s"

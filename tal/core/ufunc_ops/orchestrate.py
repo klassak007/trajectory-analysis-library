@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..event_ops.types import Condition, CoordOperand, VarOperand
 from ..orchestration.alignment import align_exact_for_plan
 from ..orchestration.alignment_intent import (
@@ -183,7 +184,7 @@ def prepare_unary_ao_context(value: object, *, owner: str) -> UnaryAOContext:
                 policy=policy,
             )
             return UnaryAOContext(source=value, operand=aligned)
-        return UnaryAOContext(source=value, operand=value.unsafe_data)
+        return UnaryAOContext(source=value, operand=analysis_object_dataset(value))
     return UnaryAOContext(source=None, operand=value)
 
 
@@ -191,8 +192,8 @@ def _bootstrap_binary_runtime_operands(left: object, right: object) -> _BinaryRu
     left_source = left if isinstance(left, AnalysisObject) else None
     right_source = right if isinstance(right, AnalysisObject) else None
     source = left_source if left_source is not None else right_source
-    left_operand = left.unsafe_data if left_source is not None else left
-    right_operand = right.unsafe_data if right_source is not None else right
+    left_operand = analysis_object_dataset(left) if left_source is not None else left
+    right_operand = analysis_object_dataset(right) if right_source is not None else right
     return _BinaryRuntimeOperands(
         source=source,
         left_source=left_source,
@@ -204,10 +205,10 @@ def _bootstrap_binary_runtime_operands(left: object, right: object) -> _BinaryRu
 
 def _read_binary_output_core_dims(runtime: _BinaryRuntimeOperands) -> tuple[str, ...] | None:
     if runtime.left_source is not None:
-        _, _, _, core_dims = read_roles(runtime.left_source.unsafe_data)
+        _, _, _, core_dims = read_roles(analysis_object_dataset(runtime.left_source))
         return core_dims
     if runtime.right_source is not None:
-        _, _, _, core_dims = read_roles(runtime.right_source.unsafe_data)
+        _, _, _, core_dims = read_roles(analysis_object_dataset(runtime.right_source))
         return core_dims
     return None
 

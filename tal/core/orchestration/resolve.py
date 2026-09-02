@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from ..combine_ops.types import CombineContext
 from .context import DatasetContextOptions, resolve_dataset_contexts
@@ -63,7 +64,7 @@ def resolve_param_runtime_context(
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
     schema_ctx = _resolve_schema_context_validated(
-        ao.unsafe_data,
+        analysis_object_dataset(ao),
         explicit_sequence_dim=sequence_dim,
         explicit_batch_dims=batch_dims,
         explicit_param_name=on,

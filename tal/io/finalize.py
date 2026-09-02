@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_context
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
@@ -53,7 +54,7 @@ def _construct_loaded_cls(
 
     if cls is AnalysisObject:
         return finalized
-    return cls(finalized.unsafe_data)
+    return cls(analysis_object_dataset(finalized))
 
 
 def finalize_loaded_dataset(
@@ -65,13 +66,14 @@ def finalize_loaded_dataset(
 ) -> "AnalysisObject":
     base_ao = resolve_finalize_source_for_cls(cls, ds, owner=owner)
     spec = _resolve_finalize_spec(base_ao, owner=owner)
+    source = analysis_object_dataset(base_ao)
     finalized = finalize_with_schema(
         base_ao,
-        base_ao.unsafe_data,
+        source,
         spec=spec,
         validate=validate,
         owner=owner,
-        optional_sources=_optional_sources(base_ao.unsafe_data),
+        optional_sources=_optional_sources(source),
     )
     return _construct_loaded_cls(cls, finalized)
 

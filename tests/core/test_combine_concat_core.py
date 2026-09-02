@@ -71,17 +71,17 @@ def test_combine_concat_core_001_extends_target_core_dim_length_sum() -> None:
     c = _vector_leaf(offset=2.0, axis_start=6)
     opts = CoreConcatOptions(core_dim="axis")
     out = concat_core([a, b, c], opts=opts, validate=True)
-    assert _roles(out.unsafe_data)[3] == ("axis",)
-    assert out.unsafe_data.sizes["axis"] == 9
+    assert _roles(out.as_dataset(copy="none"))[3] == ("axis",)
+    assert out.as_dataset(copy="none").sizes["axis"] == 9
     axis = xr.DataArray(np.arange(9, dtype=np.int64), dims=("axis",), coords={"axis": np.arange(9, dtype=np.int64)})
-    expected = xr.concat([a.unsafe_data["x"], b.unsafe_data["x"], c.unsafe_data["x"]], dim=axis, join="exact")
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = xr.concat([a.as_dataset(copy="none")["x"], b.as_dataset(copy="none")["x"], c.as_dataset(copy="none")["x"]], dim=axis, join="exact")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_combine_concat_core_002_requires_declared_roles_and_target_core_dim() -> None:
     """ID: COMBINE_CONCAT_CORE_002_requires_declared_roles_and_target_core_dim."""
     a = _vector_leaf(offset=0.0, axis_start=0)
-    raw_ds = a.unsafe_data.copy(deep=True)
+    raw_ds = a.as_dataset(copy="none").copy(deep=True)
     raw_ds.attrs = {}
     raw = AnalysisObject(raw_ds)
     with pytest.raises(ValueError, match="declared roles"):
@@ -119,7 +119,7 @@ def test_combine_concat_core_004_core_labels_override_length_and_uniqueness() ->
         opts=CoreConcatOptions(core_dim="axis", core_labels=("k0", "k1", "k2", "k3", "k4", "k5")),
         validate=True,
     )
-    assert out.unsafe_data.coords["axis"].values.tolist() == ["k0", "k1", "k2", "k3", "k4", "k5"]
+    assert out.as_dataset(copy="none").coords["axis"].values.tolist() == ["k0", "k1", "k2", "k3", "k4", "k5"]
 
 
 def test_combine_concat_core_005_accessor_concat_core_includes_receiver() -> None:
@@ -129,13 +129,13 @@ def test_combine_concat_core_005_accessor_concat_core_includes_receiver() -> Non
     opts = CoreConcatOptions(core_dim="axis")
     out = a.combine.concat_core([b], opts=opts, validate=True)
     expected = concat_core([a, b], opts=opts, validate=True)
-    xr.testing.assert_identical(out.unsafe_data, expected.unsafe_data)
+    xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
 
 
 def test_combine_concat_core_006_single_numeric_var_required() -> None:
     """ID: COMBINE_CONCAT_CORE_006_single_numeric_var_required."""
     a = _vector_leaf(offset=0.0, axis_start=0)
-    multi_ds = a.unsafe_data.copy(deep=True)
+    multi_ds = a.as_dataset(copy="none").copy(deep=True)
     multi_ds["y"] = multi_ds["x"] + 1.0
     multi = AnalysisObject.from_data(
         multi_ds,

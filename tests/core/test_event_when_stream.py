@@ -44,12 +44,12 @@ def _chunked_ao_series(*, values: list[float], time: list[float], chunks: int = 
 
 
 def _sequence_dim(ao: AnalysisObject) -> str:
-    roles = ao.unsafe_data.attrs["tal"]["core"]["roles"]
+    roles = ao.as_dataset(copy="none").attrs["tal"]["core"]["roles"]
     return str(roles["sequence_dim"])
 
 
 def _valid_size_coord(ao: AnalysisObject) -> str:
-    validity = ao.unsafe_data.attrs["tal"]["core"]["validity"]
+    validity = ao.as_dataset(copy="none").attrs["tal"]["core"]["validity"]
     return str(validity["sequence_size_coord"])
 
 
@@ -60,14 +60,14 @@ def test_event_during_009_stream_layout_flattens_segment_sequence_packed_order()
     out = ao.events.when(cond, opts=WhenOptions(layout="stream"))
     seq = _sequence_dim(out)
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["orig_index"].values,
+        out.as_dataset(copy="none").coords["orig_index"].values,
         np.asarray([1, 2, 4], dtype="int64"),
     )
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["stream_segment_index"].values,
+        out.as_dataset(copy="none").coords["stream_segment_index"].values,
         np.asarray([0, 0, 1], dtype="int64"),
     )
-    assert out.unsafe_data.sizes[seq] == 3
+    assert out.as_dataset(copy="none").sizes[seq] == 3
 
 
 def test_event_during_010_stream_layout_parity_with_segments_values() -> None:
@@ -76,13 +76,13 @@ def test_event_during_010_stream_layout_parity_with_segments_values() -> None:
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     segments = ao.events.when(cond, opts=WhenOptions(layout="segments"))
     stream = ao.events.when(cond, opts=WhenOptions(layout="stream"))
-    seg_dim = tuple(segments.unsafe_data.attrs["tal"]["core"]["roles"]["batch_dims"])[-1]
+    seg_dim = tuple(segments.as_dataset(copy="none").attrs["tal"]["core"]["roles"]["batch_dims"])[-1]
     flat = (
-        segments.unsafe_data["value"]
+        segments.as_dataset(copy="none")["value"]
         .stack({"stream_tmp": (str(seg_dim), "sample")})
         .reset_index("stream_tmp", drop=True)
         .where(
-            segments.unsafe_data["orig_index"]
+            segments.as_dataset(copy="none")["orig_index"]
             .stack({"stream_tmp": (str(seg_dim), "sample")})
             .reset_index("stream_tmp", drop=True)
             >= 0
@@ -90,7 +90,7 @@ def test_event_during_010_stream_layout_parity_with_segments_values() -> None:
         .dropna("stream_tmp")
     )
     np.testing.assert_allclose(
-        stream.unsafe_data["value"].values,
+        stream.as_dataset(copy="none")["value"].values,
         np.asarray(flat.values, dtype="float64"),
         equal_nan=True,
     )
@@ -119,15 +119,15 @@ def test_event_during_011_stream_layout_inside_false_valid_complement_parity() -
     out = ao.events.when(cond, opts=WhenOptions(layout="stream", inside=False))
     seq = _sequence_dim(out)
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["orig_index"].isel(trial=0).values,
+        out.as_dataset(copy="none").coords["orig_index"].isel(trial=0).values,
         np.asarray([0, 2, 4], dtype="int64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data["value"].isel(trial=0).values,
+        out.as_dataset(copy="none")["value"].isel(trial=0).values,
         np.asarray([0.0, 0.0, 0.0], dtype="float64"),
         equal_nan=True,
     )
-    assert out.unsafe_data.sizes[seq] == 3
+    assert out.as_dataset(copy="none").sizes[seq] == 3
 
 
 def test_event_during_012_stream_layout_attaches_deterministic_metadata_coords() -> None:
@@ -145,18 +145,18 @@ def test_event_during_012_stream_layout_attaches_deterministic_metadata_coords()
         "segment_start_index",
         "segment_end_index",
     ):
-        assert name in out.unsafe_data.coords
-        assert out.unsafe_data.coords[name].dims == (seq,)
+        assert name in out.as_dataset(copy="none").coords
+        assert out.as_dataset(copy="none").coords[name].dims == (seq,)
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["orig_index"].values,
+        out.as_dataset(copy="none").coords["orig_index"].values,
         np.asarray([1, -1, -1, -1, -1, -1], dtype="int64"),
     )
     np.testing.assert_allclose(
-        out.unsafe_data.coords["segment_start_time"].values,
+        out.as_dataset(copy="none").coords["segment_start_time"].values,
         np.asarray([1.0, np.nan, np.nan, np.nan, np.nan, np.nan], dtype="float64"),
         equal_nan=True,
     )
-    assert int(out.unsafe_data.coords[size_name].values) == 1
+    assert int(out.as_dataset(copy="none").coords[size_name].values) == 1
 
 
 def test_event_during_hard_009_chunked_stream_without_max_segments_fails_fast() -> None:
@@ -173,7 +173,7 @@ def test_event_during_hard_010_chunked_stream_with_explicit_max_segments_allowed
     ao = _chunked_ao_series(values=[0.0, 1.0, 0.0], time=[0.0, 1.0, 2.0])
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.when(cond, opts=WhenOptions(layout="stream", max_segments=2))
-    assert out.unsafe_data["value"].chunks is not None
+    assert out.as_dataset(copy="none")["value"].chunks is not None
 
 
 def test_event_during_hard_011_grouped_empty_batch_stream_deterministic() -> None:
@@ -196,9 +196,9 @@ def test_event_during_hard_011_grouped_empty_batch_stream_deterministic() -> Non
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.when(cond, opts=WhenOptions(layout="stream", on_empty="empty"))
     seq = _sequence_dim(out)
-    assert out.unsafe_data.sizes["trial"] == 0
-    assert out.unsafe_data.sizes[seq] == 0
-    np.testing.assert_array_equal(out.unsafe_data.coords["trial"].values, np.asarray([], dtype="int64"))
+    assert out.as_dataset(copy="none").sizes["trial"] == 0
+    assert out.as_dataset(copy="none").sizes[seq] == 0
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["trial"].values, np.asarray([], dtype="int64"))
 
 
 def test_event_during_hard_012_stream_metadata_namespace_collision_failfast() -> None:
@@ -237,7 +237,7 @@ def test_event_during_hard_013_stream_no_hidden_eager_count_discovery() -> None:
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=(), core_dims=(), param_coord="time")
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.when(cond, opts=WhenOptions(layout="stream", max_segments=2))
-    assert out.unsafe_data["value"].chunks is not None
+    assert out.as_dataset(copy="none")["value"].chunks is not None
 
 
 def test_event_during_hard_014_stream_on_empty_error_message_layout_specific() -> None:
@@ -268,11 +268,11 @@ def test_event_hard_017_during_stream_finalize_owner_preserves_param_and_validit
     ao = _ao_series(values=[0.0, 1.0, 0.0], time=[0.0, 1.0, 2.0])
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.when(cond, opts=WhenOptions(layout="stream", max_segments=2))
-    core = out.unsafe_data.attrs["tal"]["core"]
+    core = out.as_dataset(copy="none").attrs["tal"]["core"]
     assert core["param_coord"]["name"] == "time"
     validity = core["validity"]
     assert isinstance(validity, dict)
-    assert str(validity["sequence_size_coord"]) in out.unsafe_data.coords
+    assert str(validity["sequence_size_coord"]) in out.as_dataset(copy="none").coords
 
 
 def test_event_hard_020_during_stream_bounded_indexer_blockwise_frontpack_parity() -> None:
@@ -281,6 +281,6 @@ def test_event_hard_020_during_stream_bounded_indexer_blockwise_frontpack_parity
     cond = Condition.compare(Condition.var("value"), "gt", 0.5)
     out = ao.events.when(cond, opts=WhenOptions(layout="stream", max_segments=2))
     np.testing.assert_array_equal(
-        out.unsafe_data.coords["orig_index"].values,
+        out.as_dataset(copy="none").coords["orig_index"].values,
         np.asarray([1, 3, -1, -1, -1, -1, -1, -1, -1, -1], dtype="int64"),
     )

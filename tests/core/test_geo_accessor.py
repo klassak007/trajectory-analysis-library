@@ -15,7 +15,7 @@ def _lla_dataset(values: np.ndarray | None = None) -> xr.Dataset:
         {"position": (("sample", "lla"), values)},
         coords={"sample": np.arange(values.shape[0]), "lla": ["lat", "lon", "alt"]},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True).unsafe_data
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True).as_dataset(copy="none")
 
 
 def _position_dataset(values: np.ndarray | None = None) -> xr.Dataset:
@@ -25,7 +25,7 @@ def _position_dataset(values: np.ndarray | None = None) -> xr.Dataset:
         {"position": (("sample", "axis"), values)},
         coords={"sample": np.arange(values.shape[0]), "axis": ["x", "y", "z"]},
     )
-    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True).unsafe_data
+    return AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True).as_dataset(copy="none")
 
 
 def _install_geo_backend_stub(monkeypatch) -> None:
@@ -60,7 +60,7 @@ def test_geo_core_g2_001_position_geo_accessor_to_lla_roundtrips_ecef(monkeypatc
     roundtrip = ecef.geo.to_lla()
 
     assert isinstance(roundtrip, GeodeticPosition)
-    np.testing.assert_allclose(roundtrip.unsafe_data["position"], lla.unsafe_data["position"])
+    np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
 def test_geo_core_g2_010_position_geo_property_is_installed() -> None:

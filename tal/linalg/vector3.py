@@ -3,6 +3,7 @@ from __future__ import annotations
 import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
+from ..core.dataset_ownership import analysis_object_dataset
 from ..core.schema_read import (
     read_param_coord_name,
     read_roles,
@@ -120,7 +121,7 @@ class Vector3(Vector):
         ...     validate=True,
         ... )
         >>> vec = Vector3.from_xyz(x, 0.0, 1.0, axis="axis", output_var="vec3")
-        >>> tuple(vec.unsafe_data.coords["axis"].to_numpy().tolist())
+        >>> tuple(vec.as_dataset().coords["axis"].to_numpy().tolist())
         ('x', 'y', 'z')
         """
         owner = "linalg.vector3.from_xyz"
@@ -136,14 +137,16 @@ class Vector3(Vector):
             output_var=output_var,
             validate=validate,
         )
-        semantic_order = _semantic_dim_order(assembled.unsafe_data, owner=owner)
+        assembled_ds = analysis_object_dataset(assembled)
+        semantic_order = _semantic_dim_order(assembled_ds, owner=owner)
         assembled = assembled.transpose(*semantic_order, validate=validate)
+        assembled_ds = analysis_object_dataset(assembled)
         if validate:
-            return cls._from_validated(assembled.unsafe_data)
-        return cls._from_unvalidated(assembled.unsafe_data)
+            return cls._from_validated(assembled_ds)
+        return cls._from_unvalidated(assembled_ds)
 
     def _component_scalar_array(self, label: str, *, owner: str) -> Array:
-        ds = validate_schema_if_needed(self.unsafe_data)
+        ds = validate_schema_if_needed(analysis_object_dataset(self))
         declared, sequence_dim, batch_dims, core_dims = read_roles(ds)
         if not declared:
             raise ValueError(f"{owner}: Vector3 requires declared roles.")
@@ -158,7 +161,7 @@ class Vector3(Vector):
             sequence_size_coord=read_sequence_size_coord_name(ds),
             validate=True,
         )
-        return Array._from_validated(component.unsafe_data)
+        return Array._from_validated(analysis_object_dataset(component))
 
     @property
     def x(self) -> Array:

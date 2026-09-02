@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..combine_ops.overlay_core import overlay_core
 from ..combine_ops.types import CoreOverlayOptions
 from ..orchestration.finalize import finalize_like
@@ -57,8 +58,9 @@ def _prepare_patch_entries(
     registry: Mapping[str, ComponentSpec],
     owner: str,
 ) -> tuple[_PatchEntry, ...]:
+    base_ds = analysis_object_dataset(base)
     seq_dim, batch_dims, core_dims = require_declared_roles_with_sequence(
-        base.unsafe_data,
+        base_ds,
         owner=owner,
         operand="base",
     )
@@ -68,23 +70,24 @@ def _prepare_patch_entries(
             raise ValueError(f"{owner}: unknown component name {name!r}.")
         spec = registry[name]
         patch = coerce_analysis_object_input(raw_patch, owner=owner)
+        patch_ds = analysis_object_dataset(patch)
         p_seq, p_batch, p_core = require_declared_roles_with_sequence(
-            patch.unsafe_data,
+            patch_ds,
             owner=owner,
             operand=name,
         )
         if (p_seq, p_batch, p_core) != (seq_dim, batch_dims, core_dims):
             raise ValueError(f"{owner}: component {name!r} patch roles must match base roles exactly.")
-        base_var = select_component_var(base.unsafe_data, spec=spec, component_name=name, owner=owner, operand="base")
+        base_var = select_component_var(base_ds, spec=spec, component_name=name, owner=owner, operand="base")
         patch_var = select_component_var(
-            patch.unsafe_data,
+            patch_ds,
             spec=spec,
             component_name=name,
             owner=owner,
             operand="patch",
         )
         labels = require_explicit_unique_labels(
-            patch.unsafe_data[patch_var],
+            patch_ds[patch_var],
             dim=spec.core_dim,
             owner=owner,
             operand=f"component {name!r} patch",
@@ -138,14 +141,14 @@ def _apply_patch_group(
 ) -> xr.Dataset:
     base_var, core_dim = key
     base_input = _single_var_ao(ds, var_name=base_var)
-    patches = [_single_var_ao(entry.patch.unsafe_data, var_name=entry.patch_var) for entry in entries]
+    patches = [_single_var_ao(analysis_object_dataset(entry.patch), var_name=entry.patch_var) for entry in entries]
     patched = overlay_core(
         base_input,
         patches,
         opts=CoreOverlayOptions(core_dim=core_dim, on_overlap=on_overlap, output_var=base_var),
         validate=False,
     )
-    return ds.assign({base_var: patched.unsafe_data[base_var]})
+    return ds.assign({base_var: analysis_object_dataset(patched)[base_var]})
 
 
 def patch_components(
@@ -196,7 +199,7 @@ def patch_components(
     ...     validate=True,
     ... )
     >>> out = patch_components(base, {"xy": patch}, opts=ComponentPatchOptions(on_overlap="replace"))
-    >>> out.unsafe_data["vec"].sel(axis="y").item()
+    >>> out.as_dataset()["vec"].sel(axis="y").item()
     8.0
     """
     owner = "components.patch"
@@ -206,7 +209,7 @@ def patch_components(
     registry = read_components(source)
     entries = _prepare_patch_entries(source, components=items, registry=registry, owner=owner)
     renamed_target = _require_output_var_policy(entries, output_var=options.output_var, owner=owner)
-    out_ds = source.unsafe_data
+    out_ds = analysis_object_dataset(source)
     for key, grouped in _group_entries(entries):
         out_ds = _apply_patch_group(out_ds, key=key, entries=grouped, on_overlap=options.on_overlap)
     out = finalize_like(source, out_ds, validate=validate, owner=owner)

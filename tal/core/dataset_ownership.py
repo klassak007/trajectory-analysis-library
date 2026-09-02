@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, MutableMapping
 from copy import deepcopy
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import xarray as xr
 
-from .dataset_utils import dataset_to_dataarray, ensure_dataset
+from .dataset_utils import ensure_dataset, require_single_data_var
 from .orchestration.finalize import transfer_dataset_attrs
+
+if TYPE_CHECKING:
+    from .analysis_object import AnalysisObject
 
 
 DatasetCopyMode = Literal["deep", "shallow", "none"]
@@ -131,9 +134,9 @@ def metadata_isolated_dataset(source: xr.Dataset, *, owner: str) -> xr.Dataset:
     return dataset_view(source, copy="shallow", owner=owner)
 
 
-def raw_dataset_reference(source: xr.Dataset) -> xr.Dataset:
-    """Return the exact backing Dataset for an explicit internal/raw boundary."""
-    return source
+def analysis_object_dataset(source: AnalysisObject) -> xr.Dataset:
+    """Return the exact Dataset backing one internal AnalysisObject boundary."""
+    return cast(xr.Dataset, source._data)
 
 
 def dataset_to_dataarray_view(
@@ -144,17 +147,23 @@ def dataset_to_dataarray_view(
     owner: str,
 ) -> xr.DataArray:
     """Convert one owned Dataset view through the canonical single-var helper."""
-    selected = dataset_view(source, copy=copy, owner=owner)
-    return dataset_to_dataarray(selected, name=name)
+    mode = coerce_dataset_copy_mode(copy, owner=owner)
+    var_name = require_single_data_var(source)
+    if mode == "none":
+        selected = source[var_name]
+    else:
+        projection = source[var_name].to_dataset(name=var_name)
+        selected = dataset_view(projection, copy=mode, owner=owner)[var_name]
+    return selected if name is None else selected.rename(name)
 
 
 __all__ = [
     "DatasetCopyMode",
+    "analysis_object_dataset",
     "coerce_dataset_copy_mode",
     "dataset_to_dataarray_view",
     "dataset_view",
     "deep_public_dataset",
     "isolate_external_dataset",
     "metadata_isolated_dataset",
-    "raw_dataset_reference",
 ]

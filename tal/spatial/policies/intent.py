@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 
 from tal.utils.frame_schema import get_frames
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from .frame import is_framed, resolve_bidirectional_tip_tail_frames
 from ..metadata import get_position_intent
 
@@ -23,8 +25,8 @@ def _resolve_unframed_intent(
     *,
     owner: str,
 ) -> PositionAddPlan:
-    left_delta = get_position_intent(left.unsafe_data, owner=owner) == "delta"
-    right_delta = get_position_intent(right.unsafe_data, owner=owner) == "delta"
+    left_delta = get_position_intent(analysis_object_dataset(left), owner=owner) == "delta"
+    right_delta = get_position_intent(analysis_object_dataset(right), owner=owner) == "delta"
     if left_delta == right_delta:
         raise ValueError(
             f"{owner}: ambiguous unframed Position addition; mark exactly one operand as displacement via as_delta()."
@@ -38,15 +40,17 @@ def resolve_position_add_intent(
     *,
     owner: str,
 ) -> PositionAddPlan:
-    left_parent, left_child = get_frames(left.unsafe_data)
-    right_parent, right_child = get_frames(right.unsafe_data)
+    left_ds = analysis_object_dataset(left)
+    right_ds = analysis_object_dataset(right)
+    left_parent, left_child = get_frames(left_ds)
+    right_parent, right_child = get_frames(right_ds)
     left_framed = is_framed(left_parent, left_child)
     right_framed = is_framed(right_parent, right_child)
 
     if left_framed and right_framed:
         chained = resolve_bidirectional_tip_tail_frames(
-            left.unsafe_data,
-            right.unsafe_data,
+            left_ds,
+            right_ds,
             owner=owner,
             what="Position addition",
         )

@@ -144,7 +144,7 @@ def read_roles(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> read_roles(ao.unsafe_data)
+    >>> read_roles(ao.as_dataset())
     (True, 'sample', (), ())
     """
     core = _core_mapping(ds)

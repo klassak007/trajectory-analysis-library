@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 import xarray as xr
 
+from .dataset_ownership import analysis_object_dataset
 from .orchestration.lazy import is_chunked_dataarray
 from .schema import set_validity
 from .schema_errors import SchemaError
@@ -44,9 +45,10 @@ def set_left_packed_validity_or_prune_from_size_coord(
     validate: bool,
     owner: str,
 ) -> "AnalysisObject":
-    if size_name not in ao.unsafe_data.coords:
+    ds = analysis_object_dataset(ao)
+    if size_name not in ds.coords:
         raise ValueError(f"{owner}: missing sequence_size_coord {size_name!r}.")
-    if is_chunked_dataarray(ao.unsafe_data.coords[size_name]):
+    if is_chunked_dataarray(ds.coords[size_name]):
         return ao.set_validity(sequence_size_coord=None, validate=validate)
     return ao.set_validity(sequence_size_coord=size_name, layout="left_packed", validate=validate)
 

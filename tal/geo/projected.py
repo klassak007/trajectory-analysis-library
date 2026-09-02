@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import (
     require_exact_labels,
@@ -87,7 +88,7 @@ class ProjectedPosition(TypedAnalysisObject):
     ... )
     >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True)
     >>> projected = ProjectedPosition.from_projected(ao, crs="EPSG:32611")
-    >>> list(projected.unsafe_data["projected"].values)
+    >>> list(projected.as_dataset()["projected"].values)
     ['easting', 'northing']
     """
 
@@ -145,13 +146,13 @@ class ProjectedPosition(TypedAnalysisObject):
         ... )
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True)
         >>> projected = ProjectedPosition.from_projected(ao, crs="EPSG:32611")
-        >>> projected.unsafe_data.attrs["tal"]["ext"]["geo"]["kind"]
+        >>> projected.as_dataset().attrs["tal"]["ext"]["geo"]["kind"]
         'projected_position'
         """
 
         owner = "geo.ProjectedPosition.from_projected"
         source = coerce_analysis_object_input(value, owner=owner)
-        ds = normalize_projected_metadata(source.unsafe_data, crs=crs, validate=False, owner=owner)
+        ds = normalize_projected_metadata(analysis_object_dataset(source), crs=crs, validate=False, owner=owner)
         if validate:
             return cls._from_validated(ds)
         return cls._from_unvalidated(ds)
@@ -197,7 +198,7 @@ class ProjectedPosition(TypedAnalysisObject):
         ... )
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("projected",), validate=True)
         >>> lla = ProjectedPosition.from_projected(ao, crs="EPSG:32611").to_crs("EPSG:4979")
-        >>> list(lla.unsafe_data["lla"].values)
+        >>> list(lla.as_dataset()["lla"].values)
         ['lat', 'lon', 'alt']
         """
 

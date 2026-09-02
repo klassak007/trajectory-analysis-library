@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_context
 from tal.core.orchestration.inputs import query_coord_from_other_input
 from tal.core.orchestration.resolve import resolve_param_runtime_context
@@ -170,8 +171,9 @@ def _assemble_lla(
 
 
 def _wrap_and_restamp(source, candidate, *, opts: GeodeticInterpolationOptions, validate: bool, owner: str):
-    geo_opts = options_from_geodetic_metadata(source.unsafe_data, owner=owner)
+    geo_opts = options_from_geodetic_metadata(analysis_object_dataset(source), owner=owner)
     wrap_mode = geo_opts.longitude_wrap if opts.longitude_wrap == "shortest" else opts.longitude_wrap
+    candidate_ds = analysis_object_dataset(candidate)
     if opts.longitude_wrap != "preserve":
         ctx = resolve_dataset_context(candidate, owner=owner, options=_CTX_OPTIONS)
         assert ctx.data is not None and ctx.var_name is not None
@@ -187,9 +189,9 @@ def _wrap_and_restamp(source, candidate, *, opts: GeodeticInterpolationOptions, 
             target_dims=ctx.data.dims,
             var_name=ctx.var_name,
         )
-        ds = candidate.unsafe_data.assign({ctx.var_name: arr})
+        ds = candidate_ds.assign({ctx.var_name: arr})
     else:
-        ds = candidate.unsafe_data
+        ds = candidate_ds
         wrap_mode = geo_opts.longitude_wrap
     from dataclasses import replace
 
@@ -233,7 +235,7 @@ def _finalize_geodesic_output(
     )
     from .geodetic import GeodeticPosition
 
-    candidate = GeodeticPosition._from_unvalidated(evaluated.unsafe_data)
+    candidate = GeodeticPosition._from_unvalidated(analysis_object_dataset(evaluated))
     return _wrap_and_restamp(source, candidate, opts=opts, validate=validate, owner=owner)
 
 
@@ -345,7 +347,7 @@ def _nearest(
     mode: str,
     owner: str,
 ):
-    carrier = AnalysisObject._from_unvalidated(source.unsafe_data)
+    carrier = AnalysisObject._from_unvalidated(analysis_object_dataset(source))
     evaluated = _generic_param_eval(
         carrier,
         query,
@@ -360,7 +362,7 @@ def _nearest(
     )
     from .geodetic import GeodeticPosition
 
-    candidate = GeodeticPosition._from_unvalidated(evaluated.unsafe_data)
+    candidate = GeodeticPosition._from_unvalidated(analysis_object_dataset(evaluated))
     return _wrap_and_restamp(source, candidate, opts=opts, validate=validate, owner=owner)
 
 
@@ -379,7 +381,7 @@ def _ecef_linear(
 ):
     ecef = source.to_ecef(validate=False)
     evaluated = _generic_param_eval(
-        AnalysisObject._from_unvalidated(ecef.unsafe_data),
+        AnalysisObject._from_unvalidated(analysis_object_dataset(ecef)),
         query,
         on=on,
         opts=opts,
@@ -390,7 +392,7 @@ def _ecef_linear(
         mode=mode,
         method="linear",
     )
-    lla = Position(evaluated.unsafe_data).geo.to_lla(validate=False)
+    lla = Position(analysis_object_dataset(evaluated)).geo.to_lla(validate=False)
     return _wrap_and_restamp(source, lla, opts=opts, validate=validate, owner=owner)
 
 
@@ -411,7 +413,7 @@ def _local_enu_linear(
 
     enu = source.to_enu(opts=ENUOptions(origin=opts.local_origin), validate=False)
     evaluated = _generic_param_eval(
-        AnalysisObject._from_unvalidated(enu.unsafe_data),
+        AnalysisObject._from_unvalidated(analysis_object_dataset(enu)),
         query,
         on=on,
         opts=opts,
@@ -422,7 +424,7 @@ def _local_enu_linear(
         mode=mode,
         method="linear",
     )
-    ecef = Position(evaluated.unsafe_data).geo.to_ecef(origin=opts.local_origin, validate=False)
+    ecef = Position(analysis_object_dataset(evaluated)).geo.to_ecef(origin=opts.local_origin, validate=False)
     lla = ecef.geo.to_lla(validate=False)
     return _wrap_and_restamp(source, lla, opts=opts, validate=validate, owner=owner)
 

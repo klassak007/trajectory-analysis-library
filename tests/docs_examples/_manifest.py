@@ -17,8 +17,6 @@ class SymbolRecord:
 
 CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
     "core": (
-        "tal.core.analysis_object.AnalysisObject.data",
-        "tal.core.analysis_object.AnalysisObject.unsafe_data",
         "tal.core.analysis_object.AnalysisObject.param",
         "tal.core.analysis_object.AnalysisObject.combine",
         "tal.core.analysis_object.AnalysisObject.events",
@@ -27,6 +25,7 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.core.analysis_object.AnalysisObject.from_data",
         "tal.core.analysis_object.AnalysisObject.as_dataset",
         "tal.core.analysis_object.AnalysisObject.to_dataarray",
+        "tal.core.analysis_object.AnalysisObject.close",
         "tal.core.analysis_object.AnalysisObject.isel",
         "tal.core.analysis_object.AnalysisObject.sel",
         "tal.core.analysis_object.AnalysisObject.where",
@@ -293,7 +292,7 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
 }
 
 CURATED_SCOPE_COUNTS: dict[str, int] = {
-    "core": 74,
+    "core": 73,
     "linalg": 30,
     "spatial": 78,
     "geo": 25,

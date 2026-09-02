@@ -425,7 +425,7 @@ def test_arch_io_p10a_005_io_readers_construct_requested_cls_after_shared_finali
     monkeypatch.setattr(io_finalize, "finalize_with_schema", finalize_sentinel)
     out = io_finalize.finalize_loaded_dataset(
         RequestedAO,
-        source.unsafe_data,
+        source.as_dataset(copy="none"),
         validate=True,
         owner="architecture.finalize_order",
     )
@@ -450,7 +450,7 @@ def test_arch_io_p10a_006_finalize_source_subclass_constructor_path_avoids_broad
     with pytest.raises(RuntimeError, match="constructor failure"):
         io_finalize.finalize_loaded_dataset(
             CrashingAO,
-            source.unsafe_data,
+            source.as_dataset(copy="none"),
             validate=True,
             owner="architecture.constructor_failure",
         )
@@ -503,7 +503,7 @@ def _assert_public_zarr_executes_finalize(
         xr.Dataset({"value": ("sample", [1.0])}),
         sequence_dim="sample",
         core_dims=(),
-    ).unsafe_data
+    ).as_dataset(copy="none")
     calls: list[tuple[type[AnalysisObject], xr.Dataset, bool, str]] = []
 
     def finalize_sentinel(

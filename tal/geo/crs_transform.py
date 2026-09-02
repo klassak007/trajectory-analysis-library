@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.schema import merge_schema
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.spatial import Position
@@ -69,26 +70,30 @@ def _source(value: object, *, owner: str) -> _Source:
     from .projected import ProjectedPosition
 
     if isinstance(value, GeodeticPosition):
-        opts = options_from_geodetic_metadata(value.unsafe_data, owner=owner)
+        value_ds = analysis_object_dataset(value)
+        opts = options_from_geodetic_metadata(value_ds, owner=owner)
         return _Source("geodetic", value, opts.crs, opts.crs, True)
     if isinstance(value, ProjectedPosition):
-        block = read_projected_geo_block(value.unsafe_data, owner=owner)
+        value_ds = analysis_object_dataset(value)
+        block = read_projected_geo_block(value_ds, owner=owner)
         return _Source("projected", value, str(block["crs"]), str(block["geodetic_crs"]), _projected_has_height(value))
     if isinstance(value, Position):
-        block = read_cartesian_geo_block(value.unsafe_data, system="ecef", owner=owner)
+        value_ds = analysis_object_dataset(value)
+        block = read_cartesian_geo_block(value_ds, system="ecef", owner=owner)
         opts = options_from_ecef_provenance(block, owner=owner)
         return _Source("ecef", value, opts.ecef_crs, opts.crs, True)
     try:
         ao = coerce_analysis_object_input(value, owner=owner)
     except TypeError as exc:
         raise TypeError(f"{owner}: value must be GeodeticPosition, ProjectedPosition, or ECEF Position.") from exc
-    block = read_geo_block(ao.unsafe_data, owner=owner)
+    ao_ds = analysis_object_dataset(ao)
+    block = read_geo_block(ao_ds, owner=owner)
     if block is None:
         raise ValueError(f"{owner}: source CRS metadata is required.")
     if block.get("kind") == "geodetic_position":
-        return _source(GeodeticPosition._from_unvalidated(ao.unsafe_data), owner=owner)
+        return _source(GeodeticPosition._from_unvalidated(ao_ds), owner=owner)
     if block.get("kind") == "projected_position":
-        return _source(ProjectedPosition._from_unvalidated(ao.unsafe_data), owner=owner)
+        return _source(ProjectedPosition._from_unvalidated(ao_ds), owner=owner)
     return _source(Position(ao), owner=owner)
 
 
@@ -267,7 +272,7 @@ def transform_crs(value: object, *, dst: str, validate: bool = True):
     ... )
     >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("lla",), validate=True)
     >>> ecef = transform_crs(GeodeticPosition.from_lla(ao), dst="EPSG:4978")
-    >>> list(ecef.unsafe_data["axis"].values)
+    >>> list(ecef.as_dataset()["axis"].values)
     ['x', 'y', 'z']
     """
     owner = "geo.transform_crs"

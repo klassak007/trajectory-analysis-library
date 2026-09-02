@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..schema_errors import SchemaError, schema_error
 from .alignment_intent import read_alignment_intent
 from .broadcast_intent import read_broadcast_intent
@@ -253,7 +254,7 @@ def dataset_from_other_input(
     from ..analysis_object import AnalysisObject
 
     if isinstance(other, AnalysisObject):
-        return other.unsafe_data
+        return analysis_object_dataset(other)
     if isinstance(other, xr.Dataset):
         return other
     if isinstance(other, xr.DataArray):

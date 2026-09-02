@@ -52,8 +52,8 @@ def test_comp_backbone_core_001_registry_schema_roundtrip() -> None:
     out = define_components(ao, opts=_registry_options(), validate=True)
     decoded = read_components(out)
     assert decoded == _registry_options().registry
-    assert out.unsafe_data.attrs["tal"]["ext"]["components"]["version"] == 1
-    assert list(out.unsafe_data.attrs["tal"]["ext"]["components"]["registry"]) == ["position", "heading"]
+    assert out.as_dataset(copy="none").attrs["tal"]["ext"]["components"]["version"] == 1
+    assert list(out.as_dataset(copy="none").attrs["tal"]["ext"]["components"]["registry"]) == ["position", "heading"]
 
 
 def test_comp_backbone_core_002_registry_rejects_unknown_core_dim() -> None:
@@ -91,7 +91,7 @@ def test_comp_backbone_core_011_accessor_define_registry_parity() -> None:
     opts = _registry_options()
     out_functional = define_components(ao, opts=opts, validate=True)
     out_accessor = ao.components.define(opts=opts, validate=True)
-    xr.testing.assert_identical(out_functional.unsafe_data, out_accessor.unsafe_data)
+    xr.testing.assert_identical(out_functional.as_dataset(copy="none"), out_accessor.as_dataset(copy="none"))
     assert out_accessor.components.registry() == opts.registry
 
 
@@ -137,7 +137,7 @@ def test_comp_backbone_core_008_structural_drop_prunes_registry_truthfully() -> 
     )
     dropped = ao.drop_vars("value")
     assert dropped.components.registry() == {}
-    ext = dropped.unsafe_data.attrs.get("tal", {}).get("ext", {})
+    ext = dropped.as_dataset(copy="none").attrs.get("tal", {}).get("ext", {})
     assert "components" not in ext
 
 
@@ -174,7 +174,7 @@ def test_comp_backbone_core_013_define_replace_false_merge_policy_deterministic(
 def test_comp_backbone_core_014_structural_unsupported_version_fails_closed() -> None:
     """ID: COMP_BACKBONE_CORE_014_structural_unsupported_version_fails_closed."""
     ao = define_components(_base_ao(), opts=_registry_options(), validate=True)
-    bad_ds = ao.unsafe_data.copy(deep=True)
+    bad_ds = ao.as_dataset(copy="none").copy(deep=True)
     bad_ds.attrs["tal"]["ext"]["components"]["version"] = 2
     bad_ao = AnalysisObject._from_unvalidated(bad_ds)
     with pytest.raises(ValueError, match="components.rewrite: tal.ext.components.version"):
@@ -194,7 +194,7 @@ def test_comp_backbone_core_015_structural_var_rename_rewrites_component_var() -
 def test_comp_backbone_core_016_version_type_strict_rejects_bool_true() -> None:
     """ID: COMP_BACKBONE_CORE_016_version_type_strict_rejects_bool_true."""
     ao = define_components(_base_ao(), opts=_registry_options(), validate=True)
-    bad_ds = ao.unsafe_data.copy(deep=True)
+    bad_ds = ao.as_dataset(copy="none").copy(deep=True)
     bad_ds.attrs["tal"]["ext"]["components"]["version"] = True
     bad_ao = AnalysisObject._from_unvalidated(bad_ds)
     with pytest.raises(ValueError, match="components.read: tal.ext.components.version"):
@@ -204,7 +204,7 @@ def test_comp_backbone_core_016_version_type_strict_rejects_bool_true() -> None:
 def test_comp_backbone_core_017_structural_non_mapping_components_payload_fails_closed() -> None:
     """ID: COMP_BACKBONE_CORE_017_structural_non_mapping_components_payload_fails_closed."""
     ao = define_components(_base_ao(), opts=_registry_options(), validate=True)
-    bad_ds = ao.unsafe_data.copy(deep=True)
+    bad_ds = ao.as_dataset(copy="none").copy(deep=True)
     bad_ds.attrs["tal"]["ext"]["components"] = "malformed"
     bad_ao = AnalysisObject._from_unvalidated(bad_ds)
     with pytest.raises(ValueError, match="components.rewrite: tal.ext.components must be a mapping"):

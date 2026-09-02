@@ -165,14 +165,14 @@ def test_schema_write_roles_003_returns_new_ao() -> None:
     ao = AnalysisObject(_ds_sample_axis())
     updated = ao.set_roles(sequence_dim="sample", batch_dims=(), core_dims=("axis",))
     assert updated is not ao
-    assert "roles" not in ao.data.attrs["tal"]["core"]
-    assert updated.data.attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
+    assert "roles" not in ao.as_dataset().attrs["tal"]["core"]
+    assert updated.as_dataset().attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
 
 
 def test_schema_write_roles_004_atomic_on_failure() -> None:
     """ID: SCHEMA_WRITE_ROLES_004_atomic_on_failure."""
     ao = AnalysisObject(_ds_sample_axis())
-    before = _tal_snapshot(ao.data)
+    before = _tal_snapshot(ao.as_dataset())
     with pytest.raises(SchemaError) as err:
         ao.set_roles(sequence_dim="missing", batch_dims=(), core_dims=())
     _assert_schema_error(
@@ -180,7 +180,7 @@ def test_schema_write_roles_004_atomic_on_failure() -> None:
         code="schema.roles.sequence_dim.not_in_dataset",
         path="tal.core.roles.sequence_dim",
     )
-    assert ao.data.attrs["tal"] == before
+    assert ao.as_dataset().attrs["tal"] == before
 
 
 def test_schema_write_roles_005_partial_preserve_omitted() -> None:
@@ -263,7 +263,7 @@ def test_schema_write_param_005_atomic_on_failure() -> None:
     )
     ds = set_roles(ds, sequence_dim="sample", batch_dims=("trial",), core_dims=("axis",))
     ao = AnalysisObject(set_param_coord(ds, name="phase"))
-    before = _tal_snapshot(ao.data)
+    before = _tal_snapshot(ao.as_dataset())
     with pytest.raises(SchemaError) as err:
         ao.set_param_coord(name="bad")
     _assert_schema_error(
@@ -271,7 +271,7 @@ def test_schema_write_param_005_atomic_on_failure() -> None:
         code="schema.param_coord.dims.invalid",
         path="tal.core.param_coord.name",
     )
-    assert ao.data.attrs["tal"] == before
+    assert ao.as_dataset().attrs["tal"] == before
 
 
 def test_schema_write_param_006_non_numeric_param_coord_rejected() -> None:
@@ -515,7 +515,7 @@ def test_schema_write_merge_006_atomic_on_failure() -> None:
     """ID: SCHEMA_WRITE_MERGE_006_atomic_on_failure."""
     ds = set_roles(_ds_sample_axis(), sequence_dim="sample", batch_dims=(), core_dims=("axis",))
     ao = AnalysisObject(ds)
-    before = _tal_snapshot(ao.data)
+    before = _tal_snapshot(ao.as_dataset())
     with pytest.raises(SchemaError) as err:
         ao.merge_schema({"core": {"roles": {"sequence_dim": "missing"}}})
     _assert_schema_error(
@@ -523,7 +523,7 @@ def test_schema_write_merge_006_atomic_on_failure() -> None:
         code="schema.roles.sequence_dim.not_in_dataset",
         path="tal.core.roles.sequence_dim",
     )
-    assert ao.data.attrs["tal"] == before
+    assert ao.as_dataset().attrs["tal"] == before
 
 
 def test_schema_write_merge_007_non_string_patch_key_raises_schema_error() -> None:

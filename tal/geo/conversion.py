@@ -7,6 +7,7 @@ import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema import merge_schema
 from tal.core.orchestration.context import DatasetContext, DatasetContextOptions, resolve_dataset_context
@@ -134,7 +135,7 @@ def _finalize_core_schema(ctx: DatasetContext, ds: xr.Dataset, *, core_dim: str,
         owner=owner,
         optional_sources=(ctx.data,) if ctx.data is not None else (),
     )
-    return finalized.unsafe_data
+    return analysis_object_dataset(finalized)
 
 
 def _resolved_frame_parent(ds: xr.Dataset, *, opts: GeodeticOptions, owner: str) -> str | None:
@@ -184,7 +185,7 @@ def from_lla(value: object, *, opts: GeodeticOptions | None = None, validate: bo
     owner = "geo.GeodeticPosition.from_lla"
     source = coerce_analysis_object_input(value, owner=owner)
     ds = normalize_geodetic_metadata(
-        source.unsafe_data,
+        analysis_object_dataset(source),
         opts=opts,
         validate=False,
         validate_crs=opts is not None,
@@ -200,7 +201,7 @@ def to_ecef(position: "GeodeticPosition", *, opts: GeodeticOptions | None = None
     owner = "geo.GeodeticPosition.to_ecef"
     if opts is None:
         normalized_opts = coerce_geodetic_options(
-            options_from_geodetic_metadata(position.unsafe_data, owner=owner),
+            options_from_geodetic_metadata(analysis_object_dataset(position), owner=owner),
             owner=owner,
             validate_crs=True,
         )
@@ -228,13 +229,14 @@ def to_ecef(position: "GeodeticPosition", *, opts: GeodeticOptions | None = None
 
 
 def _options_for_ecef_source(position: Position, opts: GeodeticOptions | None, *, owner: str) -> GeodeticOptions:
-    block = read_cartesian_geo_block_if_present(position.unsafe_data, system="ecef", owner=owner)
+    ds = analysis_object_dataset(position)
+    block = read_cartesian_geo_block_if_present(ds, system="ecef", owner=owner)
     if opts is not None:
         return coerce_geodetic_options(opts, owner=owner, validate_crs=True)
     if block is None:
         return coerce_geodetic_options(None, owner=owner, validate_crs=True)
     provenance = options_from_ecef_provenance(block, owner=owner)
-    parent, _ = get_frames(position.unsafe_data)
+    parent, _ = get_frames(ds)
     return coerce_geodetic_options(
         replace(provenance, ecef_frame=parent),
         owner=owner,
@@ -296,7 +298,7 @@ def from_ecef(value: object, *, opts: GeodeticOptions | None = None, validate: b
     >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), validate=True)
     >>> opts = GeodeticOptions(longitude_wrap="[0, 360)")
     >>> lla = from_ecef(Position(ao), opts=opts)
-    >>> list(lla.unsafe_data["lla"].values)
+    >>> list(lla.as_dataset()["lla"].values)
     ['lat', 'lon', 'alt']
     """
     from .geodetic import GeodeticPosition

@@ -658,7 +658,7 @@ class Acceleration(TypedAnalysisObject):
         Examples
         --------
         >>> acceleration = Acceleration.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> sorted(acceleration.unsafe_data.data_vars)  # doctest: +SKIP
+        >>> sorted(acceleration.as_dataset().data_vars)  # doctest: +SKIP
         ['angular_acceleration', 'linear_acceleration']
         """
         return family_from_linear_angular(
@@ -733,7 +733,7 @@ class Acceleration(TypedAnalysisObject):
         Examples
         --------
         >>> acceleration = Acceleration.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> acceleration.to_rep("vector6").unsafe_data["acceleration"].shape[-1]  # doctest: +SKIP
+        >>> acceleration.to_rep("vector6").as_dataset()["acceleration"].shape[-1]  # doctest: +SKIP
         6
         """
         return family_to_rep(
@@ -766,7 +766,7 @@ class Acceleration(TypedAnalysisObject):
         Examples
         --------
         >>> acceleration = Acceleration.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> sorted(acceleration.as_components().unsafe_data.data_vars)  # doctest: +SKIP
+        >>> sorted(acceleration.as_components().as_dataset().data_vars)  # doctest: +SKIP
         ['angular_acceleration', 'linear_acceleration']
         """
         return family_as_components(
@@ -798,7 +798,7 @@ class Acceleration(TypedAnalysisObject):
         Examples
         --------
         >>> acceleration = Acceleration.from_linear_angular(linear, angular)  # doctest: +SKIP
-        >>> acceleration.as_vector6().unsafe_data["acceleration"].shape[-1]  # doctest: +SKIP
+        >>> acceleration.as_vector6().as_dataset()["acceleration"].shape[-1]  # doctest: +SKIP
         6
         """
         return family_as_vector6(

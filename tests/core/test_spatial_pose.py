@@ -40,7 +40,7 @@ def _position_dataset(
         core_dims=("axis",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _rotation_dataset(
@@ -62,7 +62,7 @@ def _rotation_dataset(
         core_dims=("quat",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _batched_position_dataset() -> xr.Dataset:
@@ -94,7 +94,7 @@ def _batched_position_dataset() -> xr.Dataset:
         sequence_size_coord="sample_size",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _batched_rotation_dataset(*, include_trial_dim: bool) -> xr.Dataset:
@@ -151,7 +151,7 @@ def _batched_rotation_dataset(*, include_trial_dim: bool) -> xr.Dataset:
         sequence_size_coord="sample_size",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _matrix_dataset(*, var_name: str = "pose_matrix") -> xr.Dataset:
@@ -175,7 +175,7 @@ def _matrix_dataset(*, var_name: str = "pose_matrix") -> xr.Dataset:
         name=var_name,
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name=var_name), sequence_dim="sample", core_dims=("row", "col"), validate=True)
-    return set_pose_rep(ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    return set_pose_rep(ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
 
 
 def _as_dataarray_with_schema(ds: xr.Dataset, *, var_name: str) -> xr.DataArray:
@@ -210,8 +210,8 @@ def _component_pose_with_frames(parent: str, child: str) -> Pose:
 
 def _matrix_payload(pose: Pose) -> np.ndarray:
     matrix_pose = pose.as_matrix(validate=True)
-    var_name = str(next(iter(matrix_pose.unsafe_data.data_vars)))
-    return matrix_pose.unsafe_data[var_name].values
+    var_name = str(next(iter(matrix_pose.as_dataset(copy="none").data_vars)))
+    return matrix_pose.as_dataset(copy="none")[var_name].values
 
 
 def _assert_quat_equivalent(actual: np.ndarray, expected: np.ndarray, *, atol: float = 1e-6) -> None:
@@ -271,7 +271,7 @@ def _pose_temporal_dataset(*, batched: bool = False) -> xr.Dataset:
             core_dims=("axis",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
         rot_ds = AnalysisObject.from_data(
             rotation.to_dataset(name="rotation"),
             sequence_dim="sample",
@@ -279,7 +279,7 @@ def _pose_temporal_dataset(*, batched: bool = False) -> xr.Dataset:
             core_dims=("quat",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
     else:
         position = xr.DataArray(
             np.asarray([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float),
@@ -315,24 +315,24 @@ def _pose_temporal_dataset(*, batched: bool = False) -> xr.Dataset:
             core_dims=("axis",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
         rot_ds = AnalysisObject.from_data(
             rotation.to_dataset(name="rotation"),
             sequence_dim="sample",
             core_dims=("quat",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
     pos = frame_retag(Position(pos_ds), parent="world", child="body", validate=True)
     rot = frame_retag(Rotation(rot_ds), parent="world", child="body", validate=True)
-    return Pose.from_components(rot, pos, validate=True).unsafe_data
+    return Pose.from_components(rot, pos, validate=True).as_dataset(copy="none")
 
 
 def test_spatial_core_018_pose_constructor_accepts_ao_dataset_dataarray_deterministically() -> None:
     """ID: SPATIAL_CORE_018_pose_constructor_accepts_ao_dataset_dataarray_deterministically."""
     component_pose = _component_pose()
-    from_components_ao = Pose(AnalysisObject._from_validated(component_pose.unsafe_data))
-    from_components_ds = Pose(component_pose.unsafe_data)
+    from_components_ao = Pose(AnalysisObject._from_validated(component_pose.as_dataset(copy="none")))
+    from_components_ds = Pose(component_pose.as_dataset(copy="none"))
 
     matrix_ds = _matrix_dataset(var_name="matrix")
     from_matrix_ao = Pose(AnalysisObject._from_validated(matrix_ds))
@@ -351,8 +351,8 @@ def test_spatial_core_019_pose_layout_rep_boundary_matrix_vs_components_determin
     component_pose = _component_pose()
     matrix_pose = Pose(_matrix_dataset())
 
-    assert get_pose_rep(component_pose.unsafe_data, owner="test") == "components"
-    assert get_pose_rep(matrix_pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(component_pose.as_dataset(copy="none"), owner="test") == "components"
+    assert get_pose_rep(matrix_pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert set(read_components(component_pose).keys()) == {"position", "rotation"}
     assert read_components(matrix_pose) == {}
 
@@ -364,8 +364,8 @@ def test_spatial_core_020_pose_components_storage_defaults_to_cart_quat() -> Non
 
     assert isinstance(pos, Position)
     assert isinstance(rot, Rotation)
-    assert get_position_rep(pos.unsafe_data, owner="test") == "cart"
-    assert get_rotation_rep(rot.unsafe_data, owner="test") == "quat"
+    assert get_position_rep(pos.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_rotation_rep(rot.as_dataset(copy="none"), owner="test") == "quat"
 
 
 def test_spatial_core_021_pose_matrix_storage_decompose_default_is_cart_quat() -> None:
@@ -373,15 +373,15 @@ def test_spatial_core_021_pose_matrix_storage_decompose_default_is_cart_quat() -
     pose = Pose(_matrix_dataset())
     pos, rot = pose.decompose(validate=True)
 
-    assert get_position_rep(pos.unsafe_data, owner="test") == "cart"
-    assert get_rotation_rep(rot.unsafe_data, owner="test") == "quat"
-    assert list(pos.unsafe_data.data_vars) == ["position"]
-    assert list(rot.unsafe_data.data_vars) == ["rotation"]
-    assert "datavar" not in pos.unsafe_data.data_vars
-    assert "datavar" not in rot.unsafe_data.data_vars
-    np.testing.assert_allclose(pos.unsafe_data["position"].values, np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float))
+    assert get_position_rep(pos.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_rotation_rep(rot.as_dataset(copy="none"), owner="test") == "quat"
+    assert list(pos.as_dataset(copy="none").data_vars) == ["position"]
+    assert list(rot.as_dataset(copy="none").data_vars) == ["rotation"]
+    assert "datavar" not in pos.as_dataset(copy="none").data_vars
+    assert "datavar" not in rot.as_dataset(copy="none").data_vars
+    np.testing.assert_allclose(pos.as_dataset(copy="none")["position"].values, np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float))
     np.testing.assert_allclose(
-        rot.unsafe_data["rotation"].values,
+        rot.as_dataset(copy="none")["rotation"].values,
         np.asarray([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.70710678, 0.70710678]], dtype=float),
         atol=1e-6,
     )
@@ -396,7 +396,7 @@ def test_spatial_core_022_pose_component_boundary_reuses_phase7_5_owners() -> No
         "position": ComponentSpec(core_dim="axis", labels=_XYZ, var="position"),
         "rotation": ComponentSpec(core_dim="quat", labels=_QUAT, var="rotation"),
     }
-    extracted = extract_components(AnalysisObject._from_validated(pose.unsafe_data), validate=True)
+    extracted = extract_components(AnalysisObject._from_validated(pose.as_dataset(copy="none")), validate=True)
     assert set(extracted.keys()) == {"position", "rotation"}
 
 
@@ -406,11 +406,11 @@ def test_spatial_core_023_pose_frame_metadata_boundary_reuses_phase7_owners() ->
     rot = frame_retag(Rotation(_rotation_dataset()), parent="world", child="body", validate=True)
 
     pose = Pose.from_components(rot, pos, validate=True)
-    assert get_frames(pose.unsafe_data) == ("world", "body")
+    assert get_frames(pose.as_dataset(copy="none")) == ("world", "body")
 
     pos_out, rot_out = pose.decompose(validate=True)
-    assert get_frames(pos_out.unsafe_data) == ("world", "body")
-    assert get_frames(rot_out.unsafe_data) == ("world", "body")
+    assert get_frames(pos_out.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(rot_out.as_dataset(copy="none")) == ("world", "body")
 
 
 def test_spatial_hard_016_pose_constructor_type_mismatch_fail_closed() -> None:
@@ -499,7 +499,7 @@ def test_spatial_hard_023_pose_from_components_rejects_coordinate_mismatch_no_ou
 
 def test_spatial_hard_114_pose_component_var_missing_declared_non_core_dims_rejected_by_core_component_runtime_checks() -> None:
     """ID: SPATIAL_HARD_114_pose_component_var_missing_declared_non_core_dims_rejected_by_core_component_runtime_checks."""
-    ds = _component_pose().unsafe_data
+    ds = _component_pose().as_dataset(copy="none")
     pos_values = ds["position"].isel(sample=0).values
     ds = ds.drop_vars("position")
     ds["position"] = xr.DataArray(pos_values, dims=("axis",), coords={"axis": list(_XYZ)})
@@ -522,10 +522,10 @@ def test_spatial_hard_024_pose_from_matrix_clears_preexisting_component_registry
     )
 
     pose = Pose.from_matrix(with_registry, validate=True)
-    assert get_pose_rep(pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert read_components(pose) == {}
-    np.testing.assert_allclose(pose.unsafe_data["pose_matrix"].values, with_registry.unsafe_data["pose_matrix"].values)
-    assert pose.unsafe_data["pose_matrix"].dims == with_registry.unsafe_data["pose_matrix"].dims
+    np.testing.assert_allclose(pose.as_dataset(copy="none")["pose_matrix"].values, with_registry.as_dataset(copy="none")["pose_matrix"].values)
+    assert pose.as_dataset(copy="none")["pose_matrix"].dims == with_registry.as_dataset(copy="none")["pose_matrix"].dims
 
 
 @pytest.mark.parametrize(
@@ -613,12 +613,12 @@ def test_spatial_hard_195_pose_matrix_validation_ignores_structural_padding() ->
         sequence_size_coord="sample_size",
         validate=True,
     )
-    ds = set_pose_rep(ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    ds = set_pose_rep(ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
     pose = Pose.from_matrix(ds, validate=True)
-    np.testing.assert_array_equal(pose.unsafe_data["pose_matrix"].values, values)
+    np.testing.assert_array_equal(pose.as_dataset(copy="none")["pose_matrix"].values, values)
     converted = pose.as_components(validate=True)
-    assert read_sequence_size_coord_name(converted.unsafe_data) == "sample_size"
-    np.testing.assert_array_equal(converted.unsafe_data.coords["sample_size"], [2, 1])
+    assert read_sequence_size_coord_name(converted.as_dataset(copy="none")) == "sample_size"
+    np.testing.assert_array_equal(converted.as_dataset(copy="none").coords["sample_size"], [2, 1])
 
     invariant = np.broadcast_to(np.eye(4), (3, 4, 4)).copy()
     invariant[2] = 0.0
@@ -644,7 +644,7 @@ def test_spatial_hard_195_pose_matrix_validation_ignores_structural_padding() ->
         sequence_size_coord="sample_size",
         validate=True,
     )
-    invariant_ds = set_pose_rep(invariant_ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    invariant_ds = set_pose_rep(invariant_ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
     Pose.from_matrix(invariant_ds, validate=True)
     invariant_ds["pose_matrix"].data[1] = 0.0
     with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
@@ -675,7 +675,7 @@ def test_spatial_hard_195_pose_matrix_validation_ignores_structural_padding() ->
         validate=True,
     )
     sequence_invariant_ds = set_pose_rep(
-        sequence_invariant_ao.unsafe_data,
+        sequence_invariant_ao.as_dataset(copy="none"),
         rep="matrix",
         validate=False,
         owner="test",
@@ -704,10 +704,10 @@ def test_spatial_perf_001_pose_matrix_validation_preserves_dask_laziness(
     with monkeypatch.context() as guarded:
         guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
         pose = Pose.from_matrix(ds, validate=True)
-        assert getattr(pose.unsafe_data["pose_matrix"].data, "chunks", None) is not None
-        assert pose.unsafe_data["pose_matrix"].dims == ds["pose_matrix"].dims
-        assert pose.unsafe_data["pose_matrix"].attrs["matrix_kind"] == "rigid"
-    np.testing.assert_allclose(pose.unsafe_data["pose_matrix"].compute(), expected)
+        assert getattr(pose.as_dataset(copy="none")["pose_matrix"].data, "chunks", None) is not None
+        assert pose.as_dataset(copy="none")["pose_matrix"].dims == ds["pose_matrix"].dims
+        assert pose.as_dataset(copy="none")["pose_matrix"].attrs["matrix_kind"] == "rigid"
+    np.testing.assert_allclose(pose.as_dataset(copy="none")["pose_matrix"].compute(), expected)
 
     bad = ds.copy(deep=True)
     bad_values = expected.copy()
@@ -717,7 +717,7 @@ def test_spatial_perf_001_pose_matrix_validation_preserves_dask_laziness(
         guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
         bad_pose = Pose.from_matrix(bad, validate=True)
     with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
-        bad_pose.unsafe_data["pose_matrix"].compute()
+        bad_pose.as_dataset(copy="none")["pose_matrix"].compute()
 
 
 def test_spatial_core_045_pose_to_rep_components_to_matrix_deterministic() -> None:
@@ -726,7 +726,7 @@ def test_spatial_core_045_pose_to_rep_components_to_matrix_deterministic() -> No
     matrix_pose = pose.to_rep("matrix", validate=True)
 
     assert isinstance(matrix_pose, Pose)
-    assert get_pose_rep(matrix_pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(matrix_pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert read_components(matrix_pose) == {}
     np.testing.assert_allclose(_matrix_payload(matrix_pose), _matrix_payload(pose), atol=1e-8)
 
@@ -736,7 +736,7 @@ def test_spatial_core_046_pose_to_rep_matrix_to_components_deterministic() -> No
     pose = Pose(_matrix_dataset())
     components_pose = pose.to_rep("components", validate=True)
 
-    assert get_pose_rep(components_pose.unsafe_data, owner="test") == "components"
+    assert get_pose_rep(components_pose.as_dataset(copy="none"), owner="test") == "components"
     assert set(read_components(components_pose).keys()) == {"position", "rotation"}
     np.testing.assert_allclose(_matrix_payload(components_pose), _matrix_payload(pose), atol=1e-6)
 
@@ -746,8 +746,8 @@ def test_spatial_core_047_pose_conversion_roundtrip_components_matrix_preserves_
     pose = _component_pose_with_frames("world", "body")
     roundtrip = pose.as_matrix(validate=True).as_components(validate=True)
 
-    assert get_frames(roundtrip.unsafe_data) == ("world", "body")
-    assert get_pose_rep(roundtrip.unsafe_data, owner="test") == "components"
+    assert get_frames(roundtrip.as_dataset(copy="none")) == ("world", "body")
+    assert get_pose_rep(roundtrip.as_dataset(copy="none"), owner="test") == "components"
     np.testing.assert_allclose(_matrix_payload(roundtrip), _matrix_payload(pose), atol=1e-6)
 
 
@@ -759,7 +759,7 @@ def test_spatial_core_048_pose_compose_tip_tail_chain_deterministic() -> None:
 
     expected = np.matmul(_matrix_payload(right), _matrix_payload(left))
     np.testing.assert_allclose(_matrix_payload(composed), expected, atol=1e-6)
-    assert get_frames(composed.unsafe_data) == ("world", "sensor")
+    assert get_frames(composed.as_dataset(copy="none")) == ("world", "sensor")
 
 
 def test_spatial_core_049_pose_compose_mixed_rep_executes_via_canonical_split_and_returns_left_rep() -> None:
@@ -768,7 +768,7 @@ def test_spatial_core_049_pose_compose_mixed_rep_executes_via_canonical_split_an
     right = _component_pose_with_frames("body", "sensor")
     composed = left.compose(right, validate=True)
 
-    assert get_pose_rep(composed.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(composed.as_dataset(copy="none"), owner="test") == "matrix"
     expected = np.matmul(_matrix_payload(right), _matrix_payload(left))
     np.testing.assert_allclose(_matrix_payload(composed), expected, atol=1e-6)
 
@@ -797,7 +797,7 @@ def test_spatial_core_052_pose_compose_frame_policy_one_framed_inherits_tags() -
     unframed = _component_pose()
     composed = framed.compose(unframed, validate=True)
 
-    assert get_frames(composed.unsafe_data) == ("world", "body")
+    assert get_frames(composed.as_dataset(copy="none")) == ("world", "body")
 
 
 def test_spatial_hard_044_pose_to_rep_rejects_unsupported_target_rep() -> None:
@@ -843,7 +843,7 @@ def test_spatial_hard_048_pose_inverse_fail_closed_on_malformed_internal_state()
     pose = _component_pose()
     rotation_spec = read_components(pose)["rotation"]
     assert rotation_spec.var is not None
-    pose.unsafe_data[rotation_spec.var].data[0, :] = 0.0
+    pose.as_dataset(copy="none")[rotation_spec.var].data[0, :] = 0.0
     with pytest.raises(ValueError, match="spatial.pose.inverse"):
         pose.inverse(validate=True)
 
@@ -851,7 +851,7 @@ def test_spatial_hard_048_pose_inverse_fail_closed_on_malformed_internal_state()
 def test_spatial_hard_049_pose_compose_malformed_frame_schema_fail_closed() -> None:
     """ID: SPATIAL_HARD_049_pose_compose_malformed_frame_schema_fail_closed."""
     left = _component_pose()
-    right_ds = left.unsafe_data.copy(deep=True)
+    right_ds = left.as_dataset(copy="none").copy(deep=True)
     tal = dict(right_ds.attrs["tal"])
     ext = dict(tal.get("ext", {}))
     ext["frames"] = {"parent": "world", "child": "body", "extra": "bad"}
@@ -865,7 +865,7 @@ def test_spatial_hard_050_pose_to_rep_matrix_clears_stale_component_registry_tru
     """ID: SPATIAL_HARD_050_pose_to_rep_matrix_clears_stale_component_registry_truthfully."""
     pose = _component_pose()
     matrix_pose = pose.to_rep("matrix", validate=True)
-    assert get_pose_rep(matrix_pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(matrix_pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert read_components(matrix_pose) == {}
 
 
@@ -899,11 +899,11 @@ def test_bcast_core_053_pose_component_assembly_preserves_declared_param_and_seq
     rotation = Rotation(_batched_rotation_dataset(include_trial_dim=False))
     position = Position(_batched_position_dataset())
     out = Pose.from_components(rotation, position, validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
     rotation_spec = read_components(out)["rotation"]
     assert rotation_spec.var is not None
-    assert out.unsafe_data[rotation_spec.var].sizes["trial"] == 2
+    assert out.as_dataset(copy="none")[rotation_spec.var].sizes["trial"] == 2
 
 
 def test_bcast_core_054_pose_compose_static_dynamic_mix_adopts_dynamic_series_roles() -> None:
@@ -919,13 +919,13 @@ def test_bcast_core_054_pose_compose_static_dynamic_mix_adopts_dynamic_series_ro
         validate=True,
     )
     out = left.compose(right, validate=True)
-    declared, sequence_dim, batch_dims, _ = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, _ = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     out_pos, out_rot = out.decompose(validate=True)
-    assert out_pos.unsafe_data["position"].sizes["trial"] == 2
-    assert out_rot.unsafe_data["rotation"].sizes["trial"] == 2
+    assert out_pos.as_dataset(copy="none")["position"].sizes["trial"] == 2
+    assert out_rot.as_dataset(copy="none")["rotation"].sizes["trial"] == 2
 
 
 def test_spatial_core_118_pose_inverse_preserves_declared_batch_only_roles() -> None:
@@ -962,15 +962,15 @@ def test_spatial_core_118_pose_inverse_preserves_declared_batch_only_roles() -> 
         validate=True,
     )
     inv = pose.inverse(validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim is None
     assert batch_dims == ("trial",)
     assert core_dims == ("axis", "quat")
-    assert read_param_coord_name(inv.unsafe_data) is None
-    assert read_sequence_size_coord_name(inv.unsafe_data) is None
+    assert read_param_coord_name(inv.as_dataset(copy="none")) is None
+    assert read_sequence_size_coord_name(inv.as_dataset(copy="none")) is None
 
-    ident = pose.compose(inv, validate=True).as_matrix(validate=True).unsafe_data["pose_matrix"].values
+    ident = pose.compose(inv, validate=True).as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values
     expected = np.broadcast_to(np.eye(4, dtype=float), ident.shape)
     np.testing.assert_allclose(ident, expected, atol=1e-6)
 
@@ -1033,8 +1033,8 @@ def test_spatial_core_119_pose_inverse_succeeds_with_reserved_valid_coord_attr_d
     )
     synced_ship = ship_ao.param.interp_like(drone_ao, on="time", validate=True)
     ship_pos = frame_retag(Position(synced_ship), parent="world", child="ship", validate=True)
-    assert "valid" in ship_pos.unsafe_data.coords
-    assert ship_pos.unsafe_data.coords["valid"].attrs
+    assert "valid" in ship_pos.as_dataset(copy="none").coords
+    assert ship_pos.as_dataset(copy="none").coords["valid"].attrs
 
     identity_rot = frame_retag(
         Rotation(
@@ -1056,15 +1056,15 @@ def test_spatial_core_119_pose_inverse_succeeds_with_reserved_valid_coord_attr_d
 
     pose = Pose.from_components(identity_rot, ship_pos, validate=True)
     inv = pose.inverse(validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("axis", "quat")
-    assert read_param_coord_name(inv.unsafe_data) == "time"
-    assert read_sequence_size_coord_name(inv.unsafe_data) is None
+    assert read_param_coord_name(inv.as_dataset(copy="none")) == "time"
+    assert read_sequence_size_coord_name(inv.as_dataset(copy="none")) is None
 
-    ident = pose.compose(inv, validate=True).as_matrix(validate=True).unsafe_data["pose_matrix"].values
+    ident = pose.compose(inv, validate=True).as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values
     expected = np.broadcast_to(np.eye(4, dtype=float), ident.shape)
     np.testing.assert_allclose(ident, expected, atol=1e-6)
 
@@ -1132,10 +1132,10 @@ def test_spatial_core_117_rotation_pose_alignment_uses_shared_param_runtime_and_
     pose = Pose(_pose_temporal_dataset(batched=True))
     out = pose.param.at([0.5], validate=True)
     pos, rot = out.decompose(validate=True)
-    pos_values = pos.unsafe_data["position"].transpose("sample", "trial", "axis").values
+    pos_values = pos.as_dataset(copy="none")["position"].transpose("sample", "trial", "axis").values
     np.testing.assert_allclose(pos_values[0, 0], np.asarray([1.0, 0.0, 0.0], dtype=float), atol=1e-6)
     np.testing.assert_allclose(pos_values[0, 1], np.asarray([12.0, 0.0, 0.0], dtype=float), atol=1e-6)
-    quat = rot.as_quat(validate=True).unsafe_data["rotation"].transpose("sample", "trial", "quat").values
+    quat = rot.as_quat(validate=True).as_dataset(copy="none")["rotation"].transpose("sample", "trial", "quat").values
     assert quat.shape[1] == 2
     assert not np.allclose(quat[0, 0, :], quat[0, 1, :], atol=1e-6, rtol=0.0)
 
@@ -1153,13 +1153,13 @@ def test_spatial_core_137_pose_param_default_uses_split_typed_preferred_interpol
     pos_default, rot_default = out_default_at.decompose(validate=True)
     pos_explicit, rot_explicit = out_explicit_at.decompose(validate=True)
     np.testing.assert_allclose(
-        pos_default.unsafe_data["position"].values,
-        pos_explicit.unsafe_data["position"].values,
+        pos_default.as_dataset(copy="none")["position"].values,
+        pos_explicit.as_dataset(copy="none")["position"].values,
         atol=1e-6,
     )
     _assert_quat_equivalent(
-        rot_default.as_quat(validate=True).unsafe_data["rotation"].values,
-        rot_explicit.as_quat(validate=True).unsafe_data["rotation"].values,
+        rot_default.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        rot_explicit.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-6,
     )
     np.testing.assert_allclose(
@@ -1167,8 +1167,8 @@ def test_spatial_core_137_pose_param_default_uses_split_typed_preferred_interpol
         _matrix_payload(out_default_at),
         atol=1e-6,
     )
-    assert get_pose_rep(out_default_at.unsafe_data, owner="test") == get_pose_rep(pose.unsafe_data, owner="test")
-    assert get_frames(out_default_at.unsafe_data) == get_frames(pose.unsafe_data)
+    assert get_pose_rep(out_default_at.as_dataset(copy="none"), owner="test") == get_pose_rep(pose.as_dataset(copy="none"), owner="test")
+    assert get_frames(out_default_at.as_dataset(copy="none")) == get_frames(pose.as_dataset(copy="none"))
 
 
 def test_spatial_core_139_pose_temporal_components_preserves_auxiliary_payload_vars() -> None:
@@ -1183,10 +1183,10 @@ def test_spatial_core_139_pose_temporal_components_preserves_auxiliary_payload_v
     out_at = pose.param.at([0.5], validate=True)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=True)
 
-    assert {"position", "rotation", "temp"}.issubset(set(out_at.unsafe_data.data_vars))
-    assert {"position", "rotation", "temp"}.issubset(set(out_resample.unsafe_data.data_vars))
-    np.testing.assert_allclose(out_at.unsafe_data["temp"].values, np.asarray([15.0]), atol=1e-6)
-    np.testing.assert_allclose(out_resample.unsafe_data["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
+    assert {"position", "rotation", "temp"}.issubset(set(out_at.as_dataset(copy="none").data_vars))
+    assert {"position", "rotation", "temp"}.issubset(set(out_resample.as_dataset(copy="none").data_vars))
+    np.testing.assert_allclose(out_at.as_dataset(copy="none")["temp"].values, np.asarray([15.0]), atol=1e-6)
+    np.testing.assert_allclose(out_resample.as_dataset(copy="none")["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
 
 
 def test_spatial_core_140_pose_temporal_matrix_preserves_source_matrix_var_name() -> None:
@@ -1196,37 +1196,37 @@ def test_spatial_core_140_pose_temporal_matrix_preserves_source_matrix_var_name(
     out_at = pose.param.at([0.5], validate=True)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=True)
 
-    assert list(out_at.unsafe_data.data_vars) == ["tf_world_body"]
-    assert list(out_resample.unsafe_data.data_vars) == ["tf_world_body"]
-    assert "pose_matrix" not in out_at.unsafe_data.data_vars
-    assert "pose_matrix" not in out_resample.unsafe_data.data_vars
+    assert list(out_at.as_dataset(copy="none").data_vars) == ["tf_world_body"]
+    assert list(out_resample.as_dataset(copy="none").data_vars) == ["tf_world_body"]
+    assert "pose_matrix" not in out_at.as_dataset(copy="none").data_vars
+    assert "pose_matrix" not in out_resample.as_dataset(copy="none").data_vars
 
 
 def test_spatial_core_141_pose_temporal_matrix_preserves_auxiliary_numeric_payload_vars() -> None:
     """ID: SPATIAL_CORE_141_pose_temporal_matrix_preserves_auxiliary_numeric_payload_vars."""
     ds = _matrix_dataset(var_name="tf_world_body").assign_coords(time_s=("sample", [0.0, 1.0]))
     pose = Pose(ds).set_param_coord(name="time_s", validate=False)
-    pose.unsafe_data["temp"] = xr.DataArray(
+    pose.as_dataset(copy="none")["temp"] = xr.DataArray(
         np.asarray([10.0, 20.0], dtype=float),
         dims=("sample",),
-        coords={"sample": pose.unsafe_data.coords["sample"]},
+        coords={"sample": pose.as_dataset(copy="none").coords["sample"]},
     )
     out_at = pose.param.at([0.5], validate=False)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=False)
 
-    assert {"tf_world_body", "temp"}.issubset(set(out_at.unsafe_data.data_vars))
-    assert {"tf_world_body", "temp"}.issubset(set(out_resample.unsafe_data.data_vars))
-    np.testing.assert_allclose(out_at.unsafe_data["temp"].values, np.asarray([15.0]), atol=1e-6)
-    np.testing.assert_allclose(out_resample.unsafe_data["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
-    assert "pose_matrix" not in out_at.unsafe_data.data_vars
-    assert "pose_matrix" not in out_resample.unsafe_data.data_vars
+    assert {"tf_world_body", "temp"}.issubset(set(out_at.as_dataset(copy="none").data_vars))
+    assert {"tf_world_body", "temp"}.issubset(set(out_resample.as_dataset(copy="none").data_vars))
+    np.testing.assert_allclose(out_at.as_dataset(copy="none")["temp"].values, np.asarray([15.0]), atol=1e-6)
+    np.testing.assert_allclose(out_resample.as_dataset(copy="none")["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
+    assert "pose_matrix" not in out_at.as_dataset(copy="none").data_vars
+    assert "pose_matrix" not in out_resample.as_dataset(copy="none").data_vars
 
 
 def test_spatial_hard_160_pose_temporal_matrix_payload_resolution_fails_closed_on_ambiguous_candidates() -> None:
     """ID: SPATIAL_HARD_160_pose_temporal_matrix_payload_resolution_fails_closed_on_ambiguous_candidates."""
     ds = _matrix_dataset(var_name="tf_world_body").assign_coords(time_s=("sample", [0.0, 1.0]))
     pose = Pose(ds).set_param_coord(name="time_s", validate=False)
-    pose.unsafe_data["tf_alt"] = pose.unsafe_data["tf_world_body"].copy(deep=True)
+    pose.as_dataset(copy="none")["tf_alt"] = pose.as_dataset(copy="none")["tf_world_body"].copy(deep=True)
 
     with pytest.raises(ValueError) as exc_info:
         pose.param.at([0.5], validate=False)
@@ -1239,15 +1239,15 @@ def test_spatial_hard_161_pose_temporal_matrix_aux_rebind_is_validate_false_only
     """ID: SPATIAL_HARD_161_pose_temporal_matrix_aux_rebind_is_validate_false_only_and_preserve_path."""
     ds = _matrix_dataset(var_name="tf_world_body").assign_coords(time_s=("sample", [0.0, 1.0]))
     pose = Pose(ds).set_param_coord(name="time_s", validate=False)
-    pose.unsafe_data["temp"] = xr.DataArray(
+    pose.as_dataset(copy="none")["temp"] = xr.DataArray(
         np.asarray([10.0, 20.0], dtype=float),
         dims=("sample",),
-        coords={"sample": pose.unsafe_data.coords["sample"]},
+        coords={"sample": pose.as_dataset(copy="none").coords["sample"]},
     )
     out_at = pose.param.at([0.5], validate=False)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=False)
-    assert {"tf_world_body", "temp"}.issubset(set(out_at.unsafe_data.data_vars))
-    assert {"tf_world_body", "temp"}.issubset(set(out_resample.unsafe_data.data_vars))
+    assert {"tf_world_body", "temp"}.issubset(set(out_at.as_dataset(copy="none").data_vars))
+    assert {"tf_world_body", "temp"}.issubset(set(out_resample.as_dataset(copy="none").data_vars))
     with pytest.raises(ValueError) as at_error:
         pose.param.at([0.5], validate=True)
     with pytest.raises(ValueError) as resample_error:
@@ -1277,7 +1277,7 @@ def test_spatial_hard_052_pose_compose_kernel_failure_wrapped_with_operation_own
     right = _component_pose()
     rotation_spec = read_components(right)["rotation"]
     assert rotation_spec.var is not None
-    right.unsafe_data[rotation_spec.var].data[:, :] = 0.0
+    right.as_dataset(copy="none")[rotation_spec.var].data[:, :] = 0.0
 
     with pytest.raises(ValueError) as exc_info:
         left.compose(right, validate=True)
@@ -1292,7 +1292,7 @@ def test_spatial_hard_053_pose_to_rep_matrix_kernel_failure_wrapped_with_operati
     pose = _component_pose()
     rotation_spec = read_components(pose)["rotation"]
     assert rotation_spec.var is not None
-    pose.unsafe_data[rotation_spec.var].data[:, :] = 0.0
+    pose.as_dataset(copy="none")[rotation_spec.var].data[:, :] = 0.0
 
     with pytest.raises(ValueError) as exc_info:
         pose.to_rep("matrix", validate=True)
@@ -1330,9 +1330,9 @@ def test_spatial_hard_055_pose_decompose_matrix_dask_lazy_kernel_failure_wrapped
     pose = Pose.from_matrix(matrix_ds, validate=False)
 
     _, rot = pose.decompose(validate=True)
-    rot_var = str(next(iter(rot.unsafe_data.data_vars)))
+    rot_var = str(next(iter(rot.as_dataset(copy="none").data_vars)))
     with pytest.raises(ValueError) as exc_info:
-        rot.unsafe_data[rot_var].compute()
+        rot.as_dataset(copy="none")[rot_var].compute()
 
     message = str(exc_info.value)
     assert "spatial.pose.decompose" in message
@@ -1346,8 +1346,8 @@ def test_spatial_hard_116_pose_decompose_matrix_non_trailing_core_dims_preserve_
     pose = Pose(matrix_ds)
 
     position, rotation = pose.decompose(validate=True)
-    _, pos_seq, _, pos_core = read_roles(position.unsafe_data)
-    _, rot_seq, _, rot_core = read_roles(rotation.unsafe_data)
+    _, pos_seq, _, pos_core = read_roles(position.as_dataset(copy="none"))
+    _, rot_seq, _, rot_core = read_roles(rotation.as_dataset(copy="none"))
 
     assert pos_seq == "sample"
     assert pos_core == ("row",)
@@ -1358,11 +1358,11 @@ def test_spatial_hard_116_pose_decompose_matrix_non_trailing_core_dims_preserve_
 def test_topo_core_006_pose_compose_uses_core_topology_touchpoint() -> None:
     """ID: TOPO_CORE_006_pose_compose_uses_core_topology_touchpoint."""
     left = _component_pose()
-    right = Pose(_component_pose().unsafe_data.transpose("axis", "quat", "sample"))
+    right = Pose(_component_pose().as_dataset(copy="none").transpose("axis", "quat", "sample"))
     out = left.compose(right, validate=True)
     expected = left.compose(_component_pose(), validate=True)
     np.testing.assert_allclose(
-        out.decompose(validate=True)[0].unsafe_data["position"].values,
-        expected.decompose(validate=True)[0].unsafe_data["position"].values,
+        out.decompose(validate=True)[0].as_dataset(copy="none")["position"].values,
+        expected.decompose(validate=True)[0].as_dataset(copy="none")["position"].values,
         atol=1e-6,
     )

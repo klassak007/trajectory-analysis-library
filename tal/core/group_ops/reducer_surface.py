@@ -86,7 +86,7 @@ def _mean(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").mean(dim="sample").unsafe_data["value"].sel(group_key="sim").item()
+    >>> ao.group.groupby("kind").mean(dim="sample").as_dataset()["value"].sel(group_key="sim").item()
     1.5
     """
     return _dispatch(self, op="mean", dim=dim, skipna=skipna, weights=weights, opts=opts, validate=validate)
@@ -143,7 +143,7 @@ def _sum(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").sum(dim="sample").unsafe_data["value"].sel(group_key="robot").item()
+    >>> ao.group.groupby("kind").sum(dim="sample").as_dataset()["value"].sel(group_key="robot").item()
     7.0
     """
     return _dispatch(self, op="sum", dim=dim, skipna=skipna, weights=weights, opts=opts, validate=validate)
@@ -203,7 +203,7 @@ def _std(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").std(dim="sample").unsafe_data["value"].sel(group_key="sim").item()
+    >>> ao.group.groupby("kind").std(dim="sample").as_dataset()["value"].sel(group_key="sim").item()
     0.5
     """
     return _dispatch(
@@ -272,7 +272,7 @@ def _var(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").var(dim="sample").unsafe_data["value"].sel(group_key="sim").item()
+    >>> ao.group.groupby("kind").var(dim="sample").as_dataset()["value"].sel(group_key="sim").item()
     0.25
     """
     return _dispatch(
@@ -338,7 +338,7 @@ def _median(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").median(dim="sample").unsafe_data["value"].sel(group_key="robot").item()
+    >>> ao.group.groupby("kind").median(dim="sample").as_dataset()["value"].sel(group_key="robot").item()
     3.5
     """
     return _dispatch(self, op="median", dim=dim, skipna=skipna, weights=weights, opts=opts, validate=validate)
@@ -395,7 +395,7 @@ def _min(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").min(dim="sample").unsafe_data["value"].sel(group_key="sim").item()
+    >>> ao.group.groupby("kind").min(dim="sample").as_dataset()["value"].sel(group_key="sim").item()
     1.0
     """
     return _dispatch(self, op="min", dim=dim, skipna=skipna, weights=weights, opts=opts, validate=validate)
@@ -452,7 +452,7 @@ def _max(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").max(dim="sample").unsafe_data["value"].sel(group_key="robot").item()
+    >>> ao.group.groupby("kind").max(dim="sample").as_dataset()["value"].sel(group_key="robot").item()
     4.0
     """
     return _dispatch(self, op="max", dim=dim, skipna=skipna, weights=weights, opts=opts, validate=validate)
@@ -506,7 +506,7 @@ def _count(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> ao.group.groupby("kind").count(dim="sample").unsafe_data["value"].sel(group_key="sim").item()
+    >>> ao.group.groupby("kind").count(dim="sample").as_dataset()["value"].sel(group_key="sim").item()
     2
     """
     return _dispatch(self, op="count", dim=dim, weights=weights, opts=opts, validate=validate)
@@ -560,7 +560,7 @@ def _any(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> bool(ao.group.groupby("kind").any(dim="sample").unsafe_data["flag"].sel(group_key="robot").item())
+    >>> bool(ao.group.groupby("kind").any(dim="sample").as_dataset()["flag"].sel(group_key="robot").item())
     True
     """
     return _dispatch(self, op="any", dim=dim, weights=weights, opts=opts, validate=validate)
@@ -614,7 +614,7 @@ def _all(
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> bool(ao.group.groupby("kind").all(dim="sample").unsafe_data["flag"].sel(group_key="robot").item())
+    >>> bool(ao.group.groupby("kind").all(dim="sample").as_dataset()["flag"].sel(group_key="robot").item())
     True
     """
     return _dispatch(self, op="all", dim=dim, weights=weights, opts=opts, validate=validate)

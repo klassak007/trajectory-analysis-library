@@ -9,6 +9,7 @@ import xarray as xr
 
 from tal.utils.xarray_namespace import dataarray_namespace_names, dataset_namespace_names, unique_temp_dim
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from ..orchestration.finalize import transfer_dataset_attrs
 from ..param_ops.types import ParamEvalOptions
@@ -296,10 +297,11 @@ def _evaluate_window_dataset(
             batch_dims=context.runtime.batch_dims,
             sequence_size_coord=context.runtime.sequence_size_coord,
         )
-        if context.runtime.sequence_dim in out.unsafe_data.dims and context.runtime.sequence_dim != tau_dim:
+        out_ds = analysis_object_dataset(out)
+        if context.runtime.sequence_dim in out_ds.dims and context.runtime.sequence_dim != tau_dim:
             out = out.rename({context.runtime.sequence_dim: tau_dim}, validate=False)
         out = out.set_param_coord(name=tau_dim, validate=False)
-        empty = out.unsafe_data.expand_dims(
+        empty = analysis_object_dataset(out).expand_dims(
             {event_dim: table.coords[event_dim].values},
             axis=len(context.runtime.batch_dims),
         )
@@ -315,7 +317,8 @@ def _evaluate_window_dataset(
         batch_dims=context.runtime.batch_dims,
         sequence_size_coord=context.runtime.sequence_size_coord,
     )
-    masked = _mask_invalid_event_rows(out.unsafe_data, valid_event=valid_event, sequence_dim=tau_dim)
+    out_ds = analysis_object_dataset(out)
+    masked = _mask_invalid_event_rows(out_ds, valid_event=valid_event, sequence_dim=tau_dim)
     return masked, valid_event
 
 
@@ -378,7 +381,7 @@ def _attach_metadata_and_size(
 
 
 def _with_source_schema_attrs(ds: xr.Dataset, *, source: "AnalysisObject") -> xr.Dataset:
-    return transfer_dataset_attrs(source.unsafe_data, ds, validate=False)
+    return transfer_dataset_attrs(analysis_object_dataset(source), ds, validate=False)
 
 
 def _anchor_table(

@@ -127,9 +127,9 @@ def test_astro_core_a1_001_topocentric_direction_constructor_accepts_ao_dataset_
     """ID: ASTRO_CORE_A1_001_topocentric_direction_constructor_accepts_ao_dataset_dataarray."""
     ao = _direction_ao()
     from_ao = TopocentricDirection(ao)
-    from_ds = TopocentricDirection(ao.unsafe_data)
-    da_in = ao.unsafe_data["direction"].copy()
-    da_in.attrs["tal"] = deepcopy(ao.unsafe_data.attrs["tal"])
+    from_ds = TopocentricDirection(ao.as_dataset(copy="none"))
+    da_in = ao.as_dataset(copy="none")["direction"].copy()
+    da_in.attrs["tal"] = deepcopy(ao.as_dataset(copy="none").attrs["tal"])
     from_da = TopocentricDirection(da_in)
     assert isinstance(from_ao, TopocentricDirection)
     assert isinstance(from_ds, TopocentricDirection)
@@ -140,45 +140,45 @@ def test_astro_core_a1_011_topocentric_direction_to_vector3_maps_enu_to_xyz() ->
     """ID: ASTRO_CORE_A1_011_topocentric_direction_to_vector3_maps_enu_to_xyz."""
     direction = TopocentricDirection(_direction_ao())
     vector = direction.to_vector3(axis="axis", output_var="sun")
-    assert tuple(vector.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
-    np.testing.assert_allclose(vector.unsafe_data["sun"].to_numpy(), direction.unsafe_data["direction"].to_numpy())
+    assert tuple(vector.as_dataset(copy="none").coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(vector.as_dataset(copy="none")["sun"].to_numpy(), direction.as_dataset(copy="none")["direction"].to_numpy())
 
 
 def test_astro_core_a1_012_to_vector3_preserves_topology_param_and_validity() -> None:
     """ID: ASTRO_CORE_A1_012_to_vector3_preserves_topology_param_and_validity."""
     direction = TopocentricDirection(_direction_ao_with_validity())
     vector = direction.to_vector3()
-    declared, sequence_dim, batch_dims, core_dims = read_roles(vector.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(vector.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("axis",)
-    assert vector.unsafe_data["direction"].dims == ("sample", "trial", "axis")
-    assert read_param_coord_name(vector.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(vector.unsafe_data) == "group_size"
-    np.testing.assert_array_equal(vector.unsafe_data.coords["group_size"].to_numpy(), np.array([2, 3]))
+    assert vector.as_dataset(copy="none")["direction"].dims == ("sample", "trial", "axis")
+    assert read_param_coord_name(vector.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(vector.as_dataset(copy="none")) == "group_size"
+    np.testing.assert_array_equal(vector.as_dataset(copy="none").coords["group_size"].to_numpy(), np.array([2, 3]))
 
 
 def test_astro_core_a1_013_topocentric_direction_preserves_non_unit_magnitude() -> None:
     """ID: ASTRO_CORE_A1_013_topocentric_direction_preserves_non_unit_magnitude."""
     values = np.array([[2.0, 0.0, 0.0]], dtype=float)
     direction = TopocentricDirection(_direction_ao())
-    replaced = direction.unsafe_data.copy()
+    replaced = direction.as_dataset(copy="none").copy()
     replaced["direction"] = replaced["direction"].copy(data=values)
     out = TopocentricDirection(replaced)
-    np.testing.assert_allclose(out.unsafe_data["direction"].to_numpy(), values)
+    np.testing.assert_allclose(out.as_dataset(copy="none")["direction"].to_numpy(), values)
 
 
 def test_astro_core_a1_014_to_vector3_clears_astro_metadata_preserves_siblings() -> None:
     """ID: ASTRO_CORE_A1_014_to_vector3_clears_astro_metadata_preserves_siblings."""
     direction = TopocentricDirection(_direction_ao())
     with_custom = merge_schema(
-        direction.unsafe_data,
+        direction.as_dataset(copy="none"),
         {"ext": {"custom": {"owner": "test", "version": 1}}},
         validate=True,
     )
     vector = TopocentricDirection(with_custom).to_vector3()
-    ext = vector.unsafe_data.attrs["tal"]["ext"]
+    ext = vector.as_dataset(copy="none").attrs["tal"]["ext"]
     assert ext["custom"] == {"owner": "test", "version": 1}
     assert "astro" not in ext
 
@@ -192,7 +192,7 @@ def test_astro_core_a1_002_topocentric_direction_requires_enu_core_labels() -> N
 def test_astro_core_a1_003_astro_metadata_normalizes_defaults() -> None:
     """ID: ASTRO_CORE_A1_003_astro_metadata_normalizes_defaults."""
     direction = TopocentricDirection(_direction_ao())
-    block = read_astro_block(direction.unsafe_data, owner="test")
+    block = read_astro_block(direction.as_dataset(copy="none"), owner="test")
     assert block == {
         "kind": "topocentric_direction",
         "target": "sun",
@@ -258,9 +258,9 @@ def test_astro_core_a1_009_finalize_preserves_observer_validity_when_sequence_pr
         validate=True,
         owner="test",
     )
-    assert read_sequence_size_coord_name(out.unsafe_data) == "group_size"
-    assert "group_size" in out.unsafe_data.coords
-    np.testing.assert_array_equal(out.unsafe_data.coords["group_size"].to_numpy(), np.array([2, 3]))
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "group_size"
+    assert "group_size" in out.as_dataset(copy="none").coords
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["group_size"].to_numpy(), np.array([2, 3]))
 
 
 def test_astro_core_a1_010_finalize_clears_validity_when_sequence_changes() -> None:
@@ -279,8 +279,8 @@ def test_astro_core_a1_010_finalize_clears_validity_when_sequence_changes() -> N
         validate=True,
         owner="test",
     )
-    assert read_sequence_size_coord_name(out.unsafe_data) is None
-    assert "group_size" not in out.unsafe_data.coords
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) is None
+    assert "group_size" not in out.as_dataset(copy="none").coords
 
 
 def test_astro_hard_a1_001_missing_astropy_backend_raises_guided_importerror(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -325,7 +325,7 @@ def test_astro_hard_a1_005_dask_inputs_do_not_compute_silently() -> None:
     )
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("enu",), validate=True)
     out = TopocentricDirection(ao)
-    assert getattr(out.unsafe_data["altitude_deg"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none")["altitude_deg"].data, "chunks", None) is not None
 
 
 def test_astro_hard_a1_006_direction_rejects_undeclared_direction_dims() -> None:
@@ -371,7 +371,7 @@ def test_astro_hard_a1_008_raw_dask_time_fails_without_compute() -> None:
 
 def test_unknown_astro_key_fails_closed_and_sibling_ext_is_preserved() -> None:
     ao = _direction_ao()
-    ds = ao.unsafe_data.copy()
+    ds = ao.as_dataset(copy="none").copy()
     attrs = deepcopy(ds.attrs)
     attrs["tal"]["ext"] = {"custom": {"ok": True}, "astro": {"kind": "topocentric_direction", "extra": "bad"}}
     ds.attrs = attrs
