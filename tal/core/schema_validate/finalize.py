@@ -28,9 +28,16 @@ def _copy_schema_value(value: Any, memo: dict[int, Any]) -> Any:
     return deepcopy(value, memo)
 
 
-def _copy_schema_graph(value: Any) -> Any:
-    """Copy one supported acyclic schema graph with shared-reference fidelity."""
-    return _copy_schema_value(value, {})
+def _copy_tal_graph(tal: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Own canonical and extension regions without cross-region aliases."""
+    out: dict[Any, Any] = {}
+    root_memo: dict[int, Any] = {id(tal): out}
+    for key, value in tal.items():
+        copied_key = deepcopy(key, root_memo)
+        region = str.__str__(key) if isinstance(key, str) else None
+        memo = {} if region in {"core", "ext"} else root_memo
+        out[copied_key] = _copy_schema_value(value, memo)
+    return out
 
 
 def _attrs_without_tal(attrs: Mapping[Any, Any]) -> dict[Any, Any]:
@@ -51,7 +58,7 @@ def _replace_dataset_attrs_with_tal(
     if tal is not None:
         tal_value = tal
         if isolate_tal:
-            tal_value = canonicalize_tal(tal) if canonicalize else _copy_schema_graph(tal)
+            tal_value = canonicalize_tal(tal) if canonicalize else _copy_tal_graph(tal)
         attrs["tal"] = tal_value
     out = ds.copy(deep=False)
     out.attrs = attrs
@@ -79,7 +86,7 @@ def _relocate_promoted_dataarray_tal(
 
 
 def canonicalize_tal(tal: Mapping[str, Any]) -> dict[str, Any]:
-    out = _copy_schema_graph(tal)
+    out = _copy_tal_graph(tal)
     out["version"] = int(out["version"])
     core = out.get("core")
     if not isinstance(core, Mapping):

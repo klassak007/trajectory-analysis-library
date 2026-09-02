@@ -27,6 +27,22 @@ class _HostileKey:
         raise RuntimeError("str exploded")
 
 
+class _HostileInt(int):
+    def __repr__(self) -> str:
+        raise RuntimeError("repr exploded")
+
+    def __str__(self) -> str:
+        raise RuntimeError("str exploded")
+
+
+class _HostileFloat(float):
+    def __repr__(self) -> str:
+        raise RuntimeError("repr exploded")
+
+    def __str__(self) -> str:
+        raise RuntimeError("str exploded")
+
+
 def _ds_sample_axis() -> xr.Dataset:
     return xr.Dataset(
         data_vars={"value": (("sample", "axis"), np.ones((4, 3)))},
@@ -79,6 +95,26 @@ def _ds_alias_merge_targets() -> xr.Dataset:
         },
     }
     return ds
+
+
+def _ds_core_extension_alias() -> tuple[xr.Dataset, dict]:
+    ds = _ds_sample_axis().assign_coords(
+        time=("sample", np.arange(4.0)),
+        group_size=np.int64(4),
+    )
+    core = {
+        "roles": {
+            "sequence_dim": "sample",
+            "batch_dims": [],
+            "core_dims": ["axis"],
+        }
+    }
+    ds.attrs["tal"] = {
+        "version": 1,
+        "core": core,
+        "ext": {"demo": core},
+    }
+    return ds, deepcopy(core)
 
 
 def test_schema_write_roles_001_minimal_success() -> None:
@@ -385,6 +421,49 @@ def test_schema_write_validity_010_real_integer_valued_dtypes_accepted(dtype: ty
     np.testing.assert_array_equal(out.coords["group_size"].to_numpy(), values)
 
 
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+@pytest.mark.parametrize("update", ("roles", "param", "validity"))
+def test_schema_write_core_alias_001_core_updates_preserve_extension_value(
+    validate: bool,
+    update: str,
+) -> None:
+    """ID: SCHEMA_WRITE_CORE_ALIAS_001_core_updates_preserve_extension_value."""
+    ds, extension_before = _ds_core_extension_alias()
+    if update == "roles":
+        out = set_roles(ds, core_dims=(), validate=validate)
+    elif update == "param":
+        out = set_param_coord(ds, name="time", validate=validate)
+    else:
+        out = set_validity(
+            ds,
+            sequence_size_coord="group_size",
+            validate=validate,
+        )
+
+    assert out.attrs["tal"]["ext"]["demo"] == extension_before
+    assert ds.attrs["tal"]["core"] == extension_before
+    assert ds.attrs["tal"]["ext"]["demo"] is ds.attrs["tal"]["core"]
+
+
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+def test_schema_write_core_alias_002_merge_preserves_extension_value(
+    validate: bool,
+) -> None:
+    """ID: SCHEMA_WRITE_CORE_ALIAS_002_merge_preserves_extension_value."""
+    ds, extension_before = _ds_core_extension_alias()
+
+    out = merge_schema(
+        ds,
+        {"core": {"roles": {"core_dims": []}}},
+        validate=validate,
+    )
+
+    assert out.attrs["tal"]["core"]["roles"]["core_dims"] == []
+    assert out.attrs["tal"]["ext"]["demo"] == extension_before
+    assert ds.attrs["tal"]["core"] == extension_before
+    assert ds.attrs["tal"]["ext"]["demo"] is ds.attrs["tal"]["core"]
+
+
 def test_schema_write_merge_001_patch_root_valid() -> None:
     """ID: SCHEMA_WRITE_MERGE_001_patch_root_valid."""
     ds = set_roles(_ds_sample_axis(), sequence_dim="sample", batch_dims=(), core_dims=("axis",))
@@ -457,14 +536,26 @@ def test_schema_write_merge_007_non_string_patch_key_raises_schema_error() -> No
     assert err.value.actual["key_type"] == "int"
 
 
-def test_schema_write_merge_008_hostile_patch_key_validate_true_raises_schema_error() -> None:
+@pytest.mark.parametrize(
+    ("key", "path"),
+    (
+        (_HostileKey(), "tal.core.<_HostileKey>"),
+        (_HostileInt(7), "tal.core.<_HostileInt>"),
+        (_HostileFloat(7.0), "tal.core.<_HostileFloat>"),
+    ),
+    ids=("object", "int-subclass", "float-subclass"),
+)
+def test_schema_write_merge_008_hostile_patch_key_validate_true_raises_schema_error(
+    key: object,
+    path: str,
+) -> None:
     """ID: SCHEMA_WRITE_MERGE_008_hostile_patch_key_validate_true_raises_schema_error."""
     ds = set_roles(_ds_sample_axis(), sequence_dim="sample", batch_dims=(), core_dims=("axis",))
     with pytest.raises(SchemaError) as err:
-        merge_schema(ds, {"core": {_HostileKey(): "bad"}}, validate=True)
-    _assert_schema_error(err, code="schema.core.unknown_key", path="tal.core.<_HostileKey>")
+        merge_schema(ds, {"core": {key: {}}}, validate=True)
+    _assert_schema_error(err, code="schema.core.unknown_key", path=path)
     assert isinstance(err.value.actual, dict)
-    assert err.value.actual["key_type"] == "_HostileKey"
+    assert err.value.actual["key_type"] == type(key).__name__
 
 
 @pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))

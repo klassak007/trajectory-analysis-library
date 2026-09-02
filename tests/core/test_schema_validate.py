@@ -91,6 +91,19 @@ class _HostileKey:
         raise RuntimeError("str exploded")
 
 
+class _HostileTypeHash(type):
+    def __hash__(cls) -> int:
+        raise RuntimeError("type hash exploded")
+
+
+class _HostileTypedKey(metaclass=_HostileTypeHash):
+    def __hash__(self) -> int:
+        return 1
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+
 class _MutableName(str):
     notes: list[str]
 
@@ -278,7 +291,18 @@ def test_schema_validate_flow_009_validity_mixed_key_types_raise_schema_error() 
     assert err.value.actual["key_type"] == "int"
 
 
-def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runtime() -> None:
+@pytest.mark.parametrize(
+    ("key", "path"),
+    (
+        (_HostileKey(), "tal.core.<_HostileKey>"),
+        (_HostileTypedKey(), "tal.core.<_HostileTypedKey>"),
+    ),
+    ids=("hostile-value", "hostile-type-hash"),
+)
+def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runtime(
+    key: object,
+    path: str,
+) -> None:
     """ID: SCHEMA_VALIDATE_FLOW_010_hostile_core_key_raises_schema_error_not_runtime."""
     ds = _ds_sample_axis()
     ds.attrs["tal"] = {
@@ -289,7 +313,7 @@ def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runti
                 "batch_dims": [],
                 "core_dims": ["axis"],
             },
-            _HostileKey(): "bad",
+            key: "bad",
         },
     }
     with pytest.raises(SchemaError) as err:
@@ -297,10 +321,10 @@ def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runti
     _assert_schema_error(
         err,
         code="schema.core.unknown_key",
-        path="tal.core.<_HostileKey>",
+        path=path,
     )
     assert isinstance(err.value.actual, dict)
-    assert err.value.actual["key_type"] == "_HostileKey"
+    assert err.value.actual["key_type"] == type(key).__name__
 
 
 def test_schema_validate_flow_011_hostile_roles_key_raises_schema_error_not_runtime() -> None:

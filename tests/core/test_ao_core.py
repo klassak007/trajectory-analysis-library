@@ -416,35 +416,39 @@ def test_ao_ingress_019_core_extension_alias_is_value_only(
 ) -> None:
     """ID: AO_INGRESS_019_core_extension_alias_is_value_only."""
     shared_dims = ["axis"]
+    shared_core = {
+        "roles": {
+            "sequence_dim": "sample",
+            "batch_dims": [],
+            "core_dims": shared_dims,
+        }
+    }
     source: xr.Dataset | xr.DataArray
     source = _ds_single()["value"] if as_dataarray else _ds_single()
     source.attrs["tal"] = {
         "version": 1,
-        "core": {
-            "roles": {
-                "sequence_dim": "sample",
-                "batch_dims": [],
-                "core_dims": shared_dims,
-            }
-        },
-        "ext": {"demo": {"dims": shared_dims}},
+        "core": shared_core,
+        "ext": {"demo": shared_core},
     }
 
     if ingress == "constructor":
-        ao = AnalysisObject(source)
+        ao = AnalysisObject(source).set_roles(core_dims=(), validate=True)
     else:
         ao = AnalysisObject.from_data(
             source,
+            sequence_dim="sample",
+            batch_dims=(),
+            core_dims=(),
             validate=ingress == "from-data-validated",
         )
     tal = ao.unsafe_data.attrs["tal"]
 
     assert type(tal["core"]["roles"]["core_dims"]) is list
-    assert tal["core"]["roles"]["core_dims"] == ["axis"]
-    assert tal["ext"]["demo"]["dims"] == ["axis"]
+    assert tal["core"]["roles"]["core_dims"] == []
+    assert tal["ext"]["demo"]["roles"]["core_dims"] == ["axis"]
     shared_dims.append("caller-mutation")
-    assert tal["core"]["roles"]["core_dims"] == ["axis"]
-    assert tal["ext"]["demo"]["dims"] == ["axis"]
+    assert tal["core"]["roles"]["core_dims"] == []
+    assert tal["ext"]["demo"]["roles"]["core_dims"] == ["axis"]
 
 
 @pytest.mark.parametrize("as_dataarray", (False, True), ids=("dataset", "dataarray"))

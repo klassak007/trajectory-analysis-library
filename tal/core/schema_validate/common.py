@@ -69,9 +69,12 @@ def safe_repr(value: Any) -> str:
 
 def safe_path_key_segment(key: Any) -> str:
     if isinstance(key, str):
-        return key
-    if isinstance(key, (int, float, bool)) or key is None:
+        return str.__str__(key)
+    key_type = type(key)
+    if key_type is int or key_type is float or key_type is bool:
         return str(key)
+    if key is None:
+        return "None"
     return f"<{type(key).__name__}>"
 
 

@@ -16,8 +16,8 @@ from .schema_validate import SCHEMA_VERSION
 from .schema_validate import _validate_schema_envelope
 from .schema_validate import validate_schema as _validate_schema
 from .schema_validate.finalize import (
-    _copy_schema_graph,
     _copy_schema_value,
+    _copy_tal_graph,
     _relocate_promoted_dataarray_tal,
     _replace_dataset_attrs_with_tal,
 )
@@ -76,7 +76,7 @@ def _tal_mapping(ds: xr.Dataset) -> Mapping[str, Any] | None:
 
 def _copy_tal(ds: xr.Dataset) -> dict[str, Any]:
     tal = _tal_mapping(ds)
-    return {} if tal is None else _copy_schema_graph(tal)
+    return {} if tal is None else _copy_tal_graph(tal)
 
 
 def _with_schema(ds: xr.Dataset, tal_schema: Mapping[str, Any]) -> xr.Dataset:
