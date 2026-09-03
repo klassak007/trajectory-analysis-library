@@ -5,7 +5,11 @@ import pytest
 import xarray as xr
 
 from tal.core.analysis_object import AnalysisObject
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
 from tal.linalg import Vector3
 from tal.spatial import Position
 
@@ -56,6 +60,110 @@ def test_reduce_core_p9c_001b_reducer_preserves_declared_roles_when_sequence_dim
     assert core_dims == ()
     assert read_param_coord_name(out.as_dataset(copy="none")) is None
     assert read_sequence_size_coord_name(out.as_dataset(copy="none")) is None
+    assert "time_s" not in out.as_dataset(copy="none").coords
+    assert "group_size" not in out.as_dataset(copy="none").coords
+
+
+def test_reduce_core_127g0_001_sequence_reduce_retains_independent_batch_and_core_coords() -> None:
+    """ID: REDUCE_CORE_127G0_001_sequence_reduce_retains_independent_batch_and_core_coords."""
+    ds = xr.Dataset(
+        {"value": ("sample", np.array([1.0, 2.0, 3.0]))},
+        coords={
+            "sample": np.array([0, 1, 2]),
+            "trial": np.array(["a", "b"], dtype=object),
+            "trial_phase": ("trial", np.array([10, 20])),
+            "axis": np.array(["x", "y", "z"], dtype=object),
+            "axis_code": ("axis", np.array([1, 2, 3])),
+            "site": "lab",
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("axis",),
+        validate=True,
+    )
+
+    result = ao.mean(dim="sample", validate=True).as_dataset(copy="none")
+    expected = ds.mean(dim="sample")
+
+    xr.testing.assert_identical(result.drop_attrs(deep=False), expected)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(result)
+    assert (declared, sequence_dim, batch_dims, core_dims) == (True, None, ("trial",), ("axis",))
+    assert read_param_coord_name(result) is None
+    assert read_sequence_size_coord_name(result) is None
+
+
+def test_reduce_core_127g0_002_batch_reduce_retains_sequence_parameter_and_core_coords() -> None:
+    """ID: REDUCE_CORE_127G0_002_batch_reduce_retains_sequence_parameter_and_core_coords."""
+    ds = xr.Dataset(
+        {"value": ("trial", np.array([2.0, 4.0]))},
+        coords={
+            "trial": np.array(["a", "b"], dtype=object),
+            "sample": np.array([0, 1, 2]),
+            "time_s": ("sample", np.array([0.0, 0.5, 1.0])),
+            "axis": np.array(["x", "y", "z"], dtype=object),
+            "axis_code": ("axis", np.array([1, 2, 3])),
+            "group_size": ("trial", np.array([3, 2], dtype=np.int64)),
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("axis",),
+        param_coord="time_s",
+        sequence_size_coord="group_size",
+        validate=True,
+    )
+
+    result = ao.mean(dim="trial", validate=True).as_dataset(copy="none")
+    expected = ds.mean(dim="trial")
+
+    xr.testing.assert_identical(result.drop_attrs(deep=False), expected)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(result)
+    assert (declared, sequence_dim, batch_dims, core_dims) == (True, "sample", (), ("axis",))
+    assert read_param_coord_name(result) == "time_s"
+    assert read_sequence_size_coord_name(result) is None
+
+
+def test_reduce_perf_127g0_001_coordinate_retention_does_not_execute_dask_graphs() -> None:
+    """ID: REDUCE_PERF_127G0_001_coordinate_retention_does_not_execute_dask_graphs."""
+    dask = pytest.importorskip("dask")
+    da = pytest.importorskip("dask.array")
+    delayed = pytest.importorskip("dask.delayed")
+
+    def fail_if_executed() -> np.ndarray:
+        raise AssertionError("reducer coordinate retention executed an unrelated task")
+
+    lazy = da.from_delayed(delayed.delayed(fail_if_executed)(), shape=(2,), dtype=float)
+    ds = xr.Dataset(
+        {
+            "value": ("sample", np.array([1.0, 2.0, 3.0])),
+            "unrelated": ("trial", lazy),
+        },
+        coords={
+            "sample": np.array([0, 1, 2]),
+            "trial": np.array(["a", "b"], dtype=object),
+            "trial_aux": ("trial", lazy),
+        },
+    )
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+        validate=True,
+    )
+    executed: list[object] = []
+
+    with dask.callbacks.Callback(pretask=lambda key, *_: executed.append(key)):
+        result = ao.mean(dim="sample", validate=True).as_dataset(copy="none")
+
+    assert not executed
+    assert dask.is_dask_collection(result["unrelated"].data)
+    assert dask.is_dask_collection(result.coords["trial_aux"].data)
 
 
 @pytest.mark.parametrize("name", ["sum", "std", "var", "median", "min", "max", "count", "any", "all"])
@@ -164,8 +272,11 @@ def test_reduce_core_p9c_009_inherited_typed_reducers_demote_to_analysisobject()
     )
     pos = Position(
         AnalysisObject.from_data(
-            pos_arr.to_dataset(name="position"),
+            pos_arr.to_dataset(name="position").assign_coords(
+                trial=np.array(["t0", "t1"], dtype=object),
+            ),
             sequence_dim="sample",
+            batch_dims=("trial",),
             core_dims=("axis",),
             validate=True,
         ).as_dataset(copy="none")
@@ -173,6 +284,8 @@ def test_reduce_core_p9c_009_inherited_typed_reducers_demote_to_analysisobject()
     pos_out = pos.mean(dim="sample", validate=True)
     assert type(pos_out) is AnalysisObject
     assert not isinstance(pos_out, Position)
+    assert pos_out.as_dataset(copy="none").coords["trial"].to_numpy().tolist() == ["t0", "t1"]
+    assert read_roles(pos_out.as_dataset(copy="none"))[2] == ("trial",)
 
     vec_arr = xr.DataArray(
         np.array([[[1.0, 2.0, 3.0]], [[4.0, 5.0, 6.0]]], dtype=float),

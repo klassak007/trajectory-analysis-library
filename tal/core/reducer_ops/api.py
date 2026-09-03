@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
 
 
-def _component_dims(source: "AnalysisObject") -> tuple[str, ...]:
+def _component_dims(source: AnalysisObject) -> tuple[str, ...]:
     resolver = getattr(source, "_required_component_dims_for_reduce", None)
     if resolver is None:
         return ()
@@ -53,12 +53,12 @@ def _finalize_reduced_output(
     *,
     context,
     reduce_dims: tuple[str, ...],
-    source: "AnalysisObject",
+    source: AnalysisObject,
     out: xr.Dataset,
     reducer: str,
     validate: bool,
     owner: str,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     finalize_source = resolve_reducer_finalize_source(source, op=reducer, owner=owner)
     if not context.roles_declared:
         return finalize_like(finalize_source, out, validate=validate, owner=owner)
@@ -121,8 +121,31 @@ def _reduce_named_data_vars(
     return reduced
 
 
+def _assemble_reduced_dataset(
+    ds: xr.Dataset,
+    reduced: dict[str, xr.DataArray],
+    *,
+    reduce_dims: tuple[str, ...],
+    sequence_dim: str | None,
+    param_coord: str | None,
+    sequence_size_coord: str | None,
+) -> xr.Dataset:
+    """Attach reduced variables to the source coordinate-only topology."""
+    out = ds.drop_vars(tuple(ds.data_vars)).assign(reduced)
+    reduced_dims = set(reduce_dims)
+    invalid_optional: set[str] = set()
+    if sequence_dim is not None and sequence_dim in reduced_dims:
+        invalid_optional.update(name for name in (param_coord, sequence_size_coord) if name is not None)
+    drop = tuple(
+        name
+        for name, coord in out.coords.items()
+        if name in invalid_optional or any(dim in reduced_dims for dim in coord.dims)
+    )
+    return out.drop_vars(drop) if drop else out
+
+
 def reduce_analysis_object(
-    source: "AnalysisObject",
+    source: AnalysisObject,
     *,
     op: str,
     dim: DimLike,
@@ -131,7 +154,7 @@ def reduce_analysis_object(
     weights: WeightInput,
     validate: bool,
     owner: str,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     reducer = require_supported_op(op, owner=owner)
     require_no_unsupported_weights(weights=weights, op=reducer, owner=owner)
     context = resolve_dataset_context(
@@ -154,7 +177,14 @@ def reduce_analysis_object(
         weights=weights,
         owner=owner,
     )
-    out = xr.Dataset(reduced)
+    out = _assemble_reduced_dataset(
+        ds,
+        reduced,
+        reduce_dims=reduce_dims,
+        sequence_dim=context.sequence_dim,
+        param_coord=context.param_coord,
+        sequence_size_coord=context.sequence_size_coord,
+    )
     return _finalize_reduced_output(
         context=context,
         reduce_dims=reduce_dims,
