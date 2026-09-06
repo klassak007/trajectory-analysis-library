@@ -32,6 +32,19 @@ Endpoints may be `Frame` objects or frame ID strings. Graph resolution uses:
 
 Cross-graph, disconnected, or unregistered endpoints fail closed.
 
+## Options Type
+
+Omitting `opts` or passing `None` selects default `PathSolveOptions`. Otherwise,
+pass a `PathSolveOptions` instance; subclasses retain their supplied policy.
+Mappings and other objects are not converted, and falsey values such as `{}`,
+`0`, and `False` are rejected rather than treated as defaults.
+
+This shared type boundary raises an operation-prefixed `TypeError` before
+graph lookup or resolver inspection/invocation. It also applies to ergonomic
+`to_frame` and `express_in` calls, including same-frame requests and
+`validate=False`. Valid same-frame shortcuts retain their existing behavior;
+individual option fields are checked only by the operations that consume them.
+
 ## Minimal Example
 
 ```python
@@ -59,9 +72,13 @@ with graph:
 
 Spatial types expose ergonomic wrappers where appropriate:
 
-- `Position.to_frame(...)`
-- `Rotation.solve_path_transform(...)`
-- `Pose.solve_path_transform(...)`
+- `Position.to_frame(...)` and `Position.express_in(...)`
+- `Rotation.solve_path_transform(...)` and `Rotation.express_in(...)`
+- `Pose.solve_path_transform(...)` and `Pose.express_in(...)`
+- `LinearVelocity`, `AngularVelocity`, and `Velocity` `to_frame(...)` and
+  `express_in(...)` methods
+- `LinearAcceleration`, `AngularAcceleration`, and `Acceleration`
+  `to_frame(...)` and `express_in(...)` methods
 
 These wrappers preserve the same topology policy as the functional path solvers.
 

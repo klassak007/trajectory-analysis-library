@@ -39,9 +39,13 @@ def position_express_in(
     validate: bool,
 ) -> "Position":
     owner = "spatial.position.express_in"
-    from ..path_solve import _solve_rotation_path_transform_with_owner
+    from ..path_solve import (
+        _coerce_path_solve_options,
+        _solve_rotation_path_transform_with_owner,
+    )
     from .rotation_apply_ops import _rotation_apply_with_owner
 
+    opts = _coerce_path_solve_options(opts, owner=owner)
     position._enforce_invariants(owner=owner)
     _ = require_source_parent(position, owner=owner)
     src_expressed_in = source_expressed_in_id(position, owner=owner)
@@ -85,9 +89,13 @@ def rotation_express_in(
     validate: bool,
 ) -> "Rotation":
     owner = "spatial.rotation.express_in"
-    from ..path_solve import _solve_rotation_path_transform_with_owner
+    from ..path_solve import (
+        _coerce_path_solve_options,
+        _solve_rotation_path_transform_with_owner,
+    )
     from ..rotation import _rotation_compose_with_owner, _rotation_inverse_with_owner
 
+    opts = _coerce_path_solve_options(opts, owner=owner)
     rotation._enforce_invariants(owner=owner)
     _ = require_source_parent(rotation, owner=owner)
     src_expressed_in = source_expressed_in_id(rotation, owner=owner)
@@ -96,11 +104,7 @@ def rotation_express_in(
     src_rep = get_rotation_rep(source, owner=owner)
     if dst_id == src_expressed_in:
         return _finalize_same_relation(
-            rotation,
-            source,
-            expressed_in=dst_id,
-            validate=validate,
-            owner=owner,
+            rotation, source, expressed_in=dst_id, validate=validate, owner=owner,
         )
     basis = clear_framing(
         _solve_rotation_path_transform_with_owner(
@@ -135,7 +139,9 @@ def pose_express_in(
     validate: bool,
 ) -> "Pose":
     owner = "spatial.pose.express_in"
+    from ..path_solve import _coerce_path_solve_options
 
+    opts = _coerce_path_solve_options(opts, owner=owner)
     pose._enforce_invariants(owner=owner)
     _ = require_source_parent(pose, owner=owner)
     src_expressed_in = source_expressed_in_id(pose, owner=owner)

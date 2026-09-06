@@ -42,9 +42,13 @@ def position_to_frame(
     validate: bool,
 ) -> "Position":
     owner = "spatial.position.to_frame"
-    from ..path_solve import _solve_pose_path_transform_with_owner
+    from ..path_solve import (
+        _coerce_path_solve_options,
+        _solve_pose_path_transform_with_owner,
+    )
     from .pose_apply_ops import _pose_apply_with_owner
 
+    opts = _coerce_path_solve_options(opts, owner=owner)
     position._enforce_invariants(owner=owner)
     source_parent = _require_position_parent(position, owner=owner)
     destination = _coerce_frame_id(dst)

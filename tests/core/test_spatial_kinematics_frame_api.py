@@ -35,10 +35,21 @@ from tal.spatial.metadata import (
 )
 from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames
+from tests._path_options_helpers import (
+    DELEGATOR_BAD_PATH_OPTIONS,
+    FalseyPathSolveOptions,
+    ResolutionProbe,
+    forbid_path_resolution,
+)
 
 
 _XYZ = ("x", "y", "z")
 _QUAT = ("x", "y", "z", "w")
+
+_KINEMATIC_PATH_KINDS = [
+    "linear_velocity", "angular_velocity", "velocity",
+    "linear_acceleration", "angular_acceleration", "acceleration",
+]
 
 
 def _quat(axis: str, degrees: float) -> np.ndarray:
@@ -218,6 +229,100 @@ def _framed_acceleration_family(rep: str = "components") -> Acceleration:
     if rep == "vector6":
         value = value.to_rep("vector6", validate=True)
     return value
+
+
+def _kinematic_path_source(kind):
+    if kind == "velocity":
+        return _framed_velocity_family()
+    if kind == "acceleration":
+        return _framed_acceleration_family()
+    factory = {
+        "linear_velocity": _linear_velocity,
+        "angular_velocity": _angular_velocity,
+        "linear_acceleration": _linear_acceleration,
+        "angular_acceleration": _angular_acceleration,
+    }[kind]
+    return frame_retag(factory(np.asarray([[1.0, 2.0, 3.0]])), parent="sensor", child="probe", validate=True)
+
+
+@pytest.mark.parametrize("kind", _KINEMATIC_PATH_KINDS)
+@pytest.mark.parametrize("operation", ["to_frame", "express_in"])
+@pytest.mark.parametrize("opts", DELEGATOR_BAD_PATH_OPTIONS)
+@pytest.mark.parametrize("validate", [False, True])
+def test_spatial_hard_127h_003_kinematic_options_precede_resolution(
+    kind, operation, opts, validate, monkeypatch,
+) -> None:
+    """ID: SPATIAL_HARD_127H_003_kinematic_options_precede_resolution."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        graph.get_or_create_frame("sensor", parent=world)
+        source = _kinematic_path_source(kind)
+        before = source.as_dataset(copy="deep")
+        probe = forbid_path_resolution(monkeypatch, graph)
+        resolver_arg = "edge_pose_fn" if operation == "to_frame" else "edge_rotation_fn"
+        with pytest.raises(TypeError) as exc_info:
+            getattr(source, operation)(
+                "sensor",
+                opts=opts,
+                validate=validate,
+                **{resolver_arg: probe},
+            )
+    assert str(exc_info.value) == f"spatial.{kind}.{operation}: opts must be PathSolveOptions or None."
+    assert probe.events == []
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("kind", _KINEMATIC_PATH_KINDS)
+@pytest.mark.parametrize("operation", ["to_frame", "express_in"])
+@pytest.mark.parametrize("identity", [False, True])
+def test_spatial_core_127h_004_kinematic_options_preserve_results(kind, operation, identity) -> None:
+    """ID: SPATIAL_CORE_127H_004_kinematic_options_preserve_results."""
+    graph, rotation_fn, pose_fn, _opts = _build_graph_and_edges()
+    source = _kinematic_path_source(kind)
+    resolver_arg = "edge_pose_fn" if operation == "to_frame" else "edge_rotation_fn"
+    edge_fn = pose_fn if operation == "to_frame" else rotation_fn
+    calls = []
+
+    def resolver(child, parent):
+        calls.append((child.id, parent.id))
+        return edge_fn(child, parent)
+
+    dst = "sensor" if identity else "world"
+    method = getattr(source, operation)
+    kwargs = {resolver_arg: resolver, "validate": False}
+    with graph:
+        expected = method(dst, **kwargs)
+        for options in (None, PathSolveOptions()):
+            out = method(dst, opts=options, **kwargs)
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+    with FrameGraph():
+        for options in (PathSolveOptions(graph=graph), FalseyPathSolveOptions(graph=graph)):
+            out = method(dst, opts=options, **kwargs)
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+    if identity:
+        assert calls == []
+    else:
+        assert calls and set(calls) == {("sensor", "body"), ("body", "world")}
+
+
+@pytest.mark.parametrize("kind", _KINEMATIC_PATH_KINDS)
+@pytest.mark.parametrize("operation", ["to_frame", "express_in"])
+def test_spatial_core_127h_005_kinematic_identity_keeps_field_checks_deferred(kind, operation) -> None:
+    """ID: SPATIAL_CORE_127H_005_kinematic_identity_keeps_field_checks_deferred."""
+    source = _kinematic_path_source(kind)
+    probe = ResolutionProbe()
+    support = KinematicsPathSupportOptions(
+        edge_motion_class_fn=probe, frame_inertial_status_fn=probe,
+        edge_velocity_fn=probe, edge_acceleration_fn=probe,
+    )
+    opts = PathSolveOptions(graph=object(), strict=False, kinematics_support=support)
+    resolver_arg = "edge_pose_fn" if operation == "to_frame" else "edge_rotation_fn"
+    method = getattr(source, operation)
+    expected = method("sensor", **{resolver_arg: probe})
+    out = method("sensor", opts=opts, validate=False, **{resolver_arg: probe})
+    assert probe.events == []
+    xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
 
 
 def test_spatial_core_088_kinematics_to_frame_methods_exist_on_all_c3_target_types() -> None:

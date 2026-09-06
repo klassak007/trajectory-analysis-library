@@ -30,9 +30,14 @@ class FamilyFrameRequest:
     source: object
     dst: Frame | str
     edge_fn: object
-    opts: object | None
+    opts: PathSolveOptions | None
     validate: bool
     owner: str
+
+    def __post_init__(self) -> None:
+        from ..path_solve import _coerce_path_solve_options
+
+        object.__setattr__(self, "opts", _coerce_path_solve_options(self.opts, owner=self.owner))
 
 
 def _wrap_owner_error(exc: Exception, *, owner: str) -> Exception:

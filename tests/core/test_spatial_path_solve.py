@@ -12,9 +12,15 @@ from tal.spatial import PathSolveOptions, Pose, Position, Rotation, solve_pose_p
 from tal.spatial.metadata import get_pose_rep, get_rotation_rep
 from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames
+from tests._path_options_helpers import BAD_PATH_OPTIONS, FalseyPathSolveOptions, forbid_path_resolution
 
 _XYZ = ("x", "y", "z")
 _QUAT = ("x", "y", "z", "w")
+
+_PATH_SOLVERS = [
+    pytest.param(solve_rotation_path_transform, "edge_rotation_fn", "rotation", id="rotation"),
+    pytest.param(solve_pose_path_transform, "edge_pose_fn", "pose", id="pose"),
+]
 
 
 def _quat(axis: str, degrees: float) -> np.ndarray:
@@ -51,6 +57,87 @@ def _pose_from_translation_and_quat(translation: np.ndarray, quat: np.ndarray) -
 
 def _quat_equivalent(lhs: np.ndarray, rhs: np.ndarray, *, atol: float = 1e-6) -> bool:
     return bool(np.allclose(lhs, rhs, atol=atol, rtol=0.0) or np.allclose(lhs, -rhs, atol=atol, rtol=0.0))
+
+
+@pytest.mark.parametrize(("solver", "resolver_arg", "kind"), _PATH_SOLVERS)
+@pytest.mark.parametrize("opts", BAD_PATH_OPTIONS)
+@pytest.mark.parametrize("dst", ["sensor", "missing"])
+def test_spatial_hard_127h_001_functional_options_precede_resolution(
+    solver, resolver_arg, kind, opts, dst, monkeypatch,
+) -> None:
+    """ID: SPATIAL_HARD_127H_001_functional_options_precede_resolution."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        graph.get_or_create_frame("sensor", parent=world)
+        probe = forbid_path_resolution(monkeypatch, graph)
+        with pytest.raises(TypeError) as exc_info:
+            solver("sensor", dst, opts=opts, **{resolver_arg: probe})
+    assert str(exc_info.value) == f"spatial.path_solve.{kind}: opts must be PathSolveOptions or None."
+    assert probe.events == []
+
+
+@pytest.mark.parametrize(("solver", "resolver_arg", "kind"), _PATH_SOLVERS)
+@pytest.mark.parametrize("identity", [False, True])
+@pytest.mark.parametrize("frame_endpoints", [False, True])
+def test_spatial_core_127h_001_functional_options_preserve_defaults_and_graph_policy(
+    solver, resolver_arg, kind, identity, frame_endpoints,
+) -> None:
+    """ID: SPATIAL_CORE_127H_001_functional_options_preserve_defaults_and_graph_policy."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        sensor = graph.get_or_create_frame("sensor", parent=world)
+    rotation = _rotation_from_quat(np.asarray([_quat("z", 20.0)]))
+    edge = rotation if kind == "rotation" else Pose.from_components(
+        rotation, _position_from_xyz(np.asarray([[1.0, 2.0, 3.0]])), validate=True,
+    )
+    calls = []
+
+    def resolver(child, parent):
+        calls.append((child.id, parent.id))
+        return edge
+
+    dst = sensor if identity else world
+    endpoints = (sensor, dst) if frame_endpoints else (sensor.id, dst.id)
+    with graph:
+        expected = solver(*endpoints, **{resolver_arg: resolver})
+        for options in (None, PathSolveOptions()):
+            out = solver(*endpoints, opts=options, **{resolver_arg: resolver})
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+    with FrameGraph():
+        if frame_endpoints:
+            out = solver(*endpoints, opts=None, **{resolver_arg: resolver})
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+        for options in (PathSolveOptions(graph=graph), FalseyPathSolveOptions(graph=graph)):
+            out = solver(sensor.id, dst.id, opts=options, **{resolver_arg: resolver})
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+    if identity:
+        assert calls == []
+    else:
+        assert calls and set(calls) == {("sensor", "world")}
+
+
+@pytest.mark.parametrize(("solver", "resolver_arg", "kind"), _PATH_SOLVERS)
+def test_spatial_perf_127h_001_valid_options_preserve_lazy_path_solving(solver, resolver_arg, kind) -> None:
+    """ID: SPATIAL_PERF_127H_001_valid_options_preserve_lazy_path_solving."""
+    from dask.callbacks import Callback
+
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        body = graph.get_or_create_frame("body", parent=world)
+        sensor = graph.get_or_create_frame("sensor", parent=body)
+    rotation = _rotation_from_quat(np.asarray([_quat("z", 20.0)]))
+    edge = rotation if kind == "rotation" else Pose.from_components(
+        rotation, _position_from_xyz(np.asarray([[1.0, 2.0, 3.0]])), validate=True,
+    )
+    edge = type(edge)(edge.as_dataset(copy="none").chunk({"sample": 1}))
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        out = solver(sensor, world, opts=FalseyPathSolveOptions(graph=graph), **{resolver_arg: lambda *_: edge})
+    assert tasks == []
+    assert any(var.chunks is not None for var in out.as_dataset(copy="none").data_vars.values())
 
 
 def test_spatial_core_069_solve_rotation_path_transform_identity_src_eq_dst_deterministic() -> None:

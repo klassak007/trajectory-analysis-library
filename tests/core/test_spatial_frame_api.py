@@ -11,9 +11,24 @@ from tal.spatial import PathSolveOptions, Pose, Position, Rotation, solve_pose_p
 from tal.spatial.metadata import get_expressed_in, get_pose_rep, get_position_rep, get_rotation_rep, set_expressed_in
 from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames
+from tests._path_options_helpers import (
+    DELEGATOR_BAD_PATH_OPTIONS,
+    FalseyPathSolveOptions,
+    ResolutionProbe,
+    forbid_path_resolution,
+)
 
 _XYZ = ("x", "y", "z")
 _QUAT = ("x", "y", "z", "w")
+
+_CONFIGURATION_PATH_APIS = [
+    pytest.param("rotation", "solve_path_transform", "edge_rotation_fn", id="rotation-solve"),
+    pytest.param("pose", "solve_path_transform", "edge_pose_fn", id="pose-solve"),
+    pytest.param("position", "to_frame", "edge_pose_fn", id="position-to-frame"),
+    pytest.param("position", "express_in", "edge_rotation_fn", id="position-express-in"),
+    pytest.param("rotation", "express_in", "edge_rotation_fn", id="rotation-express-in"),
+    pytest.param("pose", "express_in", "edge_pose_fn", id="pose-express-in"),
+]
 
 
 def _quat(axis: str, degrees: float) -> np.ndarray:
@@ -49,6 +64,98 @@ def _pose_from_translation_and_quat(translation: np.ndarray, quat: np.ndarray) -
 def _with_sample_and_param(value, *, sample: list[int], param_name: str, param: list[float]):
     ds = value.as_dataset(copy="none").assign_coords(sample=sample, **{param_name: ("sample", param)})
     return value.__class__(ds).set_param_coord(name=param_name, validate=False)
+
+
+def _configuration_path_source(kind):
+    position = _position_from_xyz(np.asarray([[1.0, 2.0, 3.0]]))
+    rotation = _rotation_from_quat(np.asarray([_quat("x", 15.0)]))
+    source = {"position": position, "rotation": rotation}.get(kind)
+    if source is None:
+        source = Pose.from_components(rotation, position, validate=True)
+    return frame_retag(source, parent="sensor", child="probe", validate=True)
+
+
+def _configuration_path_call(source, operation, dst, **kwargs):
+    if operation == "solve_path_transform":
+        return type(source).solve_path_transform("sensor", dst, **kwargs)
+    return getattr(source, operation)(dst, **kwargs)
+
+
+@pytest.mark.parametrize(("kind", "operation", "resolver_arg"), _CONFIGURATION_PATH_APIS)
+@pytest.mark.parametrize("opts", DELEGATOR_BAD_PATH_OPTIONS)
+@pytest.mark.parametrize("validate", [False, True])
+def test_spatial_hard_127h_002_configuration_options_precede_resolution(
+    kind, operation, resolver_arg, opts, validate, monkeypatch,
+) -> None:
+    """ID: SPATIAL_HARD_127H_002_configuration_options_precede_resolution."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        graph.get_or_create_frame("sensor", parent=world)
+        source = _configuration_path_source(kind)
+        before = source.as_dataset(copy="deep")
+        probe = forbid_path_resolution(monkeypatch, graph)
+        with pytest.raises(TypeError) as exc_info:
+            _configuration_path_call(
+                source,
+                operation,
+                "sensor",
+                opts=opts,
+                validate=validate,
+                **{resolver_arg: probe},
+            )
+    assert str(exc_info.value) == f"spatial.{kind}.{operation}: opts must be PathSolveOptions or None."
+    assert probe.events == []
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize(("kind", "operation", "resolver_arg"), _CONFIGURATION_PATH_APIS)
+@pytest.mark.parametrize("identity", [False, True])
+def test_spatial_core_127h_002_configuration_options_preserve_results(kind, operation, resolver_arg, identity) -> None:
+    """ID: SPATIAL_CORE_127H_002_configuration_options_preserve_results."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        graph.get_or_create_frame("sensor", parent=world)
+    source = _configuration_path_source(kind)
+    rotation = _rotation_from_quat(np.asarray([_quat("z", 20.0)]))
+    edge = rotation if resolver_arg == "edge_rotation_fn" else Pose.from_components(
+        rotation, _position_from_xyz(np.asarray([[0.5, 0.0, 0.0]])), validate=True,
+    )
+    calls = []
+
+    def resolver(child, parent):
+        calls.append((child.id, parent.id))
+        return edge
+
+    dst = "sensor" if identity else "world"
+    kwargs = {resolver_arg: resolver, "validate": False}
+    with graph:
+        expected = _configuration_path_call(source, operation, dst, **kwargs)
+        for options in (None, PathSolveOptions()):
+            out = _configuration_path_call(source, operation, dst, opts=options, **kwargs)
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+    with FrameGraph():
+        for options in (PathSolveOptions(graph=graph), FalseyPathSolveOptions(graph=graph)):
+            out = _configuration_path_call(source, operation, dst, opts=options, **kwargs)
+            xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
+    if identity:
+        assert calls == []
+    else:
+        assert calls and set(calls) == {("sensor", "world")}
+
+
+@pytest.mark.parametrize("kind", ["position", "rotation", "pose"])
+def test_spatial_core_127h_003_configuration_identity_keeps_field_checks_deferred(kind) -> None:
+    """ID: SPATIAL_CORE_127H_003_configuration_identity_keeps_field_checks_deferred."""
+    source = _configuration_path_source(kind)
+    opts = PathSolveOptions(graph=object(), strict=False, kinematics_support=object())
+    probe = ResolutionProbe()
+    resolver_arg = "edge_pose_fn" if kind == "pose" else "edge_rotation_fn"
+    expected = source.express_in("sensor", **{resolver_arg: probe})
+    out = source.express_in("sensor", opts=opts, validate=False, **{resolver_arg: probe})
+    assert probe.events == []
+    xr.testing.assert_identical(out.as_dataset(copy="none"), expected.as_dataset(copy="none"))
 
 
 def test_spatial_core_075_position_to_frame_identity_parent_eq_dst_deterministic() -> None:

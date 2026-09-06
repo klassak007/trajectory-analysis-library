@@ -25,14 +25,30 @@ class KinematicsPathSupportOptions:
 class PathSolveOptions:
     """Options for frame-path transform solving.
 
+    ``graph`` selects the topology source, ``strict`` controls path policy,
+    and ``kinematics_support`` supplies velocity/acceleration transport support.
+
     Notes
     -----
-    Public TAL class surface. See class methods/properties for operational semantics.
+    Path APIs accept an instance of this class (including subclasses) or
+    ``None``. Only ``None`` selects defaults. Other types raise an
+    operation-prefixed ``TypeError`` before graph/resolver work, including
+    identity shortcuts and calls with ``validate=False``. Individual policy
+    fields are checked by the operation that consumes them.
     """
 
     graph: FrameGraph | None = None
     strict: bool = True
     kinematics_support: KinematicsPathSupportOptions | None = None
+
+
+def _coerce_path_solve_options(opts: object | None, *, owner: str) -> PathSolveOptions:
+    """Normalize the outer options type without inspecting policy or graph state."""
+    if opts is None:
+        return PathSolveOptions()
+    if isinstance(opts, PathSolveOptions):
+        return opts
+    raise TypeError(f"{owner}: opts must be PathSolveOptions or None.")
 
 
 def solve_rotation_path_transform(
@@ -53,7 +69,9 @@ def solve_rotation_path_transform(
     edge_rotation_fn : object
         Callable resolving rotation edges for frame-path traversal.
     opts : PathSolveOptions or None
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``PathSolveOptions`` key fields: ``graph`` (default None), ``strict`` (default True), ``kinematics_support`` (default None).
+        Only ``None`` selects defaults. Otherwise a ``PathSolveOptions``
+        instance is required. Key fields are ``graph`` (default None),
+        ``strict`` (default True), and ``kinematics_support`` (default None).
 
     Returns
     -------
@@ -63,7 +81,8 @@ def solve_rotation_path_transform(
     Raises
     ------
     TypeError
-        If option payload types are invalid for this API.
+        If ``opts`` is neither ``PathSolveOptions`` nor ``None``, before graph
+        or resolver resolution, or if a consumed option field has the wrong type.
     ValueError
         If option values violate fail-closed semantic/layout constraints.
 
@@ -95,7 +114,7 @@ def _solve_rotation_path_transform_with_owner(
     opts: PathSolveOptions | None,
     owner: str,
 ) -> "Rotation":
-    options = opts or PathSolveOptions()
+    options = _coerce_path_solve_options(opts, owner=owner)
     return solve_rotation_path_transform_impl(
         src,
         dst,
@@ -124,7 +143,9 @@ def solve_pose_path_transform(
     edge_pose_fn : object
         Callable resolving pose edges for frame-path traversal.
     opts : PathSolveOptions or None
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``PathSolveOptions`` key fields: ``graph`` (default None), ``strict`` (default True), ``kinematics_support`` (default None).
+        Only ``None`` selects defaults. Otherwise a ``PathSolveOptions``
+        instance is required. Key fields are ``graph`` (default None),
+        ``strict`` (default True), and ``kinematics_support`` (default None).
 
     Returns
     -------
@@ -134,7 +155,8 @@ def solve_pose_path_transform(
     Raises
     ------
     TypeError
-        If option payload types are invalid for this API.
+        If ``opts`` is neither ``PathSolveOptions`` nor ``None``, before graph
+        or resolver resolution, or if a consumed option field has the wrong type.
     ValueError
         If option values violate fail-closed semantic/layout constraints.
 
@@ -166,7 +188,7 @@ def _solve_pose_path_transform_with_owner(
     opts: PathSolveOptions | None,
     owner: str,
 ) -> "Pose":
-    options = opts or PathSolveOptions()
+    options = _coerce_path_solve_options(opts, owner=owner)
     return solve_pose_path_transform_impl(
         src,
         dst,

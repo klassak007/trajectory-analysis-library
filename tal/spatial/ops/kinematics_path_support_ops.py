@@ -22,7 +22,7 @@ from ..metadata import (
     get_instantaneous_inertial,
 )
 from ..metadata.roles import get_kinematics_kind
-from ..path_solve import KinematicsPathSupportOptions, PathSolveOptions
+from ..path_solve import KinematicsPathSupportOptions, PathSolveOptions, _coerce_path_solve_options
 
 
 @dataclass(frozen=True)
@@ -174,6 +174,7 @@ def resolve_kinematics_path_support(
     opts: PathSolveOptions | None,
     owner: str,
 ) -> KinematicsPathSupportContext:
+    opts = _coerce_path_solve_options(opts, owner=owner)
     graph = _resolve_graph(opts, dst=dst, owner=owner)
     src_parent, src_child = _resolve_source_frames(source, graph, owner=owner)
     dst_frame = _resolve_endpoint(graph, dst, owner=owner, arg="dst")
