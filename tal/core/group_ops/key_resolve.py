@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ...utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
+)
 from ..orchestration.alignment import align_exact_for_plan
 from ..orchestration.alignment_intent import select_topology_policy_with_intents
 from ..orchestration.context import DatasetContext
@@ -15,7 +18,8 @@ from ..orchestration.topology import (
     TopologyOperand,
     resolve_binary_topology,
 )
-from ...utils.topology_operation_families import operation_intent_support_for_operation_family
+from .key_index import require_exact_lane_indexes
+from .label_plan import object_label_vector
 from .options import validate_grouping_bin_spec
 from .row_dim_compat import require_row_dim_compatibility
 from .types import (
@@ -35,6 +39,30 @@ def _require_single_key(key: object, *, owner: str) -> GroupingSingleKey:
     raise TypeError(f"{owner}: key must be str, xr.DataArray, GroupingBinSpec, or tuple/list of those.")
 
 
+def _require_flat_key_item(
+    item: object,
+    *,
+    index: int,
+    owner: str,
+) -> GroupingSingleKey:
+    if isinstance(item, (tuple, list)):
+        raise TypeError(
+            f"{owner}: nested key containers are not supported; key[{index}] is nested."
+        )
+    return _require_single_key(item, owner=owner)
+
+
+def _normalize_key_items(
+    key: tuple[object, ...] | list[object],
+    *,
+    owner: str,
+) -> tuple[GroupingSingleKey, ...]:
+    return tuple(
+        _require_flat_key_item(item, index=index, owner=owner)
+        for index, item in enumerate(key)
+    )
+
+
 def normalize_grouping_key_input(
     key: GroupingKeyInput,
     *,
@@ -43,12 +71,7 @@ def normalize_grouping_key_input(
     if isinstance(key, (tuple, list)):
         if not key:
             raise ValueError(f"{owner}: key tuple/list must be non-empty.")
-        out: list[GroupingSingleKey] = []
-        for index, item in enumerate(key):
-            if isinstance(item, (tuple, list)):
-                raise TypeError(f"{owner}: nested key containers are not supported; key[{index}] is nested.")
-            out.append(_require_single_key(item, owner=owner))
-        return tuple(out)
+        return _normalize_key_items(key, owner=owner)
     return (_require_single_key(key, owner=owner),)
 
 
@@ -177,6 +200,33 @@ def _resolve_name_key_data(
     raise ValueError(f"{owner}: grouping key name {key_name!r} was not found.")
 
 
+def _align_batch_key(
+    data: xr.DataArray,
+    *,
+    ctx: DatasetContext,
+    primary_dim: str,
+    owner: str,
+    what: str,
+) -> xr.DataArray:
+    if tuple(data.dims) != (primary_dim,):
+        raise ValueError(
+            f"{owner}: {what} must vary over exactly the primary batch dimension "
+            f"{primary_dim!r}; got dims={tuple(data.dims)!r}."
+        )
+    indexed = require_exact_lane_indexes(
+        ctx.ds,
+        data,
+        lane_dim=primary_dim,
+        owner=owner,
+        what=what,
+    )
+    if not indexed and int(data.sizes[primary_dim]) != int(ctx.ds.sizes[primary_dim]):
+        raise ValueError(
+            f"{owner}: {what} size must match primary batch dimension {primary_dim!r}."
+        )
+    return data
+
+
 def _coerce_numeric_source(data: xr.DataArray, *, owner: str) -> xr.DataArray:
     try:
         return data.astype("float64")
@@ -206,7 +256,7 @@ def _cut_to_codes(
 
 
 def _codes_to_labels(codes: xr.DataArray, labels: Sequence[object]) -> xr.DataArray:
-    label_values = np.asarray(tuple(labels), dtype=object)
+    label_values = object_label_vector(labels)
 
     def _map(values: np.ndarray, *, label_values: np.ndarray) -> np.ndarray:
         out = np.empty(values.shape, dtype=object)
@@ -224,6 +274,41 @@ def _codes_to_labels(codes: xr.DataArray, labels: Sequence[object]) -> xr.DataAr
     )
 
 
+def _resolve_bin_source(
+    ctx: DatasetContext,
+    key: GroupingBinSpec,
+    *,
+    index: int,
+    owner: str,
+) -> tuple[np.ndarray, xr.DataArray, str]:
+    bin_owner = f"{owner} key[{index}]"
+    edges = validate_grouping_bin_spec(key, owner=bin_owner)
+    if isinstance(key.source, xr.DataArray):
+        return edges, key.source, key.source.name or f"external_key_{index}"
+    _, data = _resolve_name_key_data(ctx, key.source, owner=bin_owner)
+    return edges, data, key.source
+
+
+def _build_bin_key(
+    aligned: xr.DataArray,
+    key: GroupingBinSpec,
+    *,
+    edges: np.ndarray,
+    source_name: str,
+    index: int,
+) -> ResolvedGroupingKey:
+    codes = _cut_to_codes(aligned, edges=edges, right=key.right, include_lowest=key.include_lowest)
+    data = codes if key.labels is None else _codes_to_labels(codes, key.labels)
+    domain = tuple(float(i) for i in range(int(edges.size - 1))) if key.labels is None else tuple(key.labels)
+    return ResolvedGroupingKey(
+        index=index,
+        kind="bin",
+        name=f"{source_name}__bin",
+        data=data,
+        domain_order=domain,
+    )
+
+
 def _resolve_bin_key(
     ctx: DatasetContext,
     key: GroupingBinSpec,
@@ -232,31 +317,55 @@ def _resolve_bin_key(
     owner: str,
 ) -> ResolvedGroupingKey:
     bin_owner = f"{owner} key[{index}]"
-    edges = validate_grouping_bin_spec(key, owner=bin_owner)
-    if isinstance(key.source, xr.DataArray):
-        source_data = key.source
-        source_name = key.source.name or f"external_key_{index}"
-    else:
-        _, source_data = _resolve_name_key_data(ctx, key.source, owner=bin_owner)
-        source_name = key.source
+    edges, source_data, source_name = _resolve_bin_source(
+        ctx,
+        key,
+        index=index,
+        owner=owner,
+    )
     aligned_source = _align_key_to_reference(
         _coerce_numeric_source(source_data, owner=bin_owner),
         ctx=ctx,
         owner=owner,
         what=f"grouping key[{index}]",
     )
-    codes = _cut_to_codes(aligned_source, edges=edges, right=key.right, include_lowest=key.include_lowest)
-    key_data = codes if key.labels is None else _codes_to_labels(codes, key.labels)
-    if key.labels is None:
-        domain_order: tuple[object, ...] | None = tuple(float(i) for i in range(int(edges.size - 1)))
-    else:
-        domain_order = tuple(key.labels)
-    return ResolvedGroupingKey(
+    return _build_bin_key(
+        aligned_source,
+        key,
+        edges=edges,
+        source_name=source_name,
         index=index,
-        kind="bin",
-        name=f"{source_name}__bin",
-        data=key_data,
-        domain_order=domain_order,
+    )
+
+
+def _resolve_batch_bin_key(
+    ctx: DatasetContext,
+    key: GroupingBinSpec,
+    *,
+    primary_dim: str,
+    index: int,
+    owner: str,
+) -> ResolvedGroupingKey:
+    bin_owner = f"{owner} key[{index}]"
+    edges, source_data, source_name = _resolve_bin_source(
+        ctx,
+        key,
+        index=index,
+        owner=owner,
+    )
+    aligned = _align_batch_key(
+        _coerce_numeric_source(source_data, owner=bin_owner),
+        ctx=ctx,
+        primary_dim=primary_dim,
+        owner=owner,
+        what=f"grouping key[{index}]",
+    )
+    return _build_bin_key(
+        aligned,
+        key,
+        edges=edges,
+        source_name=source_name,
+        index=index,
     )
 
 
@@ -279,7 +388,42 @@ def resolve_grouping_key(
     return ResolvedGroupingKey(index=index, kind="external", name=name, data=aligned)
 
 
+def resolve_batch_grouping_key(
+    ctx: DatasetContext,
+    key: GroupingSingleKey,
+    *,
+    primary_dim: str,
+    index: int,
+    owner: str,
+) -> ResolvedGroupingKey:
+    """Resolve one batch-only grouping key without realizing its payload."""
+    key_owner = f"{owner} key[{index}]"
+    if isinstance(key, GroupingBinSpec):
+        return _resolve_batch_bin_key(
+            ctx,
+            key,
+            primary_dim=primary_dim,
+            index=index,
+            owner=owner,
+        )
+    if isinstance(key, str):
+        kind, data = _resolve_name_key_data(ctx, key, owner=key_owner)
+        name = key
+    else:
+        kind, data = "external", key
+        name = key.name or f"external_key_{index}"
+    aligned = _align_batch_key(
+        data,
+        ctx=ctx,
+        primary_dim=primary_dim,
+        owner=owner,
+        what=f"grouping key[{index}]",
+    )
+    return ResolvedGroupingKey(index=index, kind=kind, name=name, data=aligned)
+
+
 __all__ = [
     "normalize_grouping_key_input",
+    "resolve_batch_grouping_key",
     "resolve_grouping_key",
 ]

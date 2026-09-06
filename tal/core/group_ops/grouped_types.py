@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .types import GroupingFoundationContext, GroupingFoundationOptions
-
+from .types import (
+    BatchGroupingFoundationContext,
+    GroupingFoundationContext,
+    GroupingFoundationOptions,
+)
 
 GroupedLayout = Literal["padded", "stacked"]
 
@@ -42,6 +45,29 @@ class GroupMaterializeOptions:
 
 
 @dataclass(frozen=True)
+class BatchGroupReduceOptions:
+    """Options for reducers on a batch-only grouped view.
+
+    Parameters
+    ----------
+    group_dim : str | None, optional
+        Override the group dimension name selected by ``GroupByOptions``.
+    include_empty_groups : bool, optional
+        Include declared empty bin groups in reducer output.
+
+    Examples
+    --------
+    >>> from tal.core import BatchGroupReduceOptions
+    >>> opts = BatchGroupReduceOptions(group_dim="outcome", include_empty_groups=True)
+    >>> (opts.group_dim, opts.include_empty_groups)
+    ('outcome', True)
+    """
+
+    group_dim: str | None = None
+    include_empty_groups: bool = False
+
+
+@dataclass(frozen=True)
 class GroupedRuntimePlan:
     """Resolved immutable grouped runtime plan used by grouped wrappers.
 
@@ -62,3 +88,14 @@ class GroupedRuntimePlan:
     global_group_rows: tuple[tuple[int, ...], ...]
     per_batch_group_sequence_rows: tuple[tuple[tuple[int, ...], ...], ...] | None
     batch_shape: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class BatchGroupedRuntimePlan:
+    """Resolved immutable batch-only grouped runtime plan."""
+
+    foundation: BatchGroupingFoundationContext
+    group_dim: str
+    group_labels: tuple[object, ...]
+    bin_domain_labels: tuple[object, ...] | None
+    global_group_rows: tuple[tuple[int, ...], ...]

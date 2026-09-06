@@ -171,7 +171,7 @@ This overview names the main surfaces without duplicating their full guides.
 | Work with poses and kinematics | `tal.spatial.Position`, `Rotation`, `Pose`, velocity and acceleration types | {doc}`spatial`, {doc}`../api/types/index` |
 | Attach or resolve frames | `ao.frames`, `tal.frames.FrameGraph`, `find_path(...)` | {doc}`frames`, {doc}`../api/frames` |
 | Extract events and windows | `ao.events.mask(...)`, `events(...)`, `intervals(...)`, `when(...)`, `around(...)` | {doc}`events`, {doc}`../api/events` |
-| Group runs or bins | `ao.group.groupby(...)`, `ao.group.groupby_bins(...)`, grouped reducers | {doc}`../api/analysis-object` |
+| Group sequence rows, batch runs, or bins | `ao.group.groupby(...)`, `ao.group.groupby_bins(...)`, grouped reducers | {doc}`../api/reducers` |
 | Manage named components | `ao.components.define(...)`, `registry(...)`, `extract(...)`, `patch(...)`, `compose(...)` | {doc}`../api/components` |
 | Persist and ingest data | `ao.io.to_zarr(...)`, `AnalysisObject.from_zarr(...)`, CSV and log readers | {doc}`../api/io` |
 | Visualize trajectories | `ao.viz.line(...)`, `ao.viz.scatter(...)`, `ao.viz.explorer(...)` | {doc}`viewing`, {doc}`../api/viz` |

@@ -1,33 +1,51 @@
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-import tempfile
 from typing import get_args
 from unittest.mock import patch
 
 import numpy as np
 import xarray as xr
 
-from tal.astro import AstroBackend, AstroIERSOptions, AstroOptions, AstroTimeOptions, TopocentricDirection
+from tal.astro import (
+    AstroBackend,
+    AstroIERSOptions,
+    AstroOptions,
+    AstroTimeOptions,
+    TopocentricDirection,
+)
 from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
-from tal.core import AnalysisObject, GroupByOptions, SequenceConcatOptions, concat_sequence
+from tal.core import (
+    AnalysisObject,
+    BatchGroupReduceOptions,
+    SequenceConcatOptions,
+    concat_sequence,
+)
 from tal.core.component_ops import ComponentRegistryOptions, ComponentSpec
 from tal.core.event_ops import WhenOptions
 from tal.core.schema_read import read_roles
-from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds, snapshot_to_networkx
-from tal.io import CsvIngestOptions, read_csv_logs
+from tal.frames import (
+    FrameGraph,
+    find_path,
+    fold_path,
+    render_snapshot_ascii,
+    snapshot_from_seeds,
+    snapshot_to_networkx,
+)
 from tal.geo import (
     ENUOptions,
+    GeodesicOptions,
     GeodeticInterpolationOptions,
     GeodeticOptions,
-    GeodesicOptions,
     GeodeticPosition,
     LocalOrigin,
     ProjectedPosition,
     transform_crs,
 )
+from tal.io import CsvIngestOptions, read_csv_logs
 from tal.linalg import (
     Array,
     Matrix,
@@ -64,7 +82,9 @@ from tal.spatial.metadata.frame_motion import (
 )
 from tal.utils.frame_ops import frame_bind, frame_retag
 from tal.utils.frame_schema import get_frames, set_frames
-from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
+from tal.utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
+)
 from tal.utils.xarray_namespace import rename_dims_collision_safe
 from tal.viz import line
 
@@ -295,10 +315,13 @@ def example_core_event_when() -> None:
 
 def example_core_group_groupby() -> None:
     ao = _make_signal_ao()
-    grouped = ao.group.groupby("outcome", opts=GroupByOptions(preserve_batch=False))
+    grouped = ao.group.groupby("outcome", preserve_batch=False)
     out = grouped.mean(dim="sample")
     assert "group_key" in out.as_dataset(copy="none").dims
     assert out.as_dataset(copy="none").sizes["group_key"] == 2
+    per_trial = ao.min(dim="sample")
+    batch_out = per_trial.group.groupby("outcome").mean(dim="trial")
+    assert batch_out.as_dataset(copy="none").sizes["group_key"] == 2
 
 
 def example_core_combine_concat_sequence() -> None:
@@ -501,7 +524,7 @@ def example_core_group_surface() -> None:
         core_dims=(),
         validate=True,
     )
-    grouped = ao.group.groupby("kind", opts=GroupByOptions(preserve_batch=False))
+    grouped = ao.group.groupby("kind", preserve_batch=False)
     assert grouped.materialize(opts=GroupMaterializeOptions(layout="padded")).as_dataset(copy="none").sizes["group_key"] == 2
     assert grouped.padded().as_dataset(copy="none").sizes["sample"] == 2
     assert grouped.stacked().as_dataset(copy="none").sizes["group_member"] == 4
@@ -515,6 +538,12 @@ def example_core_group_surface() -> None:
     assert grouped.count(dim="sample").as_dataset(copy="none")["value"].sel(group_key="sim").item() == 2
     assert bool(grouped.any(dim="sample").as_dataset(copy="none")["flag"].sel(group_key="robot").item()) is True
     assert bool(grouped.all(dim="sample").as_dataset(copy="none")["flag"].sel(group_key="robot").item()) is True
+    per_run = ao.mean(dim="sample")
+    batch_mean = per_run.group.groupby("kind").mean(
+        dim="run",
+        opts=BatchGroupReduceOptions(group_dim="outcome_group"),
+    )
+    assert batch_mean.as_dataset(copy="none").sizes["outcome_group"] == 2
     binned_source = AnalysisObject.from_data(
         xr.Dataset(
             {"value": ("sample", np.asarray([1.0, 2.0, 3.0], dtype=float))},
@@ -814,6 +843,23 @@ def example_spatial_position_basic() -> None:
     delta = position.as_delta(validate=True)
     assert isinstance(delta, Position)
     assert delta.as_dataset(copy="none")["position"].shape == (1, 3)
+
+
+def example_spatial_rotation_from_data() -> None:
+    rotation = Rotation.from_data(
+        xr.DataArray(
+            [[0.0, 0.0, 0.0, 1.0]],
+            dims=("sample", "quat"),
+            coords={"sample": [0], "quat": ["x", "y", "z", "w"]},
+            name="rotation",
+        ),
+        sequence_dim="sample",
+        core_dims=("quat",),
+        validate=True,
+    )
+    ds = rotation.as_dataset(copy="none")
+    assert ds["rotation"].shape == (1, 4)
+    assert read_roles(ds)[1:] == ("sample", (), ("quat",))
 
 
 def example_spatial_rotation_to_rep() -> None:
@@ -1308,7 +1354,7 @@ def example_frames_topology_rendering() -> None:
         edge_value_fn=lambda child, parent: [(child.id, parent.id)],
         compose=lambda acc, value: acc + value,
         inverse=lambda value: [(value[0][1], value[0][0])],
-        identity=lambda: [],
+        identity=list,
     )
     snapshot = snapshot_from_seeds(("world",), graph=graph)
     ascii_tree = render_snapshot_ascii(snapshot)
@@ -1326,7 +1372,12 @@ def example_frames_api_surface() -> None:
     from tal.frames import get_active_frame_graph, get_or_create_frame
     from tal.frames.snapshot import SnapshotIssue
     from tal.frames.visualization import FrameGraphDrawOptions, draw_frame_graph
-    from tal.utils.frame_ops import frame_ids, frame_remap_ids, frame_rename, frame_retag
+    from tal.utils.frame_ops import (
+        frame_ids,
+        frame_remap_ids,
+        frame_rename,
+        frame_retag,
+    )
 
     graph = FrameGraph()
     with graph:
@@ -1603,6 +1654,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "LINALG-LAYOUT-SURFACE": example_linalg_layout_surface,
     "SPATIAL-POSITION-TO-FRAME": example_spatial_position_to_frame,
     "SPATIAL-POSITION-BASIC": example_spatial_position_basic,
+    "SPATIAL-ROTATION-FROM-DATA": example_spatial_rotation_from_data,
     "SPATIAL-ROTATION-TO-REP": example_spatial_rotation_to_rep,
     "SPATIAL-ROTATION-BASIC": example_spatial_rotation_basic,
     "SPATIAL-POSE-FROM-COMPONENTS": example_spatial_pose_from_components,

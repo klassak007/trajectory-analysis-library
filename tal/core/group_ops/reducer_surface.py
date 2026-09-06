@@ -3,25 +3,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..reducer_ops.types import DimLike, WeightInput
-from .grouped_types import GroupMaterializeOptions
+from .grouped_types import BatchGroupReduceOptions, GroupMaterializeOptions
 from .reducer_dispatch import grouped_reduce
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
     from .accessor import GroupedView
+    from .batch_view import BatchGroupedView
 
 
 def _dispatch(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     *,
     op: str,
     dim: DimLike = None,
     skipna: bool = True,
     ddof: int = 0,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     return grouped_reduce(
         self,
         op=op,
@@ -36,14 +37,14 @@ def _dispatch(
 
 
 def _mean(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped mean reducer.
 
     Parameters
@@ -54,8 +55,8 @@ def _mean(
         Whether to ignore missing values in reducer kernels.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -93,14 +94,14 @@ def _mean(
 
 
 def _sum(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped sum reducer.
 
     Parameters
@@ -111,8 +112,8 @@ def _sum(
         Whether to ignore missing values in reducer kernels.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -150,15 +151,15 @@ def _sum(
 
 
 def _std(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     ddof: int = 0,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped standard-deviation reducer.
 
     Parameters
@@ -171,8 +172,8 @@ def _std(
         Delta degrees of freedom for variance/standard-deviation reducers.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -219,15 +220,15 @@ def _std(
 
 
 def _var(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     ddof: int = 0,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped variance reducer.
 
     Parameters
@@ -240,8 +241,8 @@ def _var(
         Delta degrees of freedom for variance/standard-deviation reducers.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -288,14 +289,14 @@ def _var(
 
 
 def _median(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped median reducer.
 
     Parameters
@@ -306,8 +307,8 @@ def _median(
         Whether to ignore missing values in reducer kernels.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -345,14 +346,14 @@ def _median(
 
 
 def _min(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped minimum reducer.
 
     Parameters
@@ -363,8 +364,8 @@ def _min(
         Whether to ignore missing values in reducer kernels.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -402,14 +403,14 @@ def _min(
 
 
 def _max(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     skipna: bool = True,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped maximum reducer.
 
     Parameters
@@ -420,8 +421,8 @@ def _max(
         Whether to ignore missing values in reducer kernels.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -459,13 +460,13 @@ def _max(
 
 
 def _count(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped count reducer.
 
     Parameters
@@ -474,8 +475,8 @@ def _count(
         Dimension(s) reduced by grouped reducer operations.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -513,13 +514,13 @@ def _count(
 
 
 def _any(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped logical-any reducer.
 
     Parameters
@@ -528,8 +529,8 @@ def _any(
         Dimension(s) reduced by grouped reducer operations.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 
@@ -567,13 +568,13 @@ def _any(
 
 
 def _all(
-    self: "GroupedView",
+    self: GroupedView | BatchGroupedView,
     dim: DimLike = None,
     *,
     weights: WeightInput = None,
-    opts: GroupMaterializeOptions | None = None,
+    opts: GroupMaterializeOptions | BatchGroupReduceOptions | None = None,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Grouped logical-all reducer.
 
     Parameters
@@ -582,8 +583,8 @@ def _all(
         Dimension(s) reduced by grouped reducer operations.
     weights : WeightInput, optional
         Optional weight input for weighted grouped reduction.
-    opts : GroupMaterializeOptions | None, optional
-        When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupMaterializeOptions`` key fields: ``layout`` (default 'padded'), ``group_dim`` (default None), ``member_dim`` (default None), ``sequence_index_coord`` (default None).
+    opts : GroupMaterializeOptions | BatchGroupReduceOptions | None, optional
+        Sequence views use ``GroupMaterializeOptions`` fields such as ``layout`` and ``group_dim``. Batch-only views use ``BatchGroupReduceOptions`` fields ``group_dim`` and ``include_empty_groups``.
     validate : bool, optional
         When ``True``, validate output schema/layout invariants before returning.
 

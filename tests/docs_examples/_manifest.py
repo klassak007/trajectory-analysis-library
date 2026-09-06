@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib
 import inspect
+from dataclasses import dataclass
 from types import FunctionType, UnionType
-from typing import Any, Literal, Union, get_origin
+from typing import Literal, Union, get_origin
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,18 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.core.group_ops.accessor.GroupedView.count",
         "tal.core.group_ops.accessor.GroupedView.any",
         "tal.core.group_ops.accessor.GroupedView.all",
+        "tal.core.group_ops.batch_view.BatchGroupedView",
+        "tal.core.group_ops.grouped_types.BatchGroupReduceOptions",
+        "tal.core.group_ops.batch_view.BatchGroupedView.mean",
+        "tal.core.group_ops.batch_view.BatchGroupedView.sum",
+        "tal.core.group_ops.batch_view.BatchGroupedView.std",
+        "tal.core.group_ops.batch_view.BatchGroupedView.var",
+        "tal.core.group_ops.batch_view.BatchGroupedView.median",
+        "tal.core.group_ops.batch_view.BatchGroupedView.min",
+        "tal.core.group_ops.batch_view.BatchGroupedView.max",
+        "tal.core.group_ops.batch_view.BatchGroupedView.count",
+        "tal.core.group_ops.batch_view.BatchGroupedView.any",
+        "tal.core.group_ops.batch_view.BatchGroupedView.all",
     ),
     "linalg": (
         "tal.linalg.ops.add.add",
@@ -129,6 +141,7 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.spatial.position.Position.express_in",
         "tal.spatial.position.Position.differentiate",
         "tal.spatial.position.Position.smooth",
+        "tal.spatial.rotation.Rotation.from_data",
         "tal.spatial.rotation.Rotation.to_rep",
         "tal.spatial.rotation.Rotation.as_quat",
         "tal.spatial.rotation.Rotation.as_matrix",
@@ -292,9 +305,9 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
 }
 
 CURATED_SCOPE_COUNTS: dict[str, int] = {
-    "core": 73,
+    "core": 85,
     "linalg": 30,
-    "spatial": 78,
+    "spatial": 79,
     "geo": 25,
     "astro": 9,
     "frames": 19,
@@ -326,6 +339,8 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "tal.core.event_ops.accessor.EventsAccessor.when": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.core.event_ops.accessor.EventsAccessor.around": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.core.group_ops.accessor.GroupAccessor.groupby": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.group_ops.batch_view.BatchGroupedView": ("Notes", "Examples"),
+    "tal.core.group_ops.grouped_types.BatchGroupReduceOptions": ("Parameters", "Examples"),
     "tal.core.combine_ops.accessor.concat_sequence": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.ops.add.add": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.ops.sub.sub": ("Parameters", "Returns", "Notes", "Examples"),
@@ -341,6 +356,13 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "tal.linalg.matrix.Matrix.solve": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.vector3.Vector3.from_xyz": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.spatial.position.Position.to_frame": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.spatial.rotation.Rotation.from_data": (
+        "Parameters",
+        "Returns",
+        "Raises",
+        "Notes",
+        "Examples",
+    ),
     "tal.spatial.rotation.Rotation.to_rep": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.spatial.pose.Pose.from_components": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.spatial.path_solve.solve_pose_path_transform": ("Parameters", "Returns", "Notes", "Examples"),
@@ -431,6 +453,7 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.linalg.vector3.Vector3.from_xyz": ("LINALG-VECTOR3-FROM-XYZ",),
     "tal.spatial.position.Position.as_delta": ("SPATIAL-POSITION-BASIC",),
     "tal.spatial.position.Position.to_frame": ("SPATIAL-POSITION-TO-FRAME",),
+    "tal.spatial.rotation.Rotation.from_data": ("SPATIAL-ROTATION-FROM-DATA",),
     "tal.spatial.rotation.Rotation.to_rep": ("SPATIAL-ROTATION-TO-REP",),
     "tal.spatial.rotation.Rotation.as_quat": ("SPATIAL-ROTATION-BASIC",),
     "tal.spatial.rotation.Rotation.as_matrix": ("SPATIAL-ROTATION-BASIC",),
@@ -571,6 +594,18 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.core.group_ops.accessor.GroupedView.count": ("CORE-GROUP-SURFACE",),
     "tal.core.group_ops.accessor.GroupedView.any": ("CORE-GROUP-SURFACE",),
     "tal.core.group_ops.accessor.GroupedView.all": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.grouped_types.BatchGroupReduceOptions": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.mean": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.sum": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.std": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.var": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.median": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.min": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.max": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.count": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.any": ("CORE-GROUP-SURFACE",),
+    "tal.core.group_ops.batch_view.BatchGroupedView.all": ("CORE-GROUP-SURFACE",),
     "tal.core.combine_ops.accessor.concat_batch": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.accessor.merge": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.accessor.align_many": ("CORE-COMBINE-SURFACE",),
@@ -702,18 +737,34 @@ DUUNDER_FAMILY_DOC_OWNER: dict[str, tuple[str, ...]] = {
 }
 
 
+_MISSING_SYMBOL = object()
+
+
+def _import_candidate(module_name: str) -> object:
+    try:
+        return importlib.import_module(module_name)
+    except ImportError:
+        return _MISSING_SYMBOL
+
+
+def _resolve_candidate_attrs(obj: object, parts: list[str]) -> object:
+    try:
+        for part in parts:
+            obj = getattr(obj, part)
+    except AttributeError:
+        return _MISSING_SYMBOL
+    return obj
+
+
 def _resolve_symbol(symbol: str) -> object:
     parts = symbol.split(".")
     for index in range(len(parts), 0, -1):
         module_name = ".".join(parts[:index])
-        try:
-            obj: object = importlib.import_module(module_name)
-        except Exception:
+        obj = _import_candidate(module_name)
+        if obj is _MISSING_SYMBOL:
             continue
-        try:
-            for part in parts[index:]:
-                obj = getattr(obj, part)
-        except Exception:
+        obj = _resolve_candidate_attrs(obj, parts[index:])
+        if obj is _MISSING_SYMBOL:
             continue
         return obj
     raise ValueError(f"Unable to resolve symbol: {symbol}")
@@ -726,7 +777,7 @@ def _owner_class_symbol(symbol: str) -> str | None:
     owner = ".".join(parts[:-1])
     try:
         obj = _resolve_symbol(owner)
-    except Exception:
+    except ValueError:
         return None
     if inspect.isclass(obj):
         return owner

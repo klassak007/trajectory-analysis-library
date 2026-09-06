@@ -1,37 +1,38 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import xarray as xr
 
-from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
+from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.orchestration.inputs import coerce_analysis_object_input
-from tal.core.orchestration.topology import (
-    SEMANTIC_NON_CORE_POLICY,
-    STRICT_NON_CORE_POLICY,
-    TopologyPolicy,
-    TopologyOperand,
-    resolve_binary_topology,
-)
 from tal.core.orchestration.runtime_checks import (
-    require_exact_labels,
-    require_explicit_unique_dim_labels,
     require_var_contains_dims,
     resolve_single_numeric_var_single_core_dim,
     select_single_numeric_var,
 )
-from tal.core.orchestration.finalize import transfer_dataset_attrs
+from tal.core.orchestration.topology import (
+    SEMANTIC_NON_CORE_POLICY,
+    STRICT_NON_CORE_POLICY,
+    TopologyOperand,
+    TopologyPolicy,
+    resolve_binary_topology,
+)
 from tal.core.schema_errors import SchemaError
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
 from tal.core.typed_lifecycle import _finish_typed_promotion, _prepare_typed_promotion
 from tal.utils.frame_schema import get_frames, set_frames
-from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
+from tal.utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
+)
 
 from .conversion.finalize import (
     allocate_dim_pair,
@@ -40,25 +41,39 @@ from .conversion.finalize import (
     dataset_dim_names,
     finalize_conversion_dataset,
 )
-from .policies.frame import resolve_compose_output_frames
-from .ops.frame_api_ops import rotation_class_solve_path_transform
-from .ops.quat_role_dim_ops import resolve_quat_dim_with_role_fallback, resolve_rotation_component_dims_for_reduce
+from .kernels.rotation_compose_kernels import compose_quat_kernel, inverse_quat_kernel
+from .kernels.rotation_kernels import matrix_to_quat_kernel, quat_to_matrix_kernel
 from .metadata import (
     get_rotation_rep,
     normalize_configuration_relation_semantics,
     set_rotation_rep,
-    validate_spatial_roles,
+)
+from .ops.frame_api_ops import rotation_class_solve_path_transform
+from .ops.quat_role_dim_ops import (
+    require_matrix_core_dims,
+    require_rotation_ingress_core_roles,
+    resolve_rotation_component_dims_for_reduce,
 )
 from .ops.rotation_apply_ops import rotation_apply
-from .kernels.rotation_compose_kernels import compose_quat_kernel, inverse_quat_kernel
-from .kernels.rotation_kernels import matrix_to_quat_kernel, quat_to_matrix_kernel
+from .ops.rotation_layout_ops import (
+    enforce_rotation_dataset_invariants,
+    require_matrix_labels,
+    require_quat_labels,
+    require_quat_var_and_dim,
+)
+from .policies.frame import resolve_compose_output_frames
 from .policies.wrap import wrap_as
 
 if TYPE_CHECKING:
-    from tal.frames import Frame
     from tal.core.param_ops.types import ParamEvalOptions
+    from tal.frames import Frame
+
+    from .acceleration import Acceleration, AngularAcceleration, LinearAcceleration
     from .path_solve import PathSolveOptions
+    from .position import Position
+    from .temporal.accessor import RotationParamAccessor
     from .temporal.options import RotationTemporalOptions
+    from .velocity import AngularVelocity, LinearVelocity, Velocity
 
 _QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
 _MATRIX_LABELS: tuple[str, str, str] = ("x", "y", "z")
@@ -69,7 +84,7 @@ def _coerce_rotation_source(value: object, *, owner: str) -> AnalysisObject:
     return coerce_analysis_object_input(value, owner=owner)
 
 
-def _coerce_rotation_operand(value: object, *, owner: str) -> "Rotation":
+def _coerce_rotation_operand(value: object, *, owner: str) -> Rotation:
     if isinstance(value, Rotation):
         return value
     try:
@@ -82,73 +97,6 @@ def _coerce_rotation_operand(value: object, *, owner: str) -> "Rotation":
         ) from exc
     except ValueError as exc:
         raise ValueError(f"{owner}: other operand is not a valid Rotation: {exc}") from exc
-
-
-def _require_quat_labels(ds: xr.Dataset, *, axis: str, owner: str) -> None:
-    labels = require_explicit_unique_dim_labels(ds, dim=axis, owner=owner, what="Rotation")
-    require_exact_labels(labels, expected=_QUAT_LABELS, owner=owner, what="Rotation core")
-
-
-def _require_quat_var_and_dim(ds: xr.Dataset, *, owner: str) -> tuple[str, str]:
-    var_name = select_single_numeric_var(ds, owner=owner, what="Rotation")
-    quat_dim = resolve_quat_dim_with_role_fallback(ds, var_name=var_name, owner=owner, what="Rotation")
-    require_var_contains_dims(ds, var_name=var_name, required_dims=(quat_dim,), owner=owner, what="Rotation")
-    _require_quat_labels(ds, axis=quat_dim, owner=owner)
-    return var_name, quat_dim
-
-
-def _require_matrix_core_dims(ds: xr.Dataset, *, owner: str) -> tuple[str, str]:
-    from tal.core.schema_read import read_roles
-
-    declared, _, _, core_dims = read_roles(ds)
-    if not declared:
-        raise ValueError(f"{owner}: Rotation requires declared roles.")
-    if len(core_dims) != 2:
-        raise ValueError(f"{owner}: Rotation matrix layout requires exactly two core dims; got {core_dims!r}.")
-    row_dim, col_dim = core_dims
-    if row_dim == col_dim:
-        raise ValueError(f"{owner}: Rotation matrix layout core dims must be distinct; got {core_dims!r}.")
-    if int(ds.sizes.get(row_dim, -1)) != 3 or int(ds.sizes.get(col_dim, -1)) != 3:
-        raise ValueError(f"{owner}: Rotation matrix core dims must both have length 3.")
-    return row_dim, col_dim
-
-
-def _require_matrix_labels(ds: xr.Dataset, *, row_dim: str, col_dim: str, owner: str) -> None:
-    row_labels = require_explicit_unique_dim_labels(ds, dim=row_dim, owner=owner, what="Rotation matrix")
-    col_labels = require_explicit_unique_dim_labels(ds, dim=col_dim, owner=owner, what="Rotation matrix")
-    require_exact_labels(row_labels, expected=_MATRIX_LABELS, owner=owner, what=f"Rotation matrix row dim {row_dim!r}")
-    require_exact_labels(col_labels, expected=_MATRIX_LABELS, owner=owner, what=f"Rotation matrix col dim {col_dim!r}")
-
-
-def _enforce_quat_layout_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    _require_quat_var_and_dim(ds, owner=owner)
-
-
-def _enforce_matrix_layout_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    var_name = select_single_numeric_var(ds, owner=owner, what="Rotation matrix layout")
-    row_dim, col_dim = _require_matrix_core_dims(ds, owner=owner)
-    require_var_contains_dims(
-        ds,
-        var_name=var_name,
-        required_dims=(row_dim, col_dim),
-        owner=owner,
-        what="Rotation matrix layout",
-    )
-    _require_matrix_labels(ds, row_dim=row_dim, col_dim=col_dim, owner=owner)
-
-
-def _enforce_rotation_dataset_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    candidate = validate_schema_if_needed(ds)
-    validate_spatial_roles(candidate, owner=owner)
-    _ = get_frames(candidate)
-    rep = get_rotation_rep(candidate, owner=owner)
-    if rep == "quat":
-        _enforce_quat_layout_invariants(candidate, owner=owner)
-        return
-    if rep == "matrix":
-        _enforce_matrix_layout_invariants(candidate, owner=owner)
-        return
-    raise ValueError(f"{owner}: unsupported rotation representation {rep!r}.")
 
 
 def _normalize_rotation_metadata(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
@@ -179,7 +127,7 @@ def _finalize_rotation_conversion(
 
 def _convert_quat_to_matrix(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     candidate = validate_schema_if_needed(ds)
-    var_name, quat_dim = _require_quat_var_and_dim(candidate, owner=owner)
+    var_name, quat_dim = require_quat_var_and_dim(candidate, owner=owner)
     row_dim, col_dim = allocate_dim_pair(
         existing_dims=dataset_dim_names(candidate),
         first_candidates=("row", "rot_row", "matrix_row"),
@@ -208,7 +156,7 @@ def _convert_quat_to_matrix(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
 def _convert_matrix_to_quat(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     candidate = validate_schema_if_needed(ds)
     var_name = select_single_numeric_var(candidate, owner=owner, what="Rotation matrix layout")
-    row_dim, col_dim = _require_matrix_core_dims(candidate, owner=owner)
+    row_dim, col_dim = require_matrix_core_dims(candidate, owner=owner)
     require_var_contains_dims(
         candidate,
         var_name=var_name,
@@ -216,7 +164,7 @@ def _convert_matrix_to_quat(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         owner=owner,
         what="Rotation matrix layout",
     )
-    _require_matrix_labels(candidate, row_dim=row_dim, col_dim=col_dim, owner=owner)
+    require_matrix_labels(candidate, row_dim=row_dim, col_dim=col_dim, owner=owner)
     quat_dim = allocate_free_dim_name(
         existing_dims=dataset_dim_names(candidate),
         candidates=("quat", "quat_component", "rotation_component"),
@@ -250,7 +198,7 @@ def _normalize_target_rep(rep: object, *, owner: str) -> Literal["quat", "matrix
     if cleaned == "matrix":
         return "matrix"
     raise ValueError(f"{owner}: unsupported target rotation representation {cleaned!r}; allowed={sorted(_ALLOWED_TARGET_REPS)!r}.")
-def _wrap_rotation_output(ds: xr.Dataset, *, validate: bool) -> "Rotation":
+def _wrap_rotation_output(ds: xr.Dataset, *, validate: bool) -> Rotation:
     return wrap_as(Rotation, ds, validate=validate)
 
 
@@ -265,8 +213,8 @@ def _prepare_compose_quat_inputs(
     right_candidate = validate_schema_if_needed(right_ds)
     left_var, left_quat_dim = resolve_single_numeric_var_single_core_dim(left_candidate, owner=owner, what="left rotation")
     right_var, right_quat_dim = resolve_single_numeric_var_single_core_dim(right_candidate, owner=owner, what="right rotation")
-    _require_quat_labels(left_candidate, axis=left_quat_dim, owner=owner)
-    _require_quat_labels(right_candidate, axis=right_quat_dim, owner=owner)
+    require_quat_labels(left_candidate, axis=left_quat_dim, owner=owner)
+    require_quat_labels(right_candidate, axis=right_quat_dim, owner=owner)
     left_da = left_candidate[left_var]
     right_da = right_candidate[right_var]
     plan = resolve_binary_topology(
@@ -338,7 +286,7 @@ def _compose_quat_datasets(
 
 def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, str]:
     candidate = validate_schema_if_needed(ds)
-    var_name, quat_dim = _require_quat_var_and_dim(candidate, owner=owner)
+    var_name, quat_dim = require_quat_var_and_dim(candidate, owner=owner)
     quat = xr.apply_ufunc(
         partial(_wrap_inverse_quat_kernel, owner=owner),
         candidate[var_name],
@@ -386,12 +334,12 @@ def _convert_quat_result_to_rep(
 
 
 def _rotation_compose_with_owner(
-    left: "Rotation",
-    right: "Rotation",
+    left: Rotation,
+    right: Rotation,
     *,
     validate: bool,
     owner: str,
-) -> "Rotation":
+) -> Rotation:
     left._enforce_invariants(owner=owner)
     right._enforce_invariants(owner=owner)
     left_rep = get_rotation_rep(left_ds := analysis_object_dataset(left), owner=owner)
@@ -422,11 +370,11 @@ def _rotation_compose_with_owner(
 
 
 def _rotation_inverse_with_owner(
-    rotation: "Rotation",
+    rotation: Rotation,
     *,
     validate: bool,
     owner: str,
-) -> "Rotation":
+) -> Rotation:
     rotation._enforce_invariants(owner=owner)
     source_rep = get_rotation_rep(source := analysis_object_dataset(rotation), owner=owner)
     source_quat = rotation.as_quat(validate=False)
@@ -448,22 +396,108 @@ class Rotation(AnalysisObject):
     QUAT_LABELS: tuple[str, str, str, str] = _QUAT_LABELS
     MATRIX_LABELS: tuple[str, str, str] = _MATRIX_LABELS
 
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
+    def __init__(self, data: AnalysisObject | xr.Dataset | xr.DataArray) -> None:
         owner = "spatial.rotation.__init__"
         source = _coerce_rotation_source(data, owner=owner)
         self._bind_dataset(_prepare_typed_promotion(source, owner=owner))
         self._normalize_metadata(owner=owner)
+        require_rotation_ingress_core_roles(analysis_object_dataset(self), owner=owner)
         self._enforce_invariants(owner=owner)
         _finish_typed_promotion(source, analysis_object_dataset(self))
 
     @classmethod
-    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Rotation":
+    def from_data(
+        cls,
+        data: xr.Dataset | xr.DataArray,
+        *,
+        sequence_dim: str | None = None,
+        batch_dims: Sequence[str] = (),
+        core_dims: Sequence[str] = (),
+        param_coord: str | None = None,
+        sequence_size_coord: str | None = None,
+        layout: Literal["left_packed"] = "left_packed",
+        validate: bool = True,
+    ) -> Rotation:
+        """Construct through AO schema ingress and require declared rotation core roles.
+
+        Parameters
+        ----------
+        data
+            Rotation data to own. Exactly one numeric variable is required.
+        sequence_dim
+            Declared sequence dimension.
+        batch_dims
+            Declared batch dimensions.
+        core_dims
+            Representation component dimensions. Quaternion data requires one
+            length-four dimension labelled ``x, y, z, w``; matrix data requires
+            two distinct length-three dimensions labelled ``x, y, z``. When
+            representation metadata is absent, Rotation defaults to quaternion;
+            matrix input must already declare its matrix representation.
+        param_coord
+            Coordinate providing sequence parameter values.
+        sequence_size_coord
+            Coordinate providing valid sequence lengths.
+        layout
+            Structural-validity layout for sequence data.
+        validate
+            Validate the completed general TAL schema before Rotation ingress.
+
+        Returns
+        -------
+        Rotation
+            Rotation with explicit representation-specific core roles.
+
+        Raises
+        ------
+        TypeError
+            If ``data`` is not an xarray Dataset or DataArray.
+        ValueError
+            If declared roles or representation layout are not a valid Rotation.
+
+        Notes
+        -----
+        This method first applies :meth:`tal.AnalysisObject.from_data` schema
+        ingress, then enforces Rotation representation invariants. Those
+        invariants apply even when ``validate=False``. Mutable caller-owned
+        xarray buffers and metadata are isolated at the AO ingress boundary.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.spatial import Rotation
+        >>> rotation = Rotation.from_data(
+        ...     xr.DataArray(
+        ...         [[0.0, 0.0, 0.0, 1.0]],
+        ...         dims=("sample", "quat"),
+        ...         coords={"sample": [0], "quat": ["x", "y", "z", "w"]},
+        ...         name="rotation",
+        ...     ),
+        ...     sequence_dim="sample",
+        ...     core_dims=("quat",),
+        ... )
+        >>> rotation.as_dataset(copy="none")["rotation"].shape
+        (1, 4)
+
+        See Also
+        --------
+        tal.AnalysisObject.from_data
+        """
+        source = AnalysisObject.from_data(
+            data, sequence_dim=sequence_dim, batch_dims=batch_dims,
+            core_dims=core_dims, param_coord=param_coord,
+            sequence_size_coord=sequence_size_coord, layout=layout, validate=validate,
+        )
+        return cls(source)
+
+    @classmethod
+    def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> Rotation:
         obj = super()._from_validated(ds)
         obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
         return obj
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> "Rotation":
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> Rotation:
         obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
@@ -473,7 +507,7 @@ class Rotation(AnalysisObject):
         self._bind_dataset(normalized)
 
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_rotation_dataset_invariants(analysis_object_dataset(self), owner=owner)
+        enforce_rotation_dataset_invariants(analysis_object_dataset(self), owner=owner)
 
     def _required_component_dims_for_reduce(self) -> tuple[str, ...]:
         return resolve_rotation_component_dims_for_reduce(
@@ -481,7 +515,7 @@ class Rotation(AnalysisObject):
             owner="spatial.rotation._required_component_dims_for_reduce",
         )
     
-    def to_rep(self, rep: Literal["quat", "matrix"], *, validate: bool = True) -> "Rotation":
+    def to_rep(self, rep: Literal["quat", "matrix"], *, validate: bool = True) -> Rotation:
         """Convert this rotation between quaternion and matrix representation.
 
         Parameters
@@ -530,7 +564,7 @@ class Rotation(AnalysisObject):
             converted = _convert_matrix_to_quat(source, owner=owner)
         return _wrap_rotation_output(converted, validate=validate)
     
-    def as_quat(self, *, validate: bool = True) -> "Rotation":
+    def as_quat(self, *, validate: bool = True) -> Rotation:
         """Return this rotation in quaternion representation.
 
         Parameters
@@ -564,7 +598,7 @@ class Rotation(AnalysisObject):
         """
         return self.to_rep("quat", validate=validate)
     
-    def as_matrix(self, *, validate: bool = True) -> "Rotation":
+    def as_matrix(self, *, validate: bool = True) -> Rotation:
         """Return this rotation in 3x3 matrix representation.
 
         Parameters
@@ -610,7 +644,7 @@ class Rotation(AnalysisObject):
         return "slerp"
     
     @property
-    def param(self) -> "RotationParamAccessor":
+    def param(self) -> RotationParamAccessor:
         """Return the parameter-domain accessor for temporal rotation operations.
 
         Returns
@@ -624,10 +658,10 @@ class Rotation(AnalysisObject):
     
     def compose(
         self,
-        other: "Rotation | AnalysisObject | xr.Dataset | xr.DataArray",
+        other: Rotation | AnalysisObject | xr.Dataset | xr.DataArray,
         *,
         validate: bool = True,
-    ) -> "Rotation":
+    ) -> Rotation:
         """Compose this rotation with ``other`` (apply ``other`` after ``self``).
 
         Parameters
@@ -666,7 +700,7 @@ class Rotation(AnalysisObject):
         right = _coerce_rotation_operand(other, owner=owner)
         return _rotation_compose_with_owner(self, right, validate=validate, owner=owner)
     
-    def inverse(self, *, validate: bool = True) -> "Rotation":
+    def inverse(self, *, validate: bool = True) -> Rotation:
         """Return the inverse rotation (same magnitude, opposite orientation).
 
         Parameters
@@ -704,15 +738,15 @@ class Rotation(AnalysisObject):
     
     def slerp(
         self,
-        query: "xr.DataArray | np.ndarray | Sequence[float] | float",
+        query: xr.DataArray | np.ndarray | Sequence[float] | float,
         *,
         on: str | None = None,
-        opts: "RotationTemporalOptions | ParamEvalOptions | None" = None,
+        opts: RotationTemporalOptions | ParamEvalOptions | None = None,
         validate: bool = True,
         sequence_dim: str | None = None,
-        batch_dims: "Sequence[str] | None" = None,
+        batch_dims: Sequence[str] | None = None,
         sequence_size_coord: str | None = None,
-    ) -> "Rotation":
+    ) -> Rotation:
         """Interpolate rotation samples with spherical linear interpolation.
 
         Parameters
@@ -755,7 +789,10 @@ class Rotation(AnalysisObject):
         True
         """
         from .ops.rotation_temporal_ops import rotation_param_at
-        from .temporal.options import as_rotation_method, coerce_rotation_temporal_options
+        from .temporal.options import (
+            as_rotation_method,
+            coerce_rotation_temporal_options,
+        )
 
         normalized = coerce_rotation_temporal_options(opts, owner="spatial.rotation.slerp")
         slerp_opts = as_rotation_method(normalized, method="slerp")
@@ -773,10 +810,10 @@ class Rotation(AnalysisObject):
     
     def apply(
         self,
-        target: "Position | LinearVelocity | AngularVelocity | LinearAcceleration | AngularAcceleration | Velocity | Acceleration",
+        target: Position | LinearVelocity | AngularVelocity | LinearAcceleration | AngularAcceleration | Velocity | Acceleration,
         *,
         validate: bool = True,
-    ) -> "Position | LinearVelocity | AngularVelocity | LinearAcceleration | AngularAcceleration | Velocity | Acceleration":
+    ) -> Position | LinearVelocity | AngularVelocity | LinearAcceleration | AngularAcceleration | Velocity | Acceleration:
         """Rotate a compatible spatial target by this rotation.
 
         Parameters
@@ -822,13 +859,13 @@ class Rotation(AnalysisObject):
     @classmethod
     def solve_path_transform(
         cls,
-        src: "Frame | str",
-        dst: "Frame | str",
+        src: Frame | str,
+        dst: Frame | str,
         *,
         edge_rotation_fn,
-        opts: "PathSolveOptions | None" = None,
+        opts: PathSolveOptions | None = None,
         validate: bool = True,
-    ) -> "Rotation":
+    ) -> Rotation:
         """Solve and compose edge rotations from ``src`` to ``dst`` frames.
 
         Parameters
@@ -878,12 +915,12 @@ class Rotation(AnalysisObject):
         )
     def express_in(
         self,
-        dst: "Frame | str",
+        dst: Frame | str,
         *,
         edge_rotation_fn,
-        opts: "PathSolveOptions | None" = None,
+        opts: PathSolveOptions | None = None,
         validate: bool = True,
-    ) -> "Rotation":
+    ) -> Rotation:
         """Express this rotation in another frame using graph-resolved edge rotations.
 
         Parameters
@@ -929,8 +966,13 @@ class Rotation(AnalysisObject):
             validate=validate,
         )
 
-from .ops.magnitude_ops import install_rotation_magnitude_methods as _install_rotation_magnitude_methods
-from .ops.rotation_reduce_ops import install_rotation_reducer_methods as _install_rotation_reducer_methods
+from .ops.magnitude_ops import (
+    install_rotation_magnitude_methods as _install_rotation_magnitude_methods,
+)
+from .ops.rotation_reduce_ops import (
+    install_rotation_reducer_methods as _install_rotation_reducer_methods,
+)
+
 _install_rotation_magnitude_methods(Rotation)
 _install_rotation_reducer_methods(Rotation)
 

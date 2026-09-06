@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 import numpy as np
@@ -21,6 +22,16 @@ ReducerOp = Literal[
 
 DimLike: TypeAlias = str | Sequence[str] | None
 WeightInput: TypeAlias = xr.DataArray | np.ndarray | Mapping[str, xr.DataArray | np.ndarray] | None
+
+
+@dataclass(frozen=True)
+class ResolvedReducerRequest:
+    """Metadata-only reducer request resolved before numerical execution."""
+
+    reducer: ReducerOp
+    reduce_dims: tuple[str, ...]
+    eligible_names: tuple[str, ...]
+    active_reduce_dims: tuple[str, ...]
 
 NUMERIC_REDUCER_OPS = frozenset({"mean", "sum", "std", "var", "median", "min", "max", "count"})
 BOOLEAN_REDUCER_OPS = frozenset({"any", "all"})
@@ -43,12 +54,13 @@ def weighted_supported(op: ReducerOp) -> bool:
 
 __all__ = [
     "BOOLEAN_REDUCER_OPS",
-    "DimLike",
     "NUMERIC_KINDS",
     "NUMERIC_OR_BOOL_KINDS",
     "NUMERIC_REDUCER_OPS",
-    "ReducerOp",
     "SUPPORTED_WEIGHTED_OPS",
+    "DimLike",
+    "ReducerOp",
+    "ResolvedReducerRequest",
     "WeightInput",
     "require_supported_op",
     "weighted_supported",

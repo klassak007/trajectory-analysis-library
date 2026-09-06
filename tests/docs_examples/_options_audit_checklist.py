@@ -261,7 +261,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.all',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -273,7 +273,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.any',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -285,7 +285,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.count',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -309,7 +309,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.max',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -321,7 +321,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.mean',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -333,7 +333,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.median',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -345,7 +345,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.min',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -381,7 +381,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.std',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -393,7 +393,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.sum',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,
@@ -405,7 +405,7 @@ CURATED_OPTION_AUDIT_CHECKLIST: tuple[OptionAuditChecklistItem, ...] = (
     OptionAuditChecklistItem(
         symbol='tal.core.group_ops.accessor.GroupedView.var',
         option_param='opts',
-        option_type="'GroupMaterializeOptions | None'",
+        option_type="'GroupMaterializeOptions | BatchGroupReduceOptions | None'",
         has_parameters=True,
         has_opts_entry=True,
         has_returns=True,

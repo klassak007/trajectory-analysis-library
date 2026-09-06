@@ -79,7 +79,7 @@ work completes.
 | --- | --- |
 | `ao.param` | Parameter-domain indexing, interpolation, resampling, and synchronization helpers. |
 | `ao.events` | Condition masks, boundary tables, intervals, and event windows. |
-| `ao.group` | Grouped layouts and grouped reducers. |
+| `ao.group` | Sequence grouped layouts and sequence/batch grouped reducers. |
 | `ao.combine` | Schema-aware concat, merge, align, and core assembly operations. |
 | `ao.components` | Component registry definition, extraction, patching, and composition. |
 | `ao.frames` | Frame ID metadata and runtime graph bridge operations. |

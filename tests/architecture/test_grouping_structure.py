@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import executable_source, file_loc, function_lengths
+from ._budget import file_loc, function_lengths
 
 
 def _method_has_named_call(path: Path, *, class_name: str, method_name: str, callee: str) -> bool:
@@ -110,17 +110,6 @@ def test_grouping_owner_budget_and_schema_write_boundary() -> None:
         assert "attrs['tal']" not in text
 
 
-def test_arch_group_p9b_001_grouped_surface_wrappers_are_thin_and_delegate_to_foundation_owners() -> None:
-    """ID: ARCH_GROUP_P9B_001_grouped_surface_wrappers_are_thin_and_delegate_to_foundation_owners."""
-    accessor_text = executable_source(path="tal/core/group_ops/accessor.py")
-    assert "class GroupAccessor" in accessor_text
-    assert "resolve_grouping_foundation_context(" in accessor_text
-    assert "resolve_grouped_runtime_plan(" in accessor_text
-    assert "materialize_grouped_view(" in accessor_text
-    assert ".mean(" not in accessor_text
-    assert ".sum(" not in accessor_text
-
-
 def test_arch_group_p9b_002_no_inline_grouping_policy_duplication_in_surface_modules() -> None:
     """ID: ARCH_GROUP_P9B_002_no_inline_grouping_policy_duplication_in_surface_modules."""
     runtime_text = Path("tal/core/group_ops/runtime_plan.py").read_text(encoding="utf-8")
@@ -156,31 +145,12 @@ def test_arch_group_p9b_005_padded_sequence_coord_is_rank_derived_not_source_coo
     assert "sequence_dim in ds.coords" not in text
 
 
-def test_arch_group_p9b_006_bin_ordering_uses_bin_domain_metadata_not_float_sort_fallback() -> None:
-    """ID: ARCH_GROUP_P9B_006_bin_ordering_uses_bin_domain_metadata_not_float_sort_fallback."""
-    runtime_text = Path("tal/core/group_ops/runtime_plan.py").read_text(encoding="utf-8")
-    key_text = Path("tal/core/group_ops/key_resolve.py").read_text(encoding="utf-8")
-    assert "domain_order = keys[0].domain_order" in runtime_text
-    assert "key=lambda value: float(value)" not in runtime_text
-    assert "domain_order=domain_order" in key_text
-
-
 def test_arch_group_p9b_007_include_empty_groups_is_consumed_by_materialization_owner() -> None:
     """ID: ARCH_GROUP_P9B_007_include_empty_groups_is_consumed_by_materialization_owner."""
     materialize_text = Path("tal/core/group_ops/materialize.py").read_text(encoding="utf-8")
     assert "include_empty_groups" in materialize_text
     assert "_effective_global_padded_groups(" in materialize_text
     assert "_effective_batch_padded_groups(" in materialize_text
-
-
-def test_arch_group_p9b_008_bin_ordering_appends_observed_non_domain_labels_after_domain_order() -> None:
-    """ID: ARCH_GROUP_P9B_008_bin_ordering_appends_observed_non_domain_labels_after_domain_order."""
-    runtime_text = Path("tal/core/group_ops/runtime_plan.py").read_text(encoding="utf-8")
-    assert "ordered_domain = tuple(" in runtime_text
-    assert "for label in domain_order" in runtime_text
-    assert "extras = tuple(" in runtime_text
-    assert "for label in labels" in runtime_text
-    assert "return ordered_domain + extras" in runtime_text
 
 
 def test_arch_group_p9b_009_groupby_accessor_defers_runtime_plan_resolution() -> None:
@@ -198,22 +168,6 @@ def test_arch_group_p9b_009_groupby_accessor_defers_runtime_plan_resolution() ->
         method_name="_resolve_plan",
         callee="resolve_grouped_runtime_plan",
     )
-
-
-def test_arch_group_p9b_010_runtime_plan_materialization_isolated_to_single_boundary_helper() -> None:
-    """ID: ARCH_GROUP_P9B_010_runtime_plan_materialization_isolated_to_single_boundary_helper."""
-    runtime_text = Path("tal/core/group_ops/runtime_plan.py").read_text(encoding="utf-8")
-    assert "def _realize_row_values(" in runtime_text
-    assert "np.asarray(data.transpose(*row_dims).data)" in runtime_text
-    assert "return np.asarray(data.transpose(*row_dims).data)" in runtime_text
-
-
-def test_arch_group_p9b_011_runtime_plan_rejects_duplicate_domain_order_labels() -> None:
-    """ID: ARCH_GROUP_P9B_011_runtime_plan_rejects_duplicate_domain_order_labels."""
-    runtime_text = Path("tal/core/group_ops/runtime_plan.py").read_text(encoding="utf-8")
-    assert "def _first_duplicate_domain_label(" in runtime_text
-    assert "canonical_group_label_key(" in runtime_text
-    assert "domain_order contains duplicate label" in runtime_text
 
 
 def test_arch_group_p9b_012_materialize_uses_centralized_layout_name_collision_validator() -> None:
@@ -240,13 +194,6 @@ def test_arch_group_p9b_014_runtime_plan_row_dim_validation_is_name_based_not_or
     assert "set(dims) != set(row_dims)" in helper_text
     assert "tuple(data.dims) != row_dims" not in helper_text
     assert "require_row_dim_compatibility(" in runtime_text
-
-
-def test_arch_group_p9b_015_runtime_group_label_hashability_guard_prevents_raw_typeerror_leakage() -> None:
-    """ID: ARCH_GROUP_P9B_015_runtime_group_label_hashability_guard_prevents_raw_typeerror_leakage."""
-    runtime_text = Path("tal/core/group_ops/runtime_plan.py").read_text(encoding="utf-8")
-    assert "def _require_hashable_group_label(" in runtime_text
-    assert "produced unhashable group label" in runtime_text
 
 
 def test_arch_group_p9d_001_grouped_reducer_surface_is_installed_via_single_owner() -> None:

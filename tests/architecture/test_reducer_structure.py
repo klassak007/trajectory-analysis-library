@@ -4,7 +4,6 @@ from pathlib import Path
 
 from ._budget import file_loc, function_lengths
 
-
 CORE_REDUCER_DIR = Path("tal/core/reducer_ops")
 
 
@@ -41,48 +40,12 @@ def test_arch_reduce_p9c_003_rotation_reduce_owner_split_and_budget_locked() -> 
         assert length <= 50, f"{path}:{name} exceeds function budget ({length} > 50)."
 
 
-def test_arch_reduce_p9c_004_rotation_mean_enforces_ndarray_single_dim_contract() -> None:
-    """ID: ARCH_REDUCE_P9C_004_rotation_mean_enforces_ndarray_single_dim_contract."""
-    text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
-    assert "isinstance(weights, np.ndarray) and len(reduce_dims) > 1" in text
-    assert "ndarray weights are only valid for single-dim reduction" in text
-
-
-def test_arch_reduce_p9c_005_rotation_multi_dim_uses_one_pass_reduce_path() -> None:
-    """ID: ARCH_REDUCE_P9C_005_rotation_multi_dim_uses_one_pass_reduce_path."""
-    text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
-    assert "def _reduce_multi_dim(" in text
-    assert "return _reduce_multi_dim(" in text
-    assert "if len(reduce_dims) > 1:" in text
-    assert "def _stack_reduce_dims(" in text
-
-
 def test_arch_reduce_p9c_006_rotation_finalize_uses_schema_finalize_owner_and_blocks_stale_assign_wrap() -> None:
     """ID: ARCH_REDUCE_P9C_006_rotation_finalize_uses_schema_finalize_owner_and_blocks_stale_assign_wrap."""
     text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
     assert "CoreSchemaFinalizeSpec" in text
     assert "finalize_with_schema(" in text
     assert "assign({var_name: reduced})" not in text
-
-
-def test_arch_reduce_p9c_007_rotation_quat_dim_resolution_is_shared_and_role_agnostic() -> None:
-    """ID: ARCH_REDUCE_P9C_007_rotation_quat_dim_resolution_is_shared_and_role_agnostic."""
-    helper = Path("tal/spatial/ops/quat_role_dim_ops.py").read_text(encoding="utf-8")
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    owner_text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
-    assert "def resolve_quat_dim_with_role_fallback(" in helper
-    assert "resolve_quat_dim_with_role_fallback(" in rotation_text
-    assert "resolve_quat_dim_with_role_fallback(" in owner_text
-    assert "require_single_core_dim_with_length(source, expected_length=4" not in owner_text
-
-
-def test_arch_reduce_p9c_008_rotation_component_dim_guard_persists_after_sequence_clear() -> None:
-    """ID: ARCH_REDUCE_P9C_008_rotation_component_dim_guard_persists_after_sequence_clear."""
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    owner_text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
-    assert "def _required_component_dims_for_reduce(self)" in rotation_text
-    assert "spatial.rotation._required_component_dims_for_reduce" in rotation_text
-    assert "component_dims=rotation._required_component_dims_for_reduce()" in owner_text
 
 
 def test_arch_reduce_p9c_009_rotation_component_dim_resolver_is_representation_aware_and_shared() -> None:

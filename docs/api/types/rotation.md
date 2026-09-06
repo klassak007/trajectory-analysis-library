@@ -18,11 +18,15 @@ evaluation.
 
 - Input may be AO-like.
 - Exactly one numeric data variable is required.
-- A declared `sequence_dim` is required.
-- Quaternion representation uses one core dimension labeled
+- Sequence and batch roles are optional; representation core roles must be
+  declared, including through `Rotation.from_data(...)`.
+- Quaternion representation uses one declared core dimension labeled
   `("x", "y", "z", "w")`.
 - Matrix representation uses two distinct length-3 core dimensions labeled
   `("x", "y", "z")`.
+- Missing representation metadata means quaternion input. Raw matrix input must
+  first declare matrix representation metadata through the spatial metadata
+  owner.
 - Malformed frame or spatial-role metadata fails at construction.
 
 ## Representation
@@ -34,6 +38,8 @@ rotation.as_matrix()
 ```
 
 Conversion preserves sequence, batch, parameter, validity, and frame metadata.
+It preserves the payload variable name and chooses component dimensions that
+avoid all existing dimension, coordinate, and data-variable names.
 
 ## Rotation Algebra
 
@@ -81,6 +87,7 @@ semantics. `on=...` selects the parameter coordinate used for correspondence.
    :nosignatures:
 
    tal.spatial.Rotation
+   tal.spatial.Rotation.from_data
    tal.spatial.Rotation.to_rep
    tal.spatial.Rotation.as_quat
    tal.spatial.Rotation.as_matrix

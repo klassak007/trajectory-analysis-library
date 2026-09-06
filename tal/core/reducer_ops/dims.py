@@ -7,7 +7,7 @@ import xarray as xr
 from .types import DimLike
 
 
-def _coerce_dim_sequence(dim: DimLike, *, owner: str) -> tuple[str, ...] | None:
+def normalize_reduce_dim_input(dim: DimLike, *, owner: str) -> tuple[str, ...] | None:
     if dim is None:
         return None
     if isinstance(dim, str):
@@ -40,7 +40,7 @@ def resolve_reduce_dims(
     component_dims: Sequence[str],
     owner: str,
 ) -> tuple[str, ...]:
-    explicit = _coerce_dim_sequence(dim, owner=owner)
+    explicit = normalize_reduce_dim_input(dim, owner=owner)
     blocked = set(component_dims)
     if explicit is None:
         return tuple(name for name in ds.dims if name not in blocked)
@@ -56,4 +56,22 @@ def resolve_reduce_dims(
     return resolved
 
 
-__all__ = ["resolve_reduce_dims"]
+def resolve_active_reduce_dims(
+    ds: xr.Dataset,
+    *,
+    names: Sequence[str],
+    reduce_dims: Sequence[str],
+) -> tuple[str, ...]:
+    """Return requested dimensions used by at least one eligible payload."""
+    return tuple(
+        dim
+        for dim in reduce_dims
+        if any(dim in ds[name].dims for name in names)
+    )
+
+
+__all__ = [
+    "normalize_reduce_dim_input",
+    "resolve_active_reduce_dims",
+    "resolve_reduce_dims",
+]

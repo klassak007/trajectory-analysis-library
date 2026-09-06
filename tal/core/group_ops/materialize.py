@@ -8,7 +8,8 @@ import xarray as xr
 from ...utils.xarray_namespace import dataset_namespace_names, unique_temp_dim
 from ..orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
 from .grouped_options import resolve_layout_names, validate_layout_name_collisions
-from .grouped_types import GroupMaterializeOptions, GroupedRuntimePlan
+from .grouped_types import GroupedRuntimePlan, GroupMaterializeOptions
+from .label_plan import object_label_vector, resolve_output_label_plan
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
@@ -23,7 +24,7 @@ def _output_sequence_coord(*, sequence_dim: str, size: int) -> xr.DataArray:
 
 
 def _group_labels_coord(labels: tuple[object, ...], *, group_dim: str) -> xr.DataArray:
-    values = np.asarray(labels, dtype=object)
+    values = object_label_vector(labels)
     return xr.DataArray(values, dims=(group_dim,), name=group_dim)
 
 
@@ -47,19 +48,19 @@ def _dense_group_rows(
 def _dense_preserve_padded_rows(
     batch_rows: tuple[tuple[tuple[int, ...], ...], ...],
     *,
+    group_count: int,
     sequence_size: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     batch_count = len(batch_rows)
-    group_count = len(batch_rows[0]) if batch_rows else 0
     indices = np.zeros((batch_count, group_count, sequence_size), dtype=np.int64)
     valid = np.zeros((batch_count, group_count, sequence_size), dtype=bool)
     for batch_index, per_group in enumerate(batch_rows):
-        for group_index, rows in enumerate(per_group):
-            limit = min(len(rows), sequence_size)
-            if limit == 0:
-                continue
-            indices[batch_index, group_index, :limit] = np.asarray(rows[:limit], dtype=np.int64)
-            valid[batch_index, group_index, :limit] = True
+        batch_indices, batch_valid = _dense_group_rows(
+            per_group,
+            width=sequence_size,
+        )
+        indices[batch_index] = batch_indices
+        valid[batch_index] = batch_valid
     return indices, valid
 
 
@@ -82,7 +83,7 @@ def _dense_preserve_stacked_rows(
             continue
         indices[batch_index, :limit] = np.asarray(rows, dtype=np.int64)
         valid[batch_index, :limit] = True
-        labels[batch_index, :limit] = np.asarray(merged_labels[batch_index], dtype=object)
+        labels[batch_index, :limit] = object_label_vector(merged_labels[batch_index])
     return indices, valid, labels
 
 
@@ -95,7 +96,7 @@ def _finalize(
     plan: GroupedRuntimePlan,
     ds: xr.Dataset,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     sequence_dim: str,
     batch_dims: tuple[str, ...],
     sequence_size_coord: str | None,
@@ -121,7 +122,7 @@ def _reshape_batch_grid(values: np.ndarray, *, batch_shape: tuple[int, ...]) -> 
 def _stacked_group_rows(plan: GroupedRuntimePlan) -> tuple[np.ndarray, np.ndarray]:
     rows = tuple(row for group_rows in plan.global_group_rows for row in group_rows)
     labels = tuple(label for label, group_rows in zip(plan.group_labels, plan.global_group_rows, strict=True) for _ in group_rows)
-    return np.asarray(rows, dtype=np.int64), np.asarray(labels, dtype=object)
+    return np.asarray(rows, dtype=np.int64), object_label_vector(labels)
 
 
 def _effective_global_padded_groups(
@@ -129,15 +130,16 @@ def _effective_global_padded_groups(
     *,
     include_empty_groups: bool,
 ) -> tuple[tuple[object, ...], tuple[tuple[int, ...], ...]]:
-    if not include_empty_groups or plan.bin_domain_labels is None:
-        return plan.group_labels, plan.global_group_rows
-    grouped = dict(zip(plan.group_labels, plan.global_group_rows, strict=True))
-    labels_list = list(plan.bin_domain_labels)
-    known = set(labels_list)
-    labels_list.extend(label for label in plan.group_labels if label not in known)
-    labels = tuple(labels_list)
-    rows = tuple(grouped.get(label, tuple()) for label in labels)
-    return labels, rows
+    output = resolve_output_label_plan(
+        plan.group_labels,
+        domain=plan.bin_domain_labels,
+        include_empty=include_empty_groups,
+    )
+    rows = tuple(
+        () if position is None else plan.global_group_rows[position]
+        for position in output.observed_positions
+    )
+    return output.labels, rows
 
 
 def _effective_batch_padded_groups(
@@ -146,27 +148,51 @@ def _effective_batch_padded_groups(
     include_empty_groups: bool,
 ) -> tuple[tuple[object, ...], tuple[tuple[tuple[int, ...], ...], ...]]:
     assert plan.per_batch_group_sequence_rows is not None
-    if not include_empty_groups or plan.bin_domain_labels is None:
-        return plan.group_labels, plan.per_batch_group_sequence_rows
-    labels_list = list(plan.bin_domain_labels)
-    known = set(labels_list)
-    labels_list.extend(label for label in plan.group_labels if label not in known)
-    labels = tuple(labels_list)
-    index = {label: idx for idx, label in enumerate(plan.group_labels)}
+    output = resolve_output_label_plan(
+        plan.group_labels,
+        domain=plan.bin_domain_labels,
+        include_empty=include_empty_groups,
+    )
     batch_rows = tuple(
         tuple(
-            per_group[index[label]] if label in index else tuple()
-            for label in labels
+            () if position is None else per_group[position]
+            for position in output.observed_positions
         )
         for per_group in plan.per_batch_group_sequence_rows
     )
-    return labels, batch_rows
+    return output.labels, batch_rows
+
+
+def _gather_padded_rows(
+    ds: xr.Dataset,
+    *,
+    row_dim: str,
+    member_dim: str,
+    indexer: xr.DataArray,
+) -> xr.Dataset:
+    """Build empty target topology without indexing zero-sized dimensions."""
+    if all(size != 0 for size in indexer.sizes.values()):
+        return ds.isel({row_dim: indexer})
+    width = int(indexer.sizes[member_dim])
+    base = ds.isel({row_dim: slice(0, width)}).rename_dims({row_dim: member_dim})
+    expanded = base.broadcast_like(indexer)
+    data_vars = {
+        name: ds[name]
+        for name in ds.data_vars
+        if row_dim not in ds[name].dims
+    }
+    coords = {
+        name: ds.coords[name]
+        for name in ds.coords
+        if row_dim not in ds.coords[name].dims
+    }
+    return expanded.assign(data_vars).assign_coords(coords)
 
 
 def _materialize_padded_default(
     plan: GroupedRuntimePlan,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     group_dim: str,
     member_dim: str,
     include_empty_groups: bool,
@@ -179,7 +205,10 @@ def _materialize_padded_default(
     indices, valid = _dense_group_rows(group_rows, width=width)
     indexer = xr.DataArray(indices, dims=(group_dim, member_dim), coords={group_dim: _group_labels_coord(labels, group_dim=group_dim)})
     valid_mask = xr.DataArray(valid, dims=(group_dim, member_dim), coords=indexer.coords)
-    gathered = _stack_source_rows(plan).isel({plan.stacked_row_dim: indexer}).where(valid_mask)
+    gathered = _gather_padded_rows(
+        _stack_source_rows(plan), row_dim=plan.stacked_row_dim,
+        member_dim=member_dim, indexer=indexer,
+    ).where(valid_mask)
     gathered = gathered.drop_vars(list(plan.row_dims), errors="ignore").rename({member_dim: sequence_dim})
     gathered = gathered.assign_coords({sequence_dim: _output_sequence_coord(sequence_dim=sequence_dim, size=width)})
     size_name = _size_coord_name(plan, gathered)
@@ -199,7 +228,7 @@ def _materialize_padded_default(
 def _materialize_padded_preserve_batch(
     plan: GroupedRuntimePlan,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     group_dim: str,
     member_dim: str,
     include_empty_groups: bool,
@@ -209,7 +238,11 @@ def _materialize_padded_preserve_batch(
     labels, batch_rows = _effective_batch_padded_groups(plan, include_empty_groups=include_empty_groups)
     sequence_dim = plan.foundation.sequence_dim
     sequence_size = int(plan.foundation.ds.sizes[sequence_dim])
-    indices, valid = _dense_preserve_padded_rows(batch_rows, sequence_size=sequence_size)
+    indices, valid = _dense_preserve_padded_rows(
+        batch_rows,
+        group_count=len(labels),
+        sequence_size=sequence_size,
+    )
     indices = _reshape_batch_grid(indices, batch_shape=plan.batch_shape)
     valid = _reshape_batch_grid(valid, batch_shape=plan.batch_shape)
     dims = plan.foundation.batch_dims + (group_dim, member_dim)
@@ -217,7 +250,9 @@ def _materialize_padded_preserve_batch(
     coords[group_dim] = _group_labels_coord(labels, group_dim=group_dim)
     indexer = xr.DataArray(indices, dims=dims, coords=coords)
     valid_mask = xr.DataArray(valid, dims=dims, coords=coords)
-    gathered = plan.foundation.ds.isel({sequence_dim: indexer}).where(valid_mask)
+    gathered = _gather_padded_rows(
+        plan.foundation.ds, row_dim=sequence_dim, member_dim=member_dim, indexer=indexer,
+    ).where(valid_mask)
     gathered = gathered.drop_vars(sequence_dim, errors="ignore").rename({member_dim: sequence_dim})
     gathered = gathered.assign_coords({sequence_dim: _output_sequence_coord(sequence_dim=sequence_dim, size=sequence_size)})
     size_name = _size_coord_name(plan, gathered)
@@ -237,7 +272,7 @@ def _materialize_padded_preserve_batch(
 def _materialize_stacked_default(
     plan: GroupedRuntimePlan,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     group_dim: str,
     member_dim: str,
     sequence_index_coord: str,
@@ -265,7 +300,7 @@ def _materialize_stacked_default(
 def _materialize_stacked_preserve_batch(
     plan: GroupedRuntimePlan,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     group_dim: str,
     member_dim: str,
     sequence_index_coord: str,
@@ -282,7 +317,12 @@ def _materialize_stacked_preserve_batch(
     coords = {dim: plan.foundation.ds.coords[dim] for dim in plan.foundation.batch_dims if dim in plan.foundation.ds.coords}
     indexer = xr.DataArray(indices, dims=dims, coords=coords)
     valid_mask = xr.DataArray(valid, dims=dims, coords=coords)
-    gathered = plan.foundation.ds.isel({sequence_dim: indexer}).where(valid_mask)
+    gathered = _gather_padded_rows(
+        plan.foundation.ds,
+        row_dim=sequence_dim,
+        member_dim=member_dim,
+        indexer=indexer,
+    ).where(valid_mask)
     seq_index = xr.where(valid_mask, gathered.coords[sequence_dim], np.nan).rename(sequence_index_coord)
     out = gathered.drop_vars(sequence_dim, errors="ignore").assign_coords(
         {
@@ -305,7 +345,7 @@ def _materialize_stacked_preserve_batch(
 def _materialize_padded(
     plan: GroupedRuntimePlan,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     group_dim: str,
     member_dim: str,
     include_empty_groups: bool,
@@ -336,7 +376,7 @@ def _materialize_padded(
 def _materialize_stacked(
     plan: GroupedRuntimePlan,
     *,
-    source_ao: "AnalysisObject",
+    source_ao: AnalysisObject,
     group_dim: str,
     member_dim: str,
     sequence_index_coord: str,
@@ -370,7 +410,7 @@ def materialize_grouped_view(
     opts: GroupMaterializeOptions,
     validate: bool,
     owner: str,
-    source_ao: "AnalysisObject | None" = None,
+    source_ao: AnalysisObject | None = None,
 ):
     source = plan.foundation.ao if source_ao is None else source_ao
     group_dim, member_dim, sequence_index_coord = resolve_layout_names(

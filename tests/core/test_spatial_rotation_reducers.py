@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
+from dask import delayed
 
-import tal.spatial.ops.rotation_reduce_ops as rotation_reduce_ops
 from tal.core.analysis_object import AnalysisObject
 from tal.spatial import Rotation
+from tal.spatial.ops import rotation_reduce_ops
 
 
 def _rotation_quat_ao(values: np.ndarray) -> Rotation:
@@ -139,7 +141,10 @@ def test_spatial_hard_p9c_002_rotation_ndarray_weights_multi_dim_fail_closed() -
     q0 = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
     q90 = np.array([0.0, 0.0, np.sin(np.pi / 4.0), np.cos(np.pi / 4.0)], dtype=float)
     rot = _rotation_quat_batched_ao(np.array([[q0, q90], [q0, q0]], dtype=float))
-    with pytest.raises(ValueError, match="spatial\\.rotation\\.mean: ndarray weights are only valid for single-dim reduction"):
+    with pytest.raises(
+        ValueError,
+        match="spatial\\.rotation\\.mean: ndarray weights require exactly one active reduced payload dimension",
+    ):
         _ = rot.mean(dim=("trial", "sample"), weights=np.array([1.0, 2.0], dtype=float), validate=True)
 
 
@@ -321,7 +326,13 @@ def test_spatial_hard_p9c_005_rotation_roleless_ambiguous_quat_dim_resolution_fa
         "as_quat",
         lambda self, validate=False: SimpleNamespace(_data=ambiguous),
     )
-    with pytest.raises(ValueError, match="spatial\\.rotation\\.mean: Rotation.mean without declared sequence roles requires exactly one length-4 quaternion dim"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "spatial\\.rotation\\.mean: Rotation.mean without a declared quaternion "
+            "core role requires exactly one length-4 quaternion dim"
+        ),
+    ):
         _ = rot.mean(dim="trial", validate=True)
 
 
@@ -344,3 +355,190 @@ def test_spatial_hard_p9c_004_rotation_sequence_size_resolver_errors_are_not_swa
     monkeypatch.setattr(rotation_reduce_ops, "read_sequence_size_coord_name", _boom)
     with pytest.raises(RuntimeError, match="resolver boom"):
         _ = rot.mean(dim="sample", validate=True)
+
+
+def _primary_independent_rotation(payload: object | None = None) -> Rotation:
+    values = np.asarray([0.0, 0.0, 0.0, 1.0]) if payload is None else payload
+    source = AnalysisObject.from_data(
+        xr.Dataset(
+            {"rotation": ("quat", values)},
+            coords={
+                "trial": ["t0", "t1", "t2"],
+                "quat": ["x", "y", "z", "w"],
+                "key": ("trial", ["a", "b", "a"]),
+            },
+        ),
+        batch_dims=("trial",),
+        core_dims=("quat",),
+        validate=True,
+    )
+    return Rotation(source)
+
+
+def test_rotation_structural_only_mean_preserves_payload_and_roles() -> None:
+    """ID: SPATIAL_CORE_127G_001_rotation_structural_only_mean."""
+    source = _primary_independent_rotation()
+    before = source.as_dataset(copy="deep")
+
+    actual = source.mean(dim="trial").as_dataset(copy="none")
+
+    xr.testing.assert_identical(actual["rotation"], before["rotation"])
+    assert "trial" not in actual.dims
+    assert "key" not in actual.coords
+    assert actual.attrs["tal"]["core"]["roles"] == {
+        "batch_dims": [],
+        "core_dims": ["quat"],
+    }
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_batch_only_rotation_uses_declared_core_role_over_size_candidates() -> None:
+    """ID: SPATIAL_CORE_127G_004_batch_rotation_declared_core_role."""
+    values = np.zeros((4, 4), dtype=float)
+    values[:, 3] = 1.0
+    source = Rotation(
+        AnalysisObject.from_data(
+            xr.Dataset(
+                {"rotation": (("lane", "quat"), values)},
+                coords={
+                    "trial": [0, 1, 2],
+                    "lane": ["north", "south", "east", "west"],
+                    "quat": ["x", "y", "z", "w"],
+                    "key": ("trial", ["a", "b", "a"]),
+                },
+            ),
+            batch_dims=("trial", "lane"),
+            core_dims=("quat",),
+            validate=True,
+        )
+    )
+
+    actual = source.mean(dim="trial").as_dataset(copy="none")
+
+    xr.testing.assert_identical(actual["rotation"], source.as_dataset(copy="none")["rotation"])
+    assert actual.attrs["tal"]["core"]["roles"] == {
+        "batch_dims": ["lane"],
+        "core_dims": ["quat"],
+    }
+
+
+def test_rotation_structural_only_mean_preserves_matrix_representation() -> None:
+    """ID: SPATIAL_CORE_127G_003_rotation_structural_matrix_mean."""
+    source_ds = xr.Dataset(
+        {"rotation": (("row", "col"), np.eye(3))},
+        coords={
+            "trial": [0, 1],
+            "row": ["x", "y", "z"],
+            "col": ["x", "y", "z"],
+        },
+    )
+    prepared = AnalysisObject.from_data(
+        source_ds,
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        validate=True,
+    ).as_dataset(copy="deep")
+    prepared.attrs["tal"]["ext"] = {
+        "spatial": {"representation": {"rep": "matrix"}, "relation": {}}
+    }
+    source = Rotation(prepared)
+
+    actual = source.mean(dim="trial").as_dataset(copy="none")
+
+    xr.testing.assert_identical(actual["rotation"], source_ds["rotation"])
+    assert actual.attrs["tal"]["ext"]["spatial"]["representation"] == {
+        "rep": "matrix"
+    }
+    assert actual.attrs["tal"]["core"]["roles"] == {
+        "batch_dims": [],
+        "core_dims": ["row", "col"],
+    }
+
+
+def test_rotation_mixed_structural_and_active_dims_use_payload_dims_only() -> None:
+    """ID: SPATIAL_CORE_127G_002_rotation_mixed_active_dims."""
+    values = np.asarray(
+        [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0]],
+    )
+    source = Rotation(
+        AnalysisObject.from_data(
+            xr.Dataset(
+                {"rotation": (("lane", "quat"), values)},
+                coords={
+                    "trial": [0, 1, 2],
+                    "lane": ["left", "right"],
+                    "quat": ["x", "y", "z", "w"],
+                },
+            ),
+            batch_dims=("trial", "lane"),
+            core_dims=("quat",),
+            validate=True,
+        )
+    )
+
+    actual = source.mean(
+        dim=("trial", "lane"),
+        weights=np.ones(2),
+    ).as_dataset(copy="none")
+    expected = source.mean(dim="lane", weights=np.ones(2)).as_dataset(copy="none")
+
+    xr.testing.assert_identical(actual["rotation"], expected["rotation"])
+    assert actual.attrs["tal"]["core"]["roles"] == {
+        "batch_dims": [],
+        "core_dims": ["quat"],
+    }
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        np.ones(3),
+        xr.DataArray(np.ones(3), dims="trial", coords={"trial": ["t0", "t1", "t2"]}),
+        {"trial": np.ones(3)},
+    ],
+)
+@pytest.mark.parametrize("dim", [(), "trial"])
+def test_rotation_weights_require_an_active_payload_dimension(
+    weights: object,
+    dim: object,
+) -> None:
+    """ID: SPATIAL_HARD_127G_001_rotation_inactive_weights_fail."""
+    with pytest.raises(
+        ValueError,
+        match="spatial\\.rotation\\.mean: weights require at least one reduced payload dimension",
+    ):
+        _primary_independent_rotation().mean(dim=dim, weights=weights)
+
+
+def test_sequence_grouped_rotation_does_not_ignore_noop_weights() -> None:
+    """ID: SPATIAL_HARD_127G_002_grouped_rotation_noop_weights_fail."""
+    source = _rotation_quat_ao(
+        np.asarray([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]])
+    )
+    grouped = Rotation(
+        source.as_dataset(copy="none").assign_coords(
+            key=("sample", ["a", "b"]),
+        )
+    ).group.groupby("key")
+
+    with pytest.raises(ValueError, match="weights require at least one reduced payload dimension"):
+        grouped.mean(dim=(), weights=np.ones(2))
+
+
+def test_rotation_structural_only_mean_keeps_dask_payload_lazy() -> None:
+    """ID: SPATIAL_PERF_127G_001_rotation_structural_mean_is_lazy."""
+    calls: list[str] = []
+
+    @delayed
+    def payload() -> np.ndarray:
+        calls.append("payload")
+        return np.asarray([0.0, 0.0, 0.0, 1.0])
+
+    lazy = da.from_delayed(payload(), shape=(4,), dtype=float)
+    actual = _primary_independent_rotation(lazy).mean(dim="trial")
+    data = actual.as_dataset(copy="none")["rotation"]
+
+    assert isinstance(data.data, da.Array)
+    assert calls == []
+    data.compute()
+    assert calls == ["payload"]

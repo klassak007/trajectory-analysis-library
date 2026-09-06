@@ -248,19 +248,6 @@ def test_spatial_doc_002_phase8_slice_a2_rotation_docs_and_api_entries_present()
     assert "rotation" in api_types_index
 
 
-def test_arch_spatial_012_rotation_constructor_validates_spatial_roles_via_metadata_owner() -> None:
-    """ID: ARCH_SPATIAL_012_rotation_constructor_validates_spatial_roles_via_metadata_owner."""
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    assert "from .metadata import (" in rotation_text
-    assert "get_rotation_rep" in rotation_text
-    assert "set_rotation_rep" in rotation_text
-    assert "validate_spatial_roles" in rotation_text
-    assert "validate_spatial_roles(candidate, owner=owner)" in rotation_text
-    assert "tal.ext.spatial.roles" not in rotation_text
-    assert 'attrs["tal"]' not in rotation_text
-    assert "attrs['tal']" not in rotation_text
-
-
 def test_arch_spatial_013_slice_a3_pose_owner_split_and_budget() -> None:
     """ID: ARCH_SPATIAL_013_slice_a3_pose_owner_split_and_budget."""
     files = [

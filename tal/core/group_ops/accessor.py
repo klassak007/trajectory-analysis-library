@@ -1,25 +1,47 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
-from .foundation import resolve_grouping_foundation_context
-from .grouped_options import coerce_group_materialize_options, coerce_groupby_options
-from .grouped_types import GroupByOptions, GroupMaterializeOptions, GroupedRuntimePlan
+from .batch_view import BatchGroupedView
+from .foundation import (
+    resolve_grouping_dataset_context,
+    resolve_grouping_foundation_for_context,
+    resolve_grouping_topology,
+)
+from .grouped_options import (
+    _GROUPBY_UNSET,
+    _GroupByUnsetType,
+    coerce_group_materialize_options,
+    coerce_groupby_call_options,
+    validate_batch_groupby_options,
+    validate_sequence_groupby_options,
+)
+from .grouped_types import GroupByOptions, GroupedRuntimePlan, GroupMaterializeOptions
 from .materialize import materialize_grouped_view
 from .reducer_surface import install_grouped_view_reducers
 from .runtime_plan import resolve_grouped_runtime_plan
-from .types import GroupingBinSpec, GroupingFoundationContext, GroupingKeyInput
+from .types import (
+    BatchGroupingFoundationContext,
+    GroupingBinSpec,
+    GroupingFoundationContext,
+    GroupingKeyInput,
+)
+
+if TYPE_CHECKING:
+    from ..analysis_object import AnalysisObject
 
 
 class GroupedView:
-    """Immutable grouped wrapper that exposes grouped layout materialization only.
+    """Represent sequence grouping returned by ``ao.group.groupby(...)``.
 
     Notes
     -----
-    Public TAL class surface. See class methods/properties for operational semantics.
+    This is a return-only result type. Direct construction is unsupported;
+    ``ao.group.groupby(...)`` owns context and option validation.
     """
 
     def __init__(
@@ -46,7 +68,7 @@ class GroupedView:
         *,
         opts: GroupMaterializeOptions | None = None,
         validate: bool = True,
-    ) -> "AnalysisObject":
+    ) -> AnalysisObject:
         """Materialize grouped runtime plan into an AO layout.
 
         Parameters
@@ -100,7 +122,7 @@ class GroupedView:
         *,
         opts: GroupMaterializeOptions | None = None,
         validate: bool = True,
-    ) -> "AnalysisObject":
+    ) -> AnalysisObject:
         """Materialize grouped payload into padded layout.
 
         Parameters
@@ -160,7 +182,7 @@ class GroupedView:
         *,
         opts: GroupMaterializeOptions | None = None,
         validate: bool = True,
-    ) -> "AnalysisObject":
+    ) -> AnalysisObject:
         """Materialize grouped payload into stacked row layout.
 
         Parameters
@@ -224,7 +246,7 @@ class GroupAccessor:
     Public TAL class surface. See class methods/properties for operational semantics.
     """
 
-    def __init__(self, ao: "AnalysisObject") -> None:
+    def __init__(self, ao: AnalysisObject) -> None:
         self._ao = ao
 
     def groupby(
@@ -232,7 +254,8 @@ class GroupAccessor:
         key: GroupingKeyInput,
         *,
         opts: GroupByOptions | None = None,
-    ) -> GroupedView:
+        preserve_batch: bool | _GroupByUnsetType = _GROUPBY_UNSET,
+    ) -> GroupedView | BatchGroupedView:
         """Construct a grouped view using grouping-key semantics.
 
         Parameters
@@ -240,12 +263,18 @@ class GroupAccessor:
         key : GroupingKeyInput
             Grouping key used to derive grouped runtime partitions.
         opts : GroupByOptions | None, optional
-            When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupByOptions`` key fields: ``preserve_batch`` (default False), ``foundation_opts`` (default None), ``group_dim`` (default 'group_key'), ``member_dim`` (default 'group_member').
+            Grouping configuration. Important fields are ``preserve_batch``,
+            ``foundation_opts``, ``group_dim``, ``member_dim``, and
+            ``sequence_index_coord``.
+        preserve_batch : bool, optional
+            Curated override for ``GroupByOptions.preserve_batch``. It cannot
+            be combined with ``opts``.
 
         Returns
         -------
-        GroupedView
-            Operation result preserving TAL semantic/topology guarantees.
+        GroupedView | BatchGroupedView
+            Sequence grouping returns a materializable ``GroupedView``;
+            batch-only grouping returns a reducers-only ``BatchGroupedView``.
 
         Raises
         ------
@@ -256,12 +285,20 @@ class GroupAccessor:
 
         Notes
         -----
-        Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        A declared sequence role selects sequence grouping even when batch
+        roles also exist. Otherwise, a source with batch roles uses batch-only
+        grouping over its primary batch lane and replaces that lane with the
+        group dimension. Batch-only grouping requires ``preserve_batch=False``
+        and does not accept customized ``member_dim`` or
+        ``sequence_index_coord`` values.
+
+        Uses xarray label-aware alignment and TAL fail-closed schema/runtime
+        guards.
 
         Examples
         --------
         >>> import xarray as xr
-        >>> from tal.core import AnalysisObject, GroupByOptions
+        >>> from tal.core import AnalysisObject, BatchGroupedView
         >>> ao = AnalysisObject.from_data(
         ...     xr.Dataset({"value": (("run", "sample"), [[1.0, 2.0], [3.0, 4.0]])}, coords={"run": ["a", "b"], "sample": [0, 1], "kind": ("run", ["sim", "robot"])}),
         ...     sequence_dim="sample",
@@ -269,17 +306,33 @@ class GroupAccessor:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> grouped = ao.group.groupby("kind", opts=GroupByOptions(preserve_batch=False))
+        >>> grouped = ao.group.groupby("kind", preserve_batch=False)
         >>> grouped.mean(dim="sample").as_dataset().sizes["group_key"]
         2
+        >>> per_run = ao.mean(dim="sample")
+        >>> batch_grouped = per_run.group.groupby("kind")
+        >>> isinstance(batch_grouped, BatchGroupedView)
+        True
         """
-        options = coerce_groupby_options(opts, owner="group.groupby")
-        foundation = resolve_grouping_foundation_context(
-            self._ao,
+        options = coerce_groupby_call_options(
+            opts,
+            preserve_batch=preserve_batch,
+            owner="group.groupby",
+        )
+        context = resolve_grouping_dataset_context(self._ao, owner="group.groupby")
+        topology = resolve_grouping_topology(context, owner="group.groupby")
+        if topology == "batch":
+            validate_batch_groupby_options(options, owner="group.groupby")
+        else:
+            validate_sequence_groupby_options(options, owner="group.groupby")
+        foundation = resolve_grouping_foundation_for_context(
+            context,
             key,
             opts=options.foundation_opts,
             owner="group.groupby",
         )
+        if isinstance(foundation, BatchGroupingFoundationContext):
+            return BatchGroupedView(foundation, opts=options)
         return GroupedView(foundation, opts=options)
 
     def groupby_bins(
@@ -291,7 +344,7 @@ class GroupAccessor:
         right: bool = True,
         include_lowest: bool = False,
         opts: GroupByOptions | None = None,
-    ) -> GroupedView:
+    ) -> GroupedView | BatchGroupedView:
         """Construct grouped view by explicit binning specification.
 
         Parameters
@@ -307,12 +360,16 @@ class GroupAccessor:
         include_lowest : bool, optional
             Include values equal to the first bin edge in the first bin.
         opts : GroupByOptions | None, optional
-            When ``None``, operation-specific defaults are resolved by internal option coercion. ``GroupByOptions`` key fields: ``preserve_batch`` (default False), ``foundation_opts`` (default None), ``group_dim`` (default 'group_key'), ``member_dim`` (default 'group_member').
+            Grouping configuration, including ``preserve_batch``,
+            ``foundation_opts``, ``group_dim``, ``member_dim``, and
+            ``sequence_index_coord``. See :meth:`groupby` for
+            topology-specific behavior.
 
         Returns
         -------
-        GroupedView
-            Operation result preserving TAL semantic/topology guarantees.
+        GroupedView | BatchGroupedView
+            Sequence grouping returns a materializable view; batch-only
+            grouping returns a reducers-only view.
 
         Raises
         ------
@@ -323,7 +380,9 @@ class GroupAccessor:
 
         Notes
         -----
-        Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
+        Topology selection and option validation are identical to
+        :meth:`groupby`. Uses xarray label-aware alignment and TAL fail-closed
+        schema/runtime guards.
 
         Examples
         --------
@@ -349,6 +408,6 @@ class GroupAccessor:
         return self.groupby(spec, opts=opts)
 
 
-__all__ = ["GroupAccessor", "GroupedView"]
+__all__ = ["BatchGroupedView", "GroupAccessor", "GroupedView"]
 
 install_grouped_view_reducers(GroupedView)

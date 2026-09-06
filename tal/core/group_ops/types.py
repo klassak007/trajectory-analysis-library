@@ -85,7 +85,22 @@ class GroupingFoundationContext:
     na_group_label: object | None
 
 
+@dataclass(frozen=True)
+class BatchGroupingFoundationContext:
+    """Resolved batch-only grouping foundation context."""
+
+    ao: AnalysisObject
+    ds: xr.Dataset
+    primary_batch_dim: str
+    supplemental_batch_dims: tuple[str, ...]
+    core_dims: tuple[str, ...]
+    keys: tuple[ResolvedGroupingKey, ...]
+    na_key_policy: GroupingNaKeyPolicy
+    na_group_label: object | None
+
+
 __all__ = [
+    "BatchGroupingFoundationContext",
     "GroupingBinSpec",
     "GroupingFoundationContext",
     "GroupingFoundationOptions",

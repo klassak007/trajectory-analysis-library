@@ -20,8 +20,9 @@ def quat_mean_kernel(values: np.ndarray, weights: np.ndarray) -> np.ndarray:
             "spatial.rotation.mean: quaternion mean kernel requires weights broadcastable to "
             f"shape {target_weight_shape!r}, got {weight.shape!r}."
         ) from exc
-    flat_q = array.reshape((-1, n, _QUAT_SIZE))
-    flat_w = w.reshape((-1, n))
+    batch_size = int(np.prod(batch, dtype=np.int64)) if batch else 1
+    flat_q = array.reshape((batch_size, n, _QUAT_SIZE))
+    flat_w = w.reshape((batch_size, n))
     out = np.full((flat_q.shape[0], _QUAT_SIZE), np.nan, dtype=np.float64)
     for index in range(flat_q.shape[0]):
         q_row = flat_q[index]

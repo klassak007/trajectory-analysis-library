@@ -1,22 +1,47 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import xarray as xr
 
-from ..orchestration.context import DatasetContextOptions, resolve_dataset_context
+from ..orchestration.context import (
+    DatasetContext,
+    DatasetContextOptions,
+    resolve_dataset_context,
+)
 from ..orchestration.finalize import finalize_like
 from ..orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
 from ..validity_mask import resolve_validated_structural_mask_base
-from .dims import resolve_reduce_dims
+from .dims import resolve_active_reduce_dims, resolve_reduce_dims
 from .finalize_policy import resolve_reducer_finalize_source
 from .kernel import reduce_dataarray
-from .types import DimLike, WeightInput, require_supported_op
+from .types import (
+    DimLike,
+    ReducerOp,
+    ResolvedReducerRequest,
+    WeightInput,
+    require_supported_op,
+)
 from .vars import select_eligible_var_names
-from .weights import require_no_unsupported_weights
+from .weights import preflight_weight_structure, require_no_unsupported_weights
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
+
+
+@dataclass(frozen=True)
+class _ReducerExecutionPlan:
+    reduce_dims: tuple[str, ...]
+    active_reduce_dims: tuple[str, ...]
+    sequence_dim: str | None
+    sequence_size_coord: str | None
+    reducer: ReducerOp
+    skipna: bool
+    ddof: int
+    weights: WeightInput
+    base_mask: xr.DataArray | None
+    mask_dim: str | None
 
 
 def _component_dims(source: AnalysisObject) -> tuple[str, ...]:
@@ -25,6 +50,57 @@ def _component_dims(source: AnalysisObject) -> tuple[str, ...]:
         return ()
     out = resolver()
     return tuple(out) if out is not None else ()
+
+
+def resolve_reducer_dims_for_source(
+    source: AnalysisObject,
+    ds: xr.Dataset,
+    *,
+    dim: DimLike,
+    owner: str,
+) -> tuple[str, ...]:
+    """Resolve reducer dimensions with the source's component restrictions."""
+    return resolve_reduce_dims(
+        ds,
+        dim=dim,
+        component_dims=_component_dims(source),
+        owner=owner,
+    )
+
+
+def resolve_reducer_request(
+    source: AnalysisObject,
+    ds: xr.Dataset,
+    *,
+    op: str,
+    dim: DimLike,
+    weights: WeightInput,
+    owner: str,
+) -> ResolvedReducerRequest:
+    """Resolve reducer metadata without realizing payloads or weights."""
+    reducer = require_supported_op(op, owner=owner)
+    require_no_unsupported_weights(weights=weights, op=reducer, owner=owner)
+    reduce_dims = resolve_reducer_dims_for_source(source, ds, dim=dim, owner=owner)
+    names = tuple(select_eligible_var_names(ds, op=reducer, owner=owner))
+    active_reduce_dims = resolve_active_reduce_dims(
+        ds,
+        names=names,
+        reduce_dims=reduce_dims,
+    )
+    preflight_weight_structure(
+        ds,
+        names=names,
+        reduce_dims=reduce_dims,
+        active_dims=active_reduce_dims,
+        weights=weights,
+        owner=owner,
+    )
+    return ResolvedReducerRequest(
+        reducer=reducer,
+        reduce_dims=reduce_dims,
+        eligible_names=names,
+        active_reduce_dims=active_reduce_dims,
+    )
 
 
 def _reduced_schema_spec(
@@ -81,47 +157,62 @@ def _finalize_reduced_output(
     )
 
 
+def _needs_sequence_mask(
+    ds: xr.Dataset,
+    *,
+    names: tuple[str, ...],
+    plan: _ReducerExecutionPlan,
+) -> bool:
+    if plan.sequence_dim is None:
+        return False
+    return any(
+        plan.sequence_dim in ds[name].dims
+        and any(dim in ds[name].dims for dim in plan.active_reduce_dims)
+        for name in names
+    )
+
+
 def _reduce_named_data_vars(
     *,
     ds: xr.Dataset,
     names: tuple[str, ...],
-    reduce_dims: tuple[str, ...],
-    sequence_dim: str | None,
-    sequence_size_coord: str | None,
-    reducer: str,
-    skipna: bool,
-    ddof: int,
-    weights: WeightInput,
+    plan: _ReducerExecutionPlan,
     owner: str,
 ) -> dict[str, xr.DataArray]:
     reduced: dict[str, xr.DataArray] = {}
-    base_mask = None
-    if sequence_dim is not None and any(sequence_dim in ds[name].dims for name in names):
+    base_mask = plan.base_mask
+    mask_dim = plan.mask_dim
+    if base_mask is None and _needs_sequence_mask(ds, names=names, plan=plan):
         base_mask = resolve_validated_structural_mask_base(
             ds,
-            sequence_dim=sequence_dim,
-            sequence_size_coord=sequence_size_coord,
+            sequence_dim=plan.sequence_dim,
+            sequence_size_coord=plan.sequence_size_coord,
         )
+        mask_dim = plan.sequence_dim
     for name in names:
         data = ds[name]
-        var_dims = tuple(dim_name for dim_name in reduce_dims if dim_name in data.dims)
+        var_dims = tuple(
+            dim_name
+            for dim_name in plan.active_reduce_dims
+            if dim_name in data.dims
+        )
         mask = None
-        if base_mask is not None and sequence_dim is not None and sequence_dim in data.dims:
-            mask = base_mask.broadcast_like(data)
+        if base_mask is not None and mask_dim is not None and mask_dim in data.dims:
+            mask = base_mask
         reduced[name] = reduce_dataarray(
             data,
-            op=reducer,
+            op=plan.reducer,
             reduce_dims=var_dims,
-            skipna=skipna,
-            ddof=ddof,
-            weights=weights,
+            skipna=plan.skipna,
+            ddof=plan.ddof,
+            weights=plan.weights,
             mask=mask,
             owner=f"{owner}.{name}",
         )
     return reduced
 
 
-def _assemble_reduced_dataset(
+def assemble_reduced_dataset(
     ds: xr.Dataset,
     reduced: dict[str, xr.DataArray],
     *,
@@ -144,6 +235,40 @@ def _assemble_reduced_dataset(
     return out.drop_vars(drop) if drop else out
 
 
+def _execute_reduction(
+    source: AnalysisObject,
+    *,
+    context: DatasetContext,
+    names: tuple[str, ...],
+    plan: _ReducerExecutionPlan,
+    validate: bool,
+    owner: str,
+) -> AnalysisObject:
+    reduced = _reduce_named_data_vars(
+        ds=context.ds,
+        names=names,
+        plan=plan,
+        owner=owner,
+    )
+    out = assemble_reduced_dataset(
+        context.ds,
+        reduced,
+        reduce_dims=plan.reduce_dims,
+        sequence_dim=context.sequence_dim,
+        param_coord=context.param_coord,
+        sequence_size_coord=context.sequence_size_coord,
+    )
+    return _finalize_reduced_output(
+        context=context,
+        reduce_dims=plan.reduce_dims,
+        source=source,
+        out=out,
+        reducer=plan.reducer,
+        validate=validate,
+        owner=owner,
+    )
+
+
 def reduce_analysis_object(
     source: AnalysisObject,
     *,
@@ -154,46 +279,48 @@ def reduce_analysis_object(
     weights: WeightInput,
     validate: bool,
     owner: str,
+    base_mask: xr.DataArray | None = None,
+    mask_dim: str | None = None,
 ) -> AnalysisObject:
-    reducer = require_supported_op(op, owner=owner)
-    require_no_unsupported_weights(weights=weights, op=reducer, owner=owner)
     context = resolve_dataset_context(
         source,
         owner=owner,
         options=DatasetContextOptions(),
     )
     ds = context.ds
-    reduce_dims = resolve_reduce_dims(ds, dim=dim, component_dims=_component_dims(source), owner=owner)
-    names = tuple(select_eligible_var_names(ds, op=reducer, owner=owner))
-    reduced = _reduce_named_data_vars(
-        ds=ds,
-        names=names,
-        reduce_dims=reduce_dims,
-        sequence_dim=context.sequence_dim,
-        sequence_size_coord=context.sequence_size_coord,
-        reducer=reducer,
-        skipna=skipna,
-        ddof=ddof,
+    request = resolve_reducer_request(
+        source,
+        ds,
+        op=op,
+        dim=dim,
         weights=weights,
         owner=owner,
     )
-    out = _assemble_reduced_dataset(
-        ds,
-        reduced,
-        reduce_dims=reduce_dims,
+    plan = _ReducerExecutionPlan(
+        reduce_dims=request.reduce_dims,
+        active_reduce_dims=request.active_reduce_dims,
         sequence_dim=context.sequence_dim,
-        param_coord=context.param_coord,
         sequence_size_coord=context.sequence_size_coord,
+        reducer=request.reducer,
+        skipna=skipna,
+        ddof=ddof,
+        weights=weights,
+        base_mask=base_mask,
+        mask_dim=mask_dim,
     )
-    return _finalize_reduced_output(
+    return _execute_reduction(
+        source,
         context=context,
-        reduce_dims=reduce_dims,
-        source=source,
-        out=out,
-        reducer=reducer,
+        names=request.eligible_names,
+        plan=plan,
         validate=validate,
         owner=owner,
     )
 
 
-__all__ = ["reduce_analysis_object"]
+__all__ = [
+    "assemble_reduced_dataset",
+    "reduce_analysis_object",
+    "resolve_reducer_dims_for_source",
+    "resolve_reducer_request",
+]

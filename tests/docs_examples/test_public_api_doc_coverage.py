@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from pathlib import Path
 
 from tests.docs_examples._examples import EXECUTABLE_EXAMPLES
 from tests.docs_examples._manifest import (
@@ -12,12 +13,11 @@ from tests.docs_examples._manifest import (
     _resolve_symbol,
     curated_scope_counts,
     inventory_required_example_ids,
-    iter_inventory_example_symbols,
     iter_curated_public_symbols,
+    iter_inventory_example_symbols,
     iter_scoped_public_symbols,
     required_example_ids,
 )
-
 
 NUMBA_AUTOSUMMARY_RAISES_SYMBOLS = {
     "centered_window_bounds",
@@ -66,12 +66,12 @@ def _has_section(doc: str, section: str) -> bool:
 
 
 def _numba_autosummary_symbols() -> tuple[str, ...]:
-    text = open("docs/api/numba.md", encoding="utf-8").read()
+    text = Path("docs/api/numba.md").read_text(encoding="utf-8")
     return tuple(re.findall(r"(?m)^\s+(tal\.utils\.numba\.[A-Za-z_][A-Za-z0-9_]*)\s*$", text))
 
 
 def test_curated_scope_counts_match_plan() -> None:
-    expected_total = 255
+    expected_total = 268
     observed = curated_scope_counts()
     assert observed == CURATED_SCOPE_COUNTS
     assert sum(observed.values()) == expected_total
@@ -220,6 +220,11 @@ def test_required_example_ids_have_executable_tests() -> None:
     available = set(EXECUTABLE_EXAMPLES)
     missing = sorted(required - available)
     assert not missing, f"Missing executable example handlers: {missing!r}"
+
+
+def test_rotation_from_data_contract_is_executable() -> None:
+    """ID: ROTATION_DOC_082_from_data_contract_is_executable."""
+    EXECUTABLE_EXAMPLES["SPATIAL-ROTATION-FROM-DATA"]()
 
 
 def test_inventory_example_ids_have_executable_tests() -> None:
