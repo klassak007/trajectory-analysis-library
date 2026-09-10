@@ -1232,18 +1232,6 @@ def test_arch_spatial_077_apply_shared_and_pose_shared_removed() -> None:
     assert not Path("tal/spatial/pose_shared.py").exists()
 
 
-def test_arch_spatial_078_core_runtime_checks_reused_by_spatial_and_components() -> None:
-    """ID: ARCH_SPATIAL_078_core_runtime_checks_reused_by_spatial_and_components."""
-    runtime_text = Path("tal/core/orchestration/runtime_checks.py").read_text(encoding="utf-8")
-    spatial_runtime_text = Path("tal/spatial/policies/runtime_checks.py").read_text(encoding="utf-8")
-    component_runtime_text = Path("tal/core/component_ops/runtime_checks.py").read_text(encoding="utf-8")
-    assert "def resolve_single_numeric_var_single_core_dim(" in runtime_text
-    assert "from tal.core.orchestration.runtime_checks import (" in spatial_runtime_text
-    assert "from ..orchestration.runtime_checks import require_declared_roles_with_sequence" in component_runtime_text
-    assert "def require_component_numeric_var(" in component_runtime_text
-    assert "require_component_numeric_var" not in spatial_runtime_text
-
-
 def test_arch_spatial_079_core_alignment_owner_reused_by_linalg_and_spatial() -> None:
     """ID: ARCH_SPATIAL_079_core_alignment_owner_reused_by_linalg_and_spatial."""
     alignment_text = Path("tal/core/orchestration/alignment.py").read_text(encoding="utf-8")

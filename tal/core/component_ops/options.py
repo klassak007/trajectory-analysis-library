@@ -203,6 +203,8 @@ def _require_component_core_dim(
     dim = _require_nonempty_name(core_dim, field=f"registry[{name!r}].core_dim", owner=owner)
     if dim not in core_dims:
         raise ValueError(f"{owner}: registry[{name!r}].core_dim {dim!r} is not in declared core_dims {core_dims!r}.")
+    if dim not in ds.dims:
+        raise ValueError(f"{owner}: registry[{name!r}].core_dim {dim!r} is not a dataset dimension.")
     if dim not in ds.coords:
         raise ValueError(f"{owner}: registry[{name!r}] requires explicit coordinate labels for dim {dim!r}.")
     return dim

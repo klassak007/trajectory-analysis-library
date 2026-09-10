@@ -13,7 +13,7 @@ from ..orchestration.finalize import finalize_like
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..schema import merge_schema
 from .options import coerce_component_patch_options
-from .registry import read_components
+from .registry import _read_registry_from_dataset
 from .runtime_checks import (
     require_declared_roles_with_sequence,
     require_exact_label_set,
@@ -105,7 +105,7 @@ def _prepare_patch_entry(
         patch_ds,
         base_var=base_var,
         base_spec=spec,
-        patch_spec=read_components(patch).get(name),
+        patch_spec=_read_registry_from_dataset(patch_ds, owner=owner).get(name),
         component_name=name,
         owner=owner,
     )
@@ -346,7 +346,7 @@ def patch_components(
     source = coerce_analysis_object_input(base, owner=owner)
     options = coerce_component_patch_options(opts, owner=owner)
     items = _normalize_component_mapping(components, owner=owner)
-    registry = read_components(source)
+    registry = _read_registry_from_dataset(analysis_object_dataset(source), owner=owner)
     entries = _prepare_patch_entries(source, components=items, registry=registry, owner=owner)
     renamed_target = _require_output_var_policy(entries, output_var=options.output_var, owner=owner)
     finalization = _prepare_patch_finalization(source, entries, owner=owner)
