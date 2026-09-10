@@ -245,9 +245,10 @@ def _finalize_rotation_temporal_output(
     result = evaluated if isinstance(evaluated, source.__class__) else source.__class__(analysis_object_dataset(evaluated))
     if source_rep != "quat":
         result = result.to_rep(source_rep, validate=False)
-    if validate:
-        return source.__class__._from_validated(analysis_object_dataset(result))
-    return source.__class__._from_unvalidated(analysis_object_dataset(result))
+    return source._rewrap_dataset(
+        analysis_object_dataset(result),
+        validate=validate,
+    )
 
 
 def _run_rotation_temporal_request(request: RotationTemporalRequest) -> Rotation:

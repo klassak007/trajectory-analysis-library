@@ -1,23 +1,48 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
-
-from tal.frames import Frame
-from tal.utils.frame_schema import get_frames, set_frames
+from typing import TYPE_CHECKING, NoReturn
 
 from tal.core.dataset_ownership import analysis_object_dataset
+from tal.frames import Frame, FrameGraph
+from tal.utils.frame_schema import set_frames
 
-from ..metadata import (
-    get_acceleration_rep,
-    get_expressed_in,
-    get_instantaneous_inertial,
-    get_velocity_rep,
-    set_expressed_in,
-    set_instantaneous_inertial,
+from ..association import (
+    SpatialAssociationPlan,
+    attach_spatial_association,
 )
 from ..policies.wrap import wrap_like
-from .frame_owner_common import clear_framing, dst_frame_id, require_source_parent, source_expressed_in_id
+from .edge_resolver_ops import (
+    PreparedEdgeResolver,
+    _PathCallbackSignatureError,
+    _raise_public_signature_error,
+)
+from .frame_owner_common import (
+    clear_framing,
+    dst_frame_id,
+    require_source_parent,
+    source_expressed_in_id,
+)
+from .kinematics_family_frame_ops import (
+    FamilyFrameRequest,
+    PreparedFramePathRequest,
+    acceleration_family_parts,
+    prepare_frame_path_request,
+    run_family_pair_operation,
+    velocity_family_parts,
+)
+from .kinematics_frame_finalize_ops import (
+    finalize_identity_vector_expression as _finalize_identity_vector_expression,
+)
+from .kinematics_frame_finalize_ops import (
+    finalize_vector_expression as _finalize_vector_expression,
+)
+from .kinematics_frame_finalize_ops import (
+    finalize_vector_frame_result as _finalize_vector_frame_result,
+)
+from .kinematics_frame_finalize_ops import (
+    with_relation_semantics as _with_relation_semantics,
+)
+from .path_configuration import SelectedPathConfiguration, select_identity_graph
 
 if TYPE_CHECKING:
     from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
@@ -25,37 +50,13 @@ if TYPE_CHECKING:
     from ..velocity import AngularVelocity, LinearVelocity, Velocity
 
 
-@dataclass(frozen=True)
-class FamilyFrameRequest:
-    source: object
-    dst: Frame | str
-    edge_fn: object
-    opts: PathSolveOptions | None
-    validate: bool
-    owner: str
-
-    def __post_init__(self) -> None:
-        from ..path_solve import _coerce_path_solve_options
-
-        object.__setattr__(self, "opts", _coerce_path_solve_options(self.opts, owner=self.owner))
-
-
-def _wrap_owner_error(exc: Exception, *, owner: str) -> Exception:
+def _raise_owner_error(exc: Exception, *, owner: str) -> NoReturn:
+    if isinstance(exc, _PathCallbackSignatureError):
+        _raise_public_signature_error(exc, owner=owner)
     text = str(exc)
     if text.startswith(f"{owner}:"):
-        return exc
-    return type(exc)(f"{owner}: {text}")
-
-
-def _with_relation_semantics(source, ds, *, expressed_in: str, owner: str):
-    inertial = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
-    out = set_expressed_in(ds, expressed_in=expressed_in, validate=False, owner=owner)
-    return set_instantaneous_inertial(
-        out,
-        instantaneous_inertial=inertial,
-        validate=False,
-        owner=owner,
-    )
+        raise exc
+    raise type(exc)(f"{owner}: {text}") from exc
 
 
 def _canonicalize_vector_source_basis(
@@ -65,6 +66,8 @@ def _canonicalize_vector_source_basis(
     src_parent: str,
     src_child: str | None,
     src_expressed_in: str,
+    configuration: SelectedPathConfiguration,
+    prepared_resolver: PreparedEdgeResolver,
     solve_pose,
     pose_apply,
     owner: str,
@@ -85,10 +88,17 @@ def _canonicalize_vector_source_basis(
         src_expressed_in,
         src_parent,
         edge_pose_fn=request.edge_fn,
-        opts=request.opts,
+        configuration=configuration,
+        prepared_resolver=prepared_resolver,
         owner=owner,
     )
-    canonical = pose_apply(basis_to_parent, source_in_basis, validate=False, owner=owner)
+    canonical = pose_apply(
+        basis_to_parent,
+        source_in_basis,
+        validate=False,
+        owner=owner,
+        association=SpatialAssociationPlan(configuration.graph),
+    )
     ds = _with_relation_semantics(
         source,
         analysis_object_dataset(canonical),
@@ -98,7 +108,13 @@ def _canonicalize_vector_source_basis(
     return wrap_like(source, ds, validate=False)
 
 
-def _run_vector_to_frame(source, request: FamilyFrameRequest, *, owner: str):
+def _run_vector_to_frame(
+    source,
+    request: FamilyFrameRequest,
+    *,
+    owner: str,
+    prepared_path: PreparedFramePathRequest | None = None,
+):
     from ..path_solve import _solve_pose_path_transform_with_owner
 
     source._enforce_invariants(owner=owner)
@@ -106,13 +122,20 @@ def _run_vector_to_frame(source, request: FamilyFrameRequest, *, owner: str):
     src_expressed_in = source_expressed_in_id(source, owner=owner)
     dst_id = dst_frame_id(request.dst, owner=owner)
     if dst_id == src_parent:
+        selected = select_identity_graph(
+            request.configuration,
+            src=src_parent,
+            dst=request.dst,
+            owner=owner,
+        )
         ds = _with_relation_semantics(
             source,
             analysis_object_dataset(source),
             expressed_in=src_expressed_in,
             owner=owner,
         )
-        return wrap_like(source, ds, validate=request.validate)
+        result = wrap_like(source, ds, validate=request.validate)
+        return attach_spatial_association(result, SpatialAssociationPlan(selected))
     return _run_vector_to_frame_non_identity(
         source,
         request,
@@ -120,7 +143,81 @@ def _run_vector_to_frame(source, request: FamilyFrameRequest, *, owner: str):
         src_child=src_child,
         src_expressed_in=src_expressed_in,
         solve_pose=_solve_pose_path_transform_with_owner,
+        prepared_path=prepared_path,
         owner=owner,
+    )
+
+
+def _couple_vector_path(
+    source,
+    prepared,
+    request: FamilyFrameRequest,
+    *,
+    configuration: SelectedPathConfiguration,
+    prepared_resolver: PreparedEdgeResolver,
+    owner: str,
+):
+    from .kinematics_path_coupling_ops import apply_vector_path_coupling
+    from .kinematics_path_support_ops import resolve_kinematics_path_support
+
+    support = resolve_kinematics_path_support(
+        source,
+        dst=request.dst,
+        configuration=configuration,
+        prepared_resolver=prepared_resolver,
+        owner=f"{owner}.support",
+    )
+    return apply_vector_path_coupling(
+        source,
+        prepared,
+        context=support,
+        edge_pose_resolver=prepared_resolver,
+        configuration=configuration,
+        owner=f"{owner}.support",
+    )
+
+
+def _prepared_path_or_resolve(request, prepared_path, *, owner: str, resolver_arg: str):
+    if prepared_path is not None:
+        return prepared_path
+    return prepare_frame_path_request(request, owner=owner, resolver_arg=resolver_arg)
+
+
+def _apply_solved_vector_path(
+    source,
+    prepared,
+    request,
+    *,
+    src_parent: str,
+    configuration: SelectedPathConfiguration,
+    prepared_resolver: PreparedEdgeResolver,
+    solve_pose,
+    owner: str,
+):
+    from .pose_apply_ops import _pose_apply_with_owner
+
+    solved = solve_pose(
+        src_parent,
+        request.dst,
+        edge_pose_fn=request.edge_fn,
+        configuration=configuration,
+        prepared_resolver=prepared_resolver,
+        owner=owner,
+    )
+    out = _pose_apply_with_owner(
+        solved,
+        prepared,
+        validate=False,
+        owner=owner,
+        association=SpatialAssociationPlan(configuration.graph),
+    )
+    return _finalize_vector_frame_result(
+        source,
+        out,
+        src_parent=src_parent,
+        request=request,
+        owner=owner,
+        graph=configuration.graph,
     )
 
 
@@ -132,12 +229,16 @@ def _run_vector_to_frame_non_identity(
     src_child: str | None,
     src_expressed_in: str,
     solve_pose,
+    prepared_path: PreparedFramePathRequest | None,
     owner: str,
 ):
-    from .kinematics_path_coupling_ops import apply_vector_path_coupling
-    from .kinematics_path_support_ops import resolve_kinematics_path_support
     from .pose_apply_ops import _pose_apply_with_owner
 
+    path_request = _prepared_path_or_resolve(
+        request, prepared_path, owner=owner, resolver_arg="edge_pose_fn",
+    )
+    configuration = path_request.configuration
+    prepared_resolver = path_request.resolver
     prepared = _canonicalize_vector_source_basis(
         source,
         request,
@@ -146,128 +247,103 @@ def _run_vector_to_frame_non_identity(
         src_expressed_in=src_expressed_in,
         solve_pose=solve_pose,
         pose_apply=_pose_apply_with_owner,
+        configuration=configuration,
+        prepared_resolver=prepared_resolver,
         owner=owner,
     )
-    support = resolve_kinematics_path_support(
-        source,
-        dst=request.dst,
-        opts=request.opts,
-        owner=f"{owner}.support",
-    )
-    prepared = apply_vector_path_coupling(
+    prepared = _couple_vector_path(
         source,
         prepared,
-        context=support,
-        edge_pose_fn=request.edge_fn,
-        opts=request.opts,
-        owner=f"{owner}.support",
-    )
-    solved = solve_pose(
-        src_parent,
-        request.dst,
-        edge_pose_fn=request.edge_fn,
-        opts=request.opts,
+        request,
+        configuration=configuration,
+        prepared_resolver=prepared_resolver,
         owner=owner,
     )
-    out = _pose_apply_with_owner(solved, prepared, validate=False, owner=owner)
-    out_parent, _ = get_frames(out_ds := analysis_object_dataset(out))
-    expressed = src_parent if out_parent is None else out_parent
-    ds = _with_relation_semantics(source, out_ds, expressed_in=expressed, owner=owner)
-    return wrap_like(source, ds, validate=request.validate)
+    return _apply_solved_vector_path(
+        source,
+        prepared,
+        request,
+        src_parent=src_parent,
+        configuration=configuration,
+        prepared_resolver=prepared_resolver,
+        solve_pose=solve_pose,
+        owner=owner,
+    )
 
 
-def _run_vector_express_in(source, request: FamilyFrameRequest, *, owner: str):
-    from ..path_solve import _solve_rotation_path_transform_with_owner
-    from .rotation_apply_ops import _rotation_apply_with_owner
-
+def _run_vector_express_in(
+    source,
+    request: FamilyFrameRequest,
+    *,
+    owner: str,
+    prepared_path: PreparedFramePathRequest | None = None,
+):
     source._enforce_invariants(owner=owner)
     src_parent, src_child = require_source_parent(source, owner=owner)
     src_expressed_in = source_expressed_in_id(source, owner=owner)
     dst_id = dst_frame_id(request.dst, owner=owner)
     if dst_id == src_expressed_in:
-        ds = _with_relation_semantics(
-            source,
-            analysis_object_dataset(source),
-            expressed_in=dst_id,
+        selected = select_identity_graph(
+            request.configuration,
+            src=src_expressed_in,
+            dst=request.dst,
             owner=owner,
         )
-        return wrap_like(source, ds, validate=request.validate)
+        return _finalize_identity_vector_expression(
+            source,
+            destination=dst_id,
+            request=request,
+            graph=selected,
+            owner=owner,
+        )
+    return _apply_vector_expression(
+        source,
+        request,
+        relation=(src_parent, src_child),
+        source_basis=src_expressed_in,
+        destination=dst_id,
+        prepared_path=prepared_path,
+        owner=owner,
+    )
+
+
+def _apply_vector_expression(
+    source,
+    request: FamilyFrameRequest,
+    *,
+    relation: tuple[str, str | None],
+    source_basis: str,
+    destination: str,
+    prepared_path: PreparedFramePathRequest | None,
+    owner: str,
+):
+    from ..path_solve import _solve_rotation_path_transform_with_owner
+    from .rotation_apply_ops import _rotation_apply_with_owner
+
+    path_request = _prepared_path_or_resolve(
+        request, prepared_path, owner=owner, resolver_arg="edge_rotation_fn"
+    )
     solved = _solve_rotation_path_transform_with_owner(
-        src_expressed_in,
+        source_basis,
         request.dst,
         edge_rotation_fn=request.edge_fn,
-        opts=request.opts,
+        configuration=path_request.configuration,
+        prepared_resolver=path_request.resolver,
         owner=owner,
     )
     out = _rotation_apply_with_owner(
-        clear_framing(solved),
+        clear_framing(solved, owner=owner),
         source,
         validate=False,
         owner=owner,
+        association=SpatialAssociationPlan(path_request.configuration.graph),
     )
-    ds = set_frames(analysis_object_dataset(out), parent=src_parent, child=src_child, validate=False)
-    ds = _with_relation_semantics(source, ds, expressed_in=dst_id, owner=owner)
-    return wrap_like(source, ds, validate=request.validate)
-
-
-def _velocity_family_parts(source: Velocity, *, validate: bool, owner: str):
-    rep = get_velocity_rep(analysis_object_dataset(source), owner=owner)
-    return rep, source.linear(validate=validate), source.angular(validate=validate)
-
-
-def _acceleration_family_parts(source: Acceleration, *, validate: bool, owner: str):
-    rep = get_acceleration_rep(analysis_object_dataset(source), owner=owner)
-    return rep, source.linear(validate=validate), source.angular(validate=validate)
-
-
-def _restore_rep(value, *, source_rep: str, validate: bool):
-    if source_rep == "vector6":
-        return value.to_rep("vector6", validate=validate)
-    return value
-
-
-def _finalize_family_relation_semantics(
-    *,
-    source,
-    out,
-    expressed_in: str,
-    validate: bool,
-    owner: str,
-):
-    inertial = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
-    ds = set_expressed_in(analysis_object_dataset(out), expressed_in=expressed_in, validate=False, owner=owner)
-    ds = set_instantaneous_inertial(
-        ds,
-        instantaneous_inertial=inertial,
-        validate=False,
-        owner=owner,
-    )
-    return wrap_like(out, ds, validate=validate)
-
-
-def _run_family_pair_operation(
-    request: FamilyFrameRequest,
-    *,
-    parts_resolver,
-    member_runner,
-    compose: Callable[..., object],
-):
-    rep, linear, angular = parts_resolver(
-        request.source,
-        validate=request.validate,
-        owner=request.owner,
-    )
-    linear_out = member_runner(linear, request, owner=f"{request.owner}.linear")
-    angular_out = member_runner(angular, request, owner=f"{request.owner}.angular")
-    out = compose(linear_out, angular_out, validate=request.validate)
-    out = _restore_rep(out, source_rep=rep, validate=request.validate)
-    expressed_in = get_expressed_in(analysis_object_dataset(linear_out), owner=request.owner)
-    return _finalize_family_relation_semantics(
-        source=request.source,
-        out=out,
-        expressed_in=expressed_in,
-        validate=request.validate,
-        owner=request.owner,
+    return _finalize_vector_expression(
+        source, out,
+        relation=relation,
+        destination=destination,
+        request=request,
+        graph=path_request.configuration.graph, owner=owner,
     )
 
 
@@ -275,220 +351,236 @@ def to_frame_linear_velocity(
     source: LinearVelocity,
     *,
     dst: Frame | str,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> LinearVelocity:
-    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner, graph)
     try:
         return _run_vector_to_frame(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def to_frame_angular_velocity(
     source: AngularVelocity,
     *,
     dst: Frame | str,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> AngularVelocity:
-    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner, graph)
     try:
         return _run_vector_to_frame(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def to_frame_linear_acceleration(
     source: LinearAcceleration,
     *,
     dst: Frame | str,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> LinearAcceleration:
-    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner, graph)
     try:
         return _run_vector_to_frame(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def to_frame_angular_acceleration(
     source: AngularAcceleration,
     *,
     dst: Frame | str,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> AngularAcceleration:
-    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner, graph)
     try:
         return _run_vector_to_frame(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def to_frame_velocity_family(
     source: Velocity,
     *,
     dst: Frame | str,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> Velocity:
     from ..velocity import Velocity
 
-    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner, graph)
     try:
-        return _run_family_pair_operation(
+        return run_family_pair_operation(
             request,
-            parts_resolver=_velocity_family_parts,
+            parts_resolver=velocity_family_parts,
             member_runner=_run_vector_to_frame,
             compose=Velocity.from_linear_angular,
+            operation="to_frame",
         )
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def to_frame_acceleration_family(
     source: Acceleration,
     *,
     dst: Frame | str,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> Acceleration:
     from ..acceleration import Acceleration
 
-    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_pose_fn, opts, validate, owner, graph)
     try:
-        return _run_family_pair_operation(
+        return run_family_pair_operation(
             request,
-            parts_resolver=_acceleration_family_parts,
+            parts_resolver=acceleration_family_parts,
             member_runner=_run_vector_to_frame,
             compose=Acceleration.from_linear_angular,
+            operation="to_frame",
         )
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def express_in_linear_velocity(
     source: LinearVelocity,
     *,
     dst: Frame | str,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> LinearVelocity:
-    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner, graph)
     try:
         return _run_vector_express_in(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def express_in_angular_velocity(
     source: AngularVelocity,
     *,
     dst: Frame | str,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> AngularVelocity:
-    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner, graph)
     try:
         return _run_vector_express_in(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def express_in_linear_acceleration(
     source: LinearAcceleration,
     *,
     dst: Frame | str,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> LinearAcceleration:
-    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner, graph)
     try:
         return _run_vector_express_in(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def express_in_angular_acceleration(
     source: AngularAcceleration,
     *,
     dst: Frame | str,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> AngularAcceleration:
-    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner, graph)
     try:
         return _run_vector_express_in(source, request, owner=owner)
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def express_in_velocity_family(
     source: Velocity,
     *,
     dst: Frame | str,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> Velocity:
     from ..velocity import Velocity
 
-    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner, graph)
     try:
-        return _run_family_pair_operation(
+        return run_family_pair_operation(
             request,
-            parts_resolver=_velocity_family_parts,
+            parts_resolver=velocity_family_parts,
             member_runner=_run_vector_express_in,
             compose=Velocity.from_linear_angular,
+            operation="express_in",
         )
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 def express_in_acceleration_family(
     source: Acceleration,
     *,
     dst: Frame | str,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None,
     validate: bool,
     owner: str,
 ) -> Acceleration:
     from ..acceleration import Acceleration
 
-    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner)
+    request = FamilyFrameRequest(source, dst, edge_rotation_fn, opts, validate, owner, graph)
     try:
-        return _run_family_pair_operation(
+        return run_family_pair_operation(
             request,
-            parts_resolver=_acceleration_family_parts,
+            parts_resolver=acceleration_family_parts,
             member_runner=_run_vector_express_in,
             compose=Acceleration.from_linear_angular,
+            operation="express_in",
         )
     except (TypeError, ValueError) as exc:
-        raise _wrap_owner_error(exc, owner=owner) from exc
+        _raise_owner_error(exc, owner=owner)
 
 
 __all__ = [

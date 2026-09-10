@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import replace
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -11,8 +14,6 @@ from tal.spatial import (
     Acceleration,
     AngularAcceleration,
     AngularVelocity,
-    get_edge_motion_class,
-    get_frame_inertial_status,
     KinematicsPathSupportOptions,
     LinearAcceleration,
     LinearVelocity,
@@ -20,9 +21,13 @@ from tal.spatial import (
     Pose,
     Position,
     Rotation,
+    Velocity,
+    bind_pose,
+    get_edge_motion_class,
+    get_frame_inertial_status,
     set_edge_motion_class,
     set_frame_inertial_status,
-    Velocity,
+    solve_pose_path_transform,
     solve_rotation_path_transform,
 )
 from tal.spatial.metadata import (
@@ -41,7 +46,6 @@ from tests._path_options_helpers import (
     ResolutionProbe,
     forbid_path_resolution,
 )
-
 
 _XYZ = ("x", "y", "z")
 _QUAT = ("x", "y", "z", "w")
@@ -154,6 +158,16 @@ def _single_var_values(value) -> np.ndarray:
 def _with_sample_and_param(value, *, sample: list[int], param_name: str, param: list[float]):
     ds = value.as_dataset(copy="none").assign_coords(sample=sample, **{param_name: ("sample", param)})
     return value.__class__(ds).set_param_coord(name=param_name, validate=False)
+
+
+def _with_expressed_in(value, basis: str):
+    ds = set_expressed_in(
+        value.as_dataset(copy="none"),
+        expressed_in=basis,
+        validate=False,
+        owner="test",
+    )
+    return value.__class__(ds)
 
 
 def _build_graph_and_edges() -> tuple[FrameGraph, object, object, PathSolveOptions]:
@@ -316,7 +330,7 @@ def test_spatial_core_127h_005_kinematic_identity_keeps_field_checks_deferred(ki
         edge_motion_class_fn=probe, frame_inertial_status_fn=probe,
         edge_velocity_fn=probe, edge_acceleration_fn=probe,
     )
-    opts = PathSolveOptions(graph=object(), strict=False, kinematics_support=support)
+    opts = PathSolveOptions(strict=False, kinematics_support=support)
     resolver_arg = "edge_pose_fn" if operation == "to_frame" else "edge_rotation_fn"
     method = getattr(source, operation)
     expected = method("sensor", **{resolver_arg: probe})
@@ -866,6 +880,70 @@ def _build_dynamic_support_case() -> tuple[FrameGraph, object, object, object, o
     )
 
 
+class _CountingSignatureResolver:
+    def __init__(self, resolver):
+        self.resolver = resolver
+        self.signature_reads = 0
+
+    @property
+    def __signature__(self):
+        self.signature_reads += 1
+        return inspect.signature(self.resolver)
+
+    def __call__(self, child, parent):
+        return self.resolver(child, parent)
+
+
+@pytest.mark.parametrize("kind", ["velocity", "acceleration"])
+@pytest.mark.parametrize("rep", ["components", "vector6"])
+@pytest.mark.parametrize("operation", ["to_frame", "express_in"])
+def test_family_frame_operations_prepare_one_resolver(kind, rep, operation):
+    """ID: BIND_127H_025_family_frame_operation_prepares_one_resolver."""
+    _, rotation_resolver, pose_resolver, _, _, opts = _build_dynamic_support_case()
+    factory = _framed_velocity_family if kind == "velocity" else _framed_acceleration_family
+    source = frame_retag(factory(rep=rep), parent="world", child="probe", validate=True)
+    source_ds = set_expressed_in(
+        source.as_dataset(copy="none"), expressed_in="world", validate=False, owner="test",
+    )
+    source = source.__class__(source_ds)
+    resolver = _CountingSignatureResolver(pose_resolver if operation == "to_frame" else rotation_resolver)
+    keyword = "edge_pose_fn" if operation == "to_frame" else "edge_rotation_fn"
+    result = getattr(source, operation)("map", opts=opts, validate=True, **{keyword: resolver})
+    assert isinstance(result, source.__class__)
+    assert resolver.signature_reads == 1
+
+
+def test_family_to_frame_pins_active_graph_before_resolver_callbacks():
+    """ID: BIND_127H_026_family_frame_operation_pins_one_graph."""
+    graph, _, pose_resolver, _, _, opts = _build_dynamic_support_case()
+    source = frame_retag(_framed_velocity_family(rep="vector6"), parent="world", child="probe", validate=True)
+    source = Velocity(
+        set_expressed_in(source.as_dataset(copy="none"), expressed_in="world", validate=False, owner="test")
+    )
+    other = FrameGraph()
+    entered = []
+
+    def resolver(child, parent):
+        if not entered:
+            other.__enter__()
+            entered.append(True)
+        return pose_resolver(child, parent)
+
+    with graph:
+        try:
+            result = source.to_frame(
+                "map",
+                edge_pose_fn=resolver,
+                opts=PathSolveOptions(kinematics_support=opts.kinematics_support),
+                validate=True,
+            )
+        finally:
+            if entered:
+                other.__exit__(None, None, None)
+    assert isinstance(result, Velocity)
+    assert get_frames(result.as_dataset(copy="none")) == ("map", "probe")
+
+
 def _build_c8_param_alignment_case() -> tuple[LinearVelocity, object, object, PathSolveOptions]:
     graph, rot_fn, pose_fn, _, _, _ = _build_dynamic_support_case()
     source = frame_retag(
@@ -930,8 +1008,24 @@ def test_spatial_core_c7_002_kinematics_to_frame_preserves_relation_representati
 def test_spatial_core_c7_003_velocity_acceleration_vector6_paths_preserve_rep_after_canonical_internal_execution() -> None:
     """ID: SPATIAL_CORE_C7_003_velocity_acceleration_vector6_paths_preserve_rep_after_canonical_internal_execution."""
     _, _, pose_fn, _, _, opts = _build_dynamic_support_case()
-    vel = frame_retag(_framed_velocity_family(rep="vector6"), parent="world", child="probe", validate=True)
-    acc = frame_retag(_framed_acceleration_family(rep="vector6"), parent="world", child="probe", validate=True)
+    vel = _with_expressed_in(
+        frame_retag(
+            _framed_velocity_family(rep="vector6"),
+            parent="world",
+            child="probe",
+            validate=True,
+        ),
+        "world",
+    )
+    acc = _with_expressed_in(
+        frame_retag(
+            _framed_acceleration_family(rep="vector6"),
+            parent="world",
+            child="probe",
+            validate=True,
+        ),
+        "world",
+    )
     vel_out = vel.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
     acc_out = acc.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
     assert get_velocity_rep(vel_out.as_dataset(copy="none"), owner="test") == "vector6"
@@ -1315,3 +1409,409 @@ def test_spatial_hard_c8_004_kinematic_coupling_default_sequence_primary_key_fai
     source, pose_fn, _rot_fn, opts = _build_c8_param_alignment_case()
     with pytest.raises(ValueError, match="strict exact policy|exact"):
         source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
+
+
+@pytest.mark.parametrize("kind", _KINEMATIC_PATH_KINDS)
+@pytest.mark.parametrize("operation", ["to_frame", "express_in"])
+@pytest.mark.parametrize("identity", [False, True])
+def test_bound_kinematic_paths_share_graph_selection(kind, operation, identity):
+    """ID: BIND_127H_012_kinematics_graph_selection_and_support_parity."""
+    from tal.spatial import bind_pose
+
+    graph, rot_fn, pose_fn, options = _build_graph_and_edges()
+    for child_id in ("body", "sensor"):
+        child = graph.get_frame(child_id)
+        bind_pose(graph, child.parent, child, pose_fn(child, child.parent))
+    source = _kinematic_path_source(kind)
+    dst = "sensor" if identity else "world"
+    method = getattr(source, operation)
+    resolver_arg = "edge_pose_fn" if operation == "to_frame" else "edge_rotation_fn"
+    resolver = pose_fn if operation == "to_frame" else rot_fn
+    expected = method(dst, opts=options, **{resolver_arg: resolver})
+    with FrameGraph():
+        result = method(dst, graph=graph, opts=FalseyPathSolveOptions())
+        xr.testing.assert_allclose(result.as_dataset(), expected.as_dataset())
+        via_endpoint = method(graph.get_frame(dst))
+        xr.testing.assert_allclose(via_endpoint.as_dataset(), expected.as_dataset())
+    with graph:
+        via_active = method(dst)
+        xr.testing.assert_allclose(via_active.as_dataset(), expected.as_dataset())
+    with pytest.raises(ValueError, match="graph and opts.graph"):
+        method(dst, graph=graph, opts=options)
+
+
+def test_binding_does_not_infer_kinematic_support():
+    """ID: BIND_127H_013_binding_does_not_infer_motion_or_inertial_support."""
+    from tal.spatial import bind_pose
+
+    graph = FrameGraph()
+    sensor = bind_pose(graph, "world", "sensor", _pose_from_translation_and_quat(
+        np.zeros((1, 3)), np.array([[0., 0., 0., 1.]])))
+    assert get_edge_motion_class(sensor) == "unknown"
+    assert get_frame_inertial_status(sensor) == "unknown"
+    with pytest.raises(ValueError, match="support"):
+        _kinematic_path_source("linear_velocity").to_frame("world", graph=graph)
+
+
+@pytest.mark.parametrize("kind", ["velocity", "acceleration"])
+@pytest.mark.parametrize("graph_source", ["keyword", "options", "endpoint"])
+def test_bound_motion_support_pins_graph_for_basis_paths(kind, graph_source):
+    """ID: BIND_127H_014_motion_support_and_basis_use_selected_graph."""
+    from dataclasses import replace
+
+    from tal.spatial import bind_pose
+
+    graph, _, pose_fn, velocity_fn, acceleration_fn, opts = _build_dynamic_support_case()
+    edge = graph.get_frame("map")
+    bind_pose(graph, edge.parent, edge, pose_fn(edge, edge.parent))
+    # Motion payloads expressed in map require another path solve to world.
+    motion = velocity_fn(edge, edge.parent) if kind == "velocity" else acceleration_fn(edge, edge.parent)
+    motion = motion.express_in("map", graph=graph)
+    support = replace(opts.kinematics_support, **{f"edge_{kind}_fn": lambda *_: motion})
+    factory = _framed_velocity_family if kind == "velocity" else _framed_acceleration_family
+    source = _with_expressed_in(
+        frame_retag(factory(rep="vector6"), parent="world", child="probe"),
+        "world",
+    )
+    # Also require canonicalization of a non-parent source basis.
+    source = source.express_in("map", graph=graph)
+    expected = source.to_frame("map", edge_pose_fn=pose_fn, opts=replace(opts, kinematics_support=support))
+    options = PathSolveOptions(kinematics_support=support)
+    kwargs = {"opts": options}
+    dst = "map"
+    if graph_source == "keyword": kwargs["graph"] = graph
+    if graph_source == "options": kwargs["opts"] = replace(options, graph=graph)
+    if graph_source == "endpoint": dst = edge
+    with FrameGraph():
+        actual = source.to_frame(dst, **kwargs)
+    xr.testing.assert_allclose(actual.as_dataset(), expected.as_dataset())
+    assert get_frames(actual.as_dataset()) == ("map", "probe")
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ("linear_velocity", "velocity", "linear_acceleration", "acceleration"),
+)
+def test_spatial_core_129b_030_selected_graph_reaches_nested_spatial_apply(
+    kind: str,
+) -> None:
+    """ID: SPATIAL_CORE_129B_030_selected_graph_reaches_nested_spatial_apply."""
+    graph, _, pose_fn, options = _build_graph_and_edges()
+    source = _kinematic_path_source(kind).with_graph(FrameGraph())
+    keyword_result = source.to_frame(
+        "world",
+        edge_pose_fn=pose_fn,
+        graph=graph,
+        opts=PathSolveOptions(),
+    )
+    options_result = source.to_frame(
+        "world",
+        edge_pose_fn=pose_fn,
+        opts=options,
+    )
+
+    xr.testing.assert_identical(
+        keyword_result.as_dataset(copy="none"),
+        options_result.as_dataset(copy="none"),
+    )
+    assert keyword_result.graph is graph
+    assert options_result.graph is graph
+
+
+@pytest.mark.parametrize("kind", ("velocity", "acceleration"))
+def test_spatial_core_129b_031_support_basis_reuses_selected_graph(kind: str) -> None:
+    """ID: SPATIAL_CORE_129B_031_support_basis_reuses_selected_graph."""
+    from dask.callbacks import Callback
+
+    graph, _, pose_fn, velocity_fn, acceleration_fn, options = _build_dynamic_support_case()
+    edge = graph.get_frame("map")
+    bind_pose(graph, edge.parent, edge, pose_fn(edge, edge.parent))
+    foreign = FrameGraph()
+    velocity_motion = velocity_fn(edge, edge.parent).express_in("map", graph=graph)
+    acceleration_motion = acceleration_fn(edge, edge.parent).express_in("map", graph=graph)
+    velocity_motion = Velocity(
+        velocity_motion.as_dataset(copy="none").chunk({"sample": 1}),
+        graph=foreign,
+    )
+    acceleration_motion = Acceleration(
+        acceleration_motion.as_dataset(copy="none").chunk({"sample": 1}),
+        graph=foreign,
+    )
+    support = replace(
+        options.kinematics_support,
+        edge_velocity_fn=lambda *_: velocity_motion,
+        edge_acceleration_fn=lambda *_: acceleration_motion,
+    )
+    factory = _framed_velocity_family if kind == "velocity" else _framed_acceleration_family
+    source = _with_expressed_in(
+        frame_retag(factory(rep="vector6"), parent="world", child="probe"),
+        "world",
+    ).express_in("map", graph=graph)
+    source = source.with_graph(foreign)
+    plain_options = PathSolveOptions(kinematics_support=support)
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        keyword_result = source.to_frame(
+            "map",
+            edge_pose_fn=pose_fn,
+            graph=graph,
+            opts=plain_options,
+        )
+        options_result = source.to_frame(
+            "map",
+            edge_pose_fn=pose_fn,
+            opts=replace(plain_options, graph=graph),
+        )
+
+    assert tasks == []
+    xr.testing.assert_identical(
+        keyword_result.as_dataset(copy="none"),
+        options_result.as_dataset(copy="none"),
+    )
+    assert keyword_result.graph is graph
+    assert options_result.graph is graph
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        ("not_callable", TypeError),
+        ("inspectable_signature", TypeError),
+        ("uninspectable_signature", TypeError),
+        ("internal_typeerror", ValueError),
+    ],
+)
+def test_kinematic_coupling_reuses_prepared_pose_resolver(failure, expected):
+    """ID: BIND_127H_022_kinematic_coupling_reuses_prepared_pose_resolver."""
+    from dataclasses import replace
+
+    from tal.spatial import bind_pose
+
+    class UninspectableResolver:
+        @property
+        def __signature__(self):
+            raise ValueError("signature unavailable")
+
+        def __call__(self, child):
+            return child
+
+    def internal_typeerror(child, parent):
+        _ = child, parent
+        raise TypeError("inside resolver")
+
+    graph, _, pose_fn, velocity_fn, _, options = _build_dynamic_support_case()
+    edge = graph.get_frame("map")
+    bind_pose(graph, edge.parent, edge, pose_fn(edge, edge.parent))
+    source = _with_expressed_in(
+        frame_retag(
+            _framed_velocity_family(rep="vector6"),
+            parent="world",
+            child="probe",
+        ),
+        "world",
+    ).express_in("map", graph=graph)
+    support_calls = []
+
+    def edge_velocity(child, parent):
+        support_calls.append((child.id, parent.id))
+        return velocity_fn(child, parent)
+
+    support = replace(options.kinematics_support, edge_velocity_fn=edge_velocity)
+    opts = replace(options, graph=None, kinematics_support=support)
+    resolvers = {
+        "not_callable": object(),
+        "inspectable_signature": lambda: None,
+        "uninspectable_signature": UninspectableResolver(),
+        "internal_typeerror": internal_typeerror,
+    }
+    with pytest.raises(expected, match="spatial.velocity.to_frame.*edge_pose_fn") as exc_info:
+        source.to_frame(
+            "map",
+            edge_pose_fn=resolvers[failure],
+            graph=graph,
+            opts=opts,
+        )
+    assert type(exc_info.value) is expected
+    expected_cause = ValueError if failure == "internal_typeerror" else TypeError
+    assert type(exc_info.value.__cause__) is expected_cause
+    # The required source-basis path fails before later motion support is needed.
+    assert support_calls == []
+
+
+def test_trusted_pose_rotation_adapter_consumes_signature_marker():
+    """ID: BIND_127H_032_trusted_resolver_adapter_exposes_public_errors."""
+
+    class UninspectableResolver:
+        @property
+        def __signature__(self):
+            raise ValueError("signature unavailable")
+
+        def __call__(self, child):
+            return child
+
+    graph, _, pose_fn, velocity_fn, _, options = _build_dynamic_support_case()
+    edge = graph.get_frame("map")
+    bind_pose(graph, edge.parent, edge, pose_fn(edge, edge.parent))
+    motion = velocity_fn(edge, edge.parent).express_in("map", graph=graph)
+    support = replace(options.kinematics_support, edge_velocity_fn=lambda *_: motion)
+    source = frame_retag(
+        _framed_velocity_family(rep="vector6"),
+        parent="world",
+        child="probe",
+    )
+    source = Velocity(
+        set_expressed_in(
+            source.as_dataset(copy="none"),
+            expressed_in="world",
+            validate=False,
+            owner="test",
+        )
+    )
+
+    with pytest.raises(TypeError, match="spatial.velocity.to_frame.*edge_pose_fn") as exc_info:
+        source.to_frame(
+            "map",
+            edge_pose_fn=UninspectableResolver(),
+            graph=graph,
+            opts=replace(options, graph=None, kinematics_support=support),
+        )
+
+    assert type(exc_info.value) is TypeError
+    assert type(exc_info.value.__cause__) is TypeError
+
+
+@pytest.mark.parametrize("kind", _KINEMATIC_PATH_KINDS)
+@pytest.mark.parametrize("failure", ["strict", "missing_provider"])
+def test_nonidentity_path_prerequisites_precede_support_callbacks(kind, failure):
+    """ID: BIND_127H_027_path_prerequisites_precede_support_callbacks."""
+    graph, _, pose_fn, _ = _build_graph_and_edges()
+    source = _kinematic_path_source(kind)
+    before = source.as_dataset(copy="deep")
+    support_calls = []
+
+    def edge_class(child, parent):
+        support_calls.append((child.id, parent.id))
+        return "static"
+
+    support = KinematicsPathSupportOptions(edge_motion_class_fn=edge_class)
+    opts = PathSolveOptions(
+        graph=graph,
+        strict=failure != "strict",
+        kinematics_support=support,
+    )
+    kwargs = {"edge_pose_fn": pose_fn} if failure == "strict" else {}
+    expected = "strict=False" if failure == "strict" else "missing bound Pose provider"
+    with pytest.raises(ValueError, match=expected) as exc_info:
+        source.to_frame("world", opts=opts, **kwargs)
+    assert support_calls == []
+    assert exc_info.value.__cause__ is not exc_info.value
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_bound_provider_preflight_does_not_invoke_dynamic_provider():
+    """ID: BIND_127H_028_provider_presence_preflight_does_not_invoke_provider."""
+    graph, _, pose_fn, _ = _build_graph_and_edges()
+    provider_calls = []
+
+    def provider(child, parent):
+        provider_calls.append((child.id, parent.id))
+        return pose_fn(child, parent)
+
+    for child_id in ("body", "sensor"):
+        child = graph.get_frame(child_id)
+        bind_pose(graph, child.parent, child, provider)
+
+    def edge_class(child, parent):
+        _ = child, parent
+        raise RuntimeError("support boom")
+
+    source = _kinematic_path_source("linear_velocity")
+    opts = PathSolveOptions(
+        graph=graph,
+        kinematics_support=KinematicsPathSupportOptions(edge_motion_class_fn=edge_class),
+    )
+    with pytest.raises(ValueError, match="edge_motion_class_fn.*failed for edge"):
+        source.to_frame("world", opts=opts)
+    assert provider_calls == []
+
+
+class _UninspectableSupportCallback:
+    @property
+    def __signature__(self):
+        raise ValueError("signature unavailable")
+
+    def __call__(self):
+        return None
+
+
+def _failing_support_callback(failure, *, graph):
+    if failure == "signature":
+        return lambda: None
+    if failure == "uninspectable_signature":
+        return _UninspectableSupportCallback()
+
+    def callback(*args):
+        _ = args
+        if failure == "nested_signature_error":
+            edge = graph.get_frame("map")
+            return solve_pose_path_transform(
+                edge,
+                edge.parent,
+                graph=graph,
+                edge_pose_fn=_UninspectableSupportCallback(),
+            )
+        if failure == "internal_typeerror":
+            raise TypeError("inside support callback")
+        raise RuntimeError("inside support callback")
+
+    return callback
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "edge_motion_class_fn",
+        "frame_inertial_status_fn",
+        "edge_velocity_fn",
+        "edge_acceleration_fn",
+    ],
+)
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        ("signature", TypeError),
+        ("uninspectable_signature", TypeError),
+        ("internal_typeerror", ValueError),
+        ("nested_signature_error", ValueError),
+        ("runtime", ValueError),
+    ],
+)
+def test_support_callbacks_preserve_public_failure_classification(field, failure, expected):
+    """ID: BIND_127H_029_support_callback_failure_classification."""
+    graph, _, pose_fn, _, _, options = _build_dynamic_support_case()
+    source = (
+        _linear_acceleration(np.asarray([[1.0, 2.0, 3.0]]))
+        if field == "edge_acceleration_fn"
+        else _linear_velocity(np.asarray([[1.0, 2.0, 3.0]]))
+    )
+    source = frame_retag(source, parent="world", child="probe", validate=True)
+    if field == "frame_inertial_status_fn":
+        source = source.__class__(
+            set_instantaneous_inertial(
+                source.as_dataset(copy="none"),
+                instantaneous_inertial={"parent"},
+                validate=False,
+                owner="test",
+            )
+        )
+    before = source.as_dataset(copy="deep")
+    support = replace(
+        options.kinematics_support,
+        **{field: _failing_support_callback(failure, graph=graph)},
+    )
+    opts = replace(options, kinematics_support=support)
+    with pytest.raises(expected, match=rf"spatial\..*to_frame.*{field}") as exc_info:
+        source.to_frame("map", edge_pose_fn=pose_fn, opts=opts)
+    assert exc_info.value.__cause__ is not None
+    assert exc_info.value.__cause__ is not exc_info.value
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)

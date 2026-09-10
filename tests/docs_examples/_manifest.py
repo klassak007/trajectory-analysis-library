@@ -136,7 +136,9 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.linalg.vector3.Vector3.z",
     ),
     "spatial": (
+        "tal.spatial.pose_binding.bind_pose",
         "tal.spatial.position.Position.as_delta",
+        "tal.spatial.position.Position.with_graph",
         "tal.spatial.position.Position.to_frame",
         "tal.spatial.position.Position.express_in",
         "tal.spatial.position.Position.differentiate",
@@ -307,7 +309,7 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
 CURATED_SCOPE_COUNTS: dict[str, int] = {
     "core": 85,
     "linalg": 30,
-    "spatial": 79,
+    "spatial": 81,
     "geo": 25,
     "astro": 9,
     "frames": 19,
@@ -356,6 +358,13 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "tal.linalg.matrix.Matrix.solve": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.vector3.Vector3.from_xyz": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.spatial.position.Position.to_frame": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.spatial.position.Position.with_graph": (
+        "Parameters",
+        "Returns",
+        "Raises",
+        "Notes",
+        "Examples",
+    ),
     "tal.spatial.rotation.Rotation.from_data": (
         "Parameters",
         "Returns",
@@ -451,8 +460,10 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.linalg.array.Array.stack_core": ("CORE-COMBINE-CORE-LAYOUTS",),
     "tal.linalg.array.Array.block_core": ("CORE-COMBINE-CORE-LAYOUTS",),
     "tal.linalg.vector3.Vector3.from_xyz": ("LINALG-VECTOR3-FROM-XYZ",),
+    "tal.spatial.pose_binding.bind_pose": ("SPATIAL-BIND-POSE",),
     "tal.spatial.position.Position.as_delta": ("SPATIAL-POSITION-BASIC",),
     "tal.spatial.position.Position.to_frame": ("SPATIAL-POSITION-TO-FRAME",),
+    "tal.spatial.position.Position.with_graph": ("SPATIAL-POSITION-BASIC",),
     "tal.spatial.rotation.Rotation.from_data": ("SPATIAL-ROTATION-FROM-DATA",),
     "tal.spatial.rotation.Rotation.to_rep": ("SPATIAL-ROTATION-TO-REP",),
     "tal.spatial.rotation.Rotation.as_quat": ("SPATIAL-ROTATION-BASIC",),

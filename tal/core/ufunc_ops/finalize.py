@@ -93,13 +93,18 @@ def finalize_binary_ao_result(
     owner: str,
     validate: bool = True,
     output_core_dims: tuple[str, ...] | None = None,
+    rewrap_context: object | None = None,
 ) -> AnalysisObject:
-    return _finalize_ao_output(
+    finalized = _finalize_ao_output(
         source,
         result,
         owner=owner,
         validate=validate,
         output_core_dims=output_core_dims,
+    )
+    return source._apply_result_rewrap_context(
+        finalized,
+        context=rewrap_context,
     )
 
 

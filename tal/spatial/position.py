@@ -4,16 +4,16 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
-from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
 from tal.core.schema_read import read_roles, validate_schema_if_needed
-from tal.core.typed_lifecycle import _finish_typed_promotion, _prepare_typed_promotion
 from tal.linalg import add as linalg_add
 from tal.utils.frame_schema import get_frames, set_frames
 
-from .policies.intent import PositionAddPlan, resolve_position_add_intent
+from .association import finalize_spatial_as, resolve_passive_association
+from .construction import SpatialConfigurationConstructionMixin
 from .metadata import (
     get_position_intent,
     get_position_rep,
@@ -22,16 +22,20 @@ from .metadata import (
     set_position_rep,
 )
 from .ops.frame_api_ops import position_to_frame
+from .policies.intent import PositionAddPlan, resolve_position_add_intent
 from .policies.runtime_checks import require_xyz_core_labels
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 
 if TYPE_CHECKING:
-    from tal.frames import Frame
+    from tal.frames import Frame, FrameGraph
 
-    from .temporal.options import KinematicsDerivativeOptions, KinematicsSmoothingOptions
-    from .velocity import LinearVelocity
     from .path_solve import PathSolveOptions
+    from .temporal.options import (
+        KinematicsDerivativeOptions,
+        KinematicsSmoothingOptions,
+    )
+    from .velocity import LinearVelocity
 
 
 def _coerce_position_source(value: object, *, owner: str) -> AnalysisObject:
@@ -100,14 +104,31 @@ def _finalize_position_addition(
 def _add_positions(left_input: object, right_input: object, *, owner: str) -> "Position":
     left = _coerce_position_operand(left_input, owner=owner, side="left")
     right = _coerce_position_operand(right_input, owner=owner, side="right")
+    association = resolve_passive_association((left, right), owner=owner)
     plan = resolve_position_add_intent(left, right, owner=owner)
     numeric = linalg_add(left, right)
     finalized = _finalize_position_addition(analysis_object_dataset(numeric), plan=plan, owner=owner)
-    return Position._from_validated(finalized)
+    return finalize_spatial_as(
+        Position,
+        finalized,
+        validate=True,
+        association=association,
+    )
 
 
-class Position(AnalysisObject):
+class Position(SpatialConfigurationConstructionMixin, AnalysisObject):
     """Cartesian 3D position with frame-aware spatial operations.
+
+    Parameters
+    ----------
+    data : AnalysisObject, xarray.Dataset, or xarray.DataArray
+        Position payload accepted by the typed ownership boundary.
+    parent, child, expressed_in : str or None, optional
+        Frame declarations to inherit, confirm, add, or explicitly clear. Omitting a
+        declaration inherits it from ``data``.
+    graph : FrameGraph or None, optional
+        Passive wrapper association. Omission inherits any association from ``data``;
+        this does not create graph topology.
 
     Notes
     -----
@@ -115,14 +136,8 @@ class Position(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        owner = "spatial.position.__init__"
-        source = _coerce_position_source(data, owner=owner)
-        self._bind_dataset(_prepare_typed_promotion(source, owner=owner))
-        self._normalize_metadata(owner=owner)
-        self._enforce_invariants(owner=owner)
-        _finish_typed_promotion(source, analysis_object_dataset(self))
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.position.__init__"
+    SPATIAL_SOURCE_COERCER = staticmethod(_coerce_position_source)
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Position":
@@ -186,15 +201,14 @@ class Position(AnalysisObject):
             validate=False,
             owner="spatial.position.as_delta",
         )
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def to_frame(
         self,
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Position":
@@ -204,8 +218,10 @@ class Position(AnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_pose_fn : object
-            Callable resolving pose edges for frame-path traversal.
+        edge_pose_fn : object, optional
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -237,6 +253,7 @@ class Position(AnalysisObject):
             self,
             dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )
@@ -245,7 +262,8 @@ class Position(AnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Position":
@@ -255,8 +273,10 @@ class Position(AnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_rotation_fn : object
-            Callable resolving rotation edges for frame-path traversal.
+        edge_rotation_fn : object, optional
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -290,6 +310,7 @@ class Position(AnalysisObject):
             self,
             dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )
@@ -343,7 +364,9 @@ class Position(AnalysisObject):
         >>> isinstance(opts, KinematicsDerivativeOptions)
         True
         """
-        from .ops.kinematics_temporal_ops import differentiate_position_to_linear_velocity
+        from .ops.kinematics_temporal_ops import (
+            differentiate_position_to_linear_velocity,
+        )
 
         return differentiate_position_to_linear_velocity(
             self,
@@ -428,6 +451,8 @@ class Position(AnalysisObject):
 __all__ = ["Position"]
 
 
-from .ops.magnitude_ops import install_position_magnitude_methods as _install_position_magnitude_methods
+from .ops.magnitude_ops import (
+    install_position_magnitude_methods as _install_position_magnitude_methods,
+)
 
 _install_position_magnitude_methods(Position)

@@ -429,7 +429,16 @@ def _numeric_ao(values: list[list[float]]) -> AnalysisObject:
 
 def example_guide_spatial_pose() -> None:
     pos, rot = _make_position_rotation()
-    pose = Pose.from_components(rot, pos)
+    graph = FrameGraph()
+    pose = Pose.from_components(
+        rot,
+        pos,
+        parent="world",
+        child="body",
+        graph=graph,
+    )
+    associated_pos = pos.with_graph(graph)
+    detached = pose.with_graph(None)
     out_pos, out_rot = pose.decompose()
     identity_like = pose.compose(pose.inverse())
     rotated = rot.apply(pos)
@@ -440,6 +449,8 @@ def example_guide_spatial_pose() -> None:
     rot_at = rot.param.at([0.25], on="time_s")
     pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
     assert isinstance(out_pos, Position)
+    assert associated_pos.graph is graph
+    assert pos.graph is None
     assert isinstance(out_rot, Rotation)
     assert isinstance(identity_like, Pose)
     assert isinstance(rotated, Position)
@@ -448,6 +459,8 @@ def example_guide_spatial_pose() -> None:
     assert pose_m.as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
     assert rot_at.as_dataset(copy="none").sizes["sample"] == 1
     assert pose_rs.as_dataset(copy="none").sizes["sample"] == 5
+    assert pose.graph is graph
+    assert detached.graph is None
 
 
 def example_guide_geo_lla() -> None:

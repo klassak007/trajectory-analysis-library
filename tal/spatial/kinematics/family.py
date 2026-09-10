@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import xarray as xr
 
-from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import ComponentExtractOptions, extract_components
 from tal.core.component_ops.runtime_checks import require_component_numeric_var
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.inputs import coerce_analysis_object_input
-from tal.core.orchestration.topology import SEMANTIC_NON_CORE_POLICY, STRICT_NON_CORE_POLICY, TopologyPolicy
 from tal.core.orchestration.runtime_checks import (
     require_declared_roles_with_sequence,
     require_exact_labels,
@@ -19,18 +19,27 @@ from tal.core.orchestration.runtime_checks import (
     require_single_core_dim_with_length,
     select_single_numeric_var,
 )
+from tal.core.orchestration.topology import (
+    SEMANTIC_NON_CORE_POLICY,
+    STRICT_NON_CORE_POLICY,
+    TopologyPolicy,
+)
 from tal.core.schema_read import validate_schema_if_needed
 from tal.utils.frame_schema import get_frames, set_frames
-from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
-
-from ..metadata import normalize_kinematic_relation_semantics
-from ..policies.frame import resolve_components_shared_frames
-from .vector6_ops import (
-    Vector6FamilyOptions,
-    enforce_vector6_layout_invariants,
-    pack_linear_angular_to_vector6_dataset,
-    unpack_vector6_to_linear_angular_datasets,
+from tal.utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
 )
+
+from ..association import finalize_spatial_as, finalize_spatial_from_source
+from ..construction import (
+    SpatialConstructionOverrides,
+    apply_spatial_construction,
+    finish_spatial_factory_promotion,
+    preflight_spatial_construction,
+    prepare_spatial_construction,
+    prepare_spatial_factory_dataset,
+)
+from ..metadata import normalize_kinematic_relation_semantics
 from .paired_components import (
     PairAssemblyOptions,
     align_paired_component_payloads,
@@ -41,7 +50,12 @@ from .paired_components import (
     resolve_pair_registry,
     resolve_paired_roles,
 )
-from ..policies.wrap import wrap_as
+from .vector6_ops import (
+    Vector6FamilyOptions,
+    enforce_vector6_layout_invariants,
+    pack_linear_angular_to_vector6_dataset,
+    unpack_vector6_to_linear_angular_datasets,
+)
 
 SetRepFn = Callable[[xr.Dataset, str, bool, str], xr.Dataset]
 GetRepFn = Callable[[xr.Dataset, str], str]
@@ -264,8 +278,6 @@ def build_family_dataset(
     owner: str,
     validate: bool,
     policy: TopologyPolicy,
-    parent: str | None,
-    child: str | None,
 ) -> xr.Dataset:
     seq_linear, batch_linear, left_dim, right_dim, left_var, right_var, aligned_linear_ds, aligned_angular_ds = (
         _resolve_aligned_family_component_payloads(
@@ -276,7 +288,7 @@ def build_family_dataset(
             policy=policy,
         )
     )
-    out_ds = build_paired_components_dataset(
+    return build_paired_components_dataset(
         left_ds=aligned_linear_ds,
         right_ds=aligned_angular_ds,
         sequence_dim=seq_linear,
@@ -290,7 +302,6 @@ def build_family_dataset(
         opts=cfg.pair_opts,
         policy=policy,
     )
-    return set_frames(out_ds, parent=parent, child=child, validate=False)
 
 
 def _resolve_aligned_family_component_payloads(
@@ -345,18 +356,16 @@ def family_from_linear_angular(
     classes: KinematicsClasses,
     owner: str,
     validate: bool,
+    overrides: SpatialConstructionOverrides | None = None,
 ):
     linear_value = coerce_typed_operand(linear, expected_cls=classes.linear_cls, owner=owner, label="linear")
     angular_value = coerce_typed_operand(angular, expected_cls=classes.angular_cls, owner=owner, label="angular")
+    construction = overrides or preflight_spatial_construction(owner=owner)
+    plan = prepare_spatial_construction(
+        (linear_value, angular_value), overrides=construction, owner=owner
+    )
     linear_ds = analysis_object_dataset(linear_value)
     angular_ds = analysis_object_dataset(angular_value)
-    parent, child = resolve_components_shared_frames(
-        linear_ds,
-        angular_ds,
-        owner=owner,
-        left_name=cfg.pair_opts.left_component_name,
-        right_name=cfg.pair_opts.right_component_name,
-    )
     selection = select_topology_policy_with_intents(
         (linear_value, angular_value),
         owner=owner,
@@ -375,18 +384,36 @@ def family_from_linear_angular(
         owner=owner,
         validate=validate,
         policy=selection.policy,
-        parent=parent,
-        child=child,
     )
     ds = normalize_typed_metadata(ds, rep_getter=cfg.get_family_rep, rep_setter=cfg.set_family_rep, expected_kind=cfg.family_kind, cfg=cfg, owner=owner)
-    return wrap_as(classes.family_cls, ds, validate=validate)
+    ds = apply_spatial_construction(ds, plan=plan, owner=owner)
+    return finalize_spatial_as(
+        classes.family_cls, ds, validate=validate, association=plan.association
+    )
 
 
-def family_from_vector6(data: object, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
-    source = coerce_source(data, owner=owner)
-    ds = cfg.set_family_rep(analysis_object_dataset(source), "vector6", False, owner)
+def family_from_vector6(
+    data: object,
+    *,
+    cfg: KinematicsFamilyConfig,
+    classes: KinematicsClasses,
+    owner: str,
+    validate: bool,
+    overrides: SpatialConstructionOverrides | None = None,
+):
+    source_ao = coerce_source(data, owner=owner)
+    construction = overrides or preflight_spatial_construction(owner=owner)
+    plan = prepare_spatial_construction(
+        (source_ao,), overrides=construction, owner=owner
+    )
+    source = prepare_spatial_factory_dataset(source_ao, owner=owner)
+    ds = cfg.set_family_rep(source, "vector6", False, owner)
     ds = cfg.set_kinematics_kind(ds, cfg.family_kind, False, owner)
-    return wrap_as(classes.family_cls, ds, validate=validate)
+    ds = apply_spatial_construction(ds, plan=plan, owner=owner)
+    result = finalize_spatial_as(
+        classes.family_cls, ds, validate=validate, association=plan.association
+    )
+    return finish_spatial_factory_promotion(source_ao, result)
 
 
 def family_to_rep(value, rep: Literal["components", "vector6"], *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
@@ -394,7 +421,7 @@ def family_to_rep(value, rep: Literal["components", "vector6"], *, cfg: Kinemati
     current_rep = cfg.get_family_rep(source, owner)
     target_rep = cfg.get_family_rep(cfg.set_family_rep(source, rep, False, owner), owner)
     if target_rep == current_rep:
-        return wrap_as(classes.family_cls, source, validate=validate)
+        return finalize_spatial_from_source(value, classes.family_cls, source, validate=validate)
     if target_rep == "components":
         return family_as_components(value, cfg=cfg, classes=classes, owner=owner, validate=validate)
     return family_as_vector6(value, cfg=cfg, classes=classes, owner=owner, validate=validate)
@@ -404,7 +431,7 @@ def family_as_components(value, *, cfg: KinematicsFamilyConfig, classes: Kinemat
     source = analysis_object_dataset(value)
     rep = cfg.get_family_rep(source, owner)
     if rep == "components":
-        return wrap_as(classes.family_cls, source, validate=validate)
+        return finalize_spatial_from_source(value, classes.family_cls, source, validate=validate)
     linear_ds, angular_ds = unpack_vector6_to_linear_angular_datasets(
         source,
         owner=owner,
@@ -412,8 +439,8 @@ def family_as_components(value, *, cfg: KinematicsFamilyConfig, classes: Kinemat
         set_linear_rep=lambda ds, _validate, _owner: cfg.set_linear_rep(ds, "cart", False, _owner),
         set_angular_rep=lambda ds, _validate, _owner: cfg.set_angular_rep(ds, "cart", False, _owner),
     )
-    linear = wrap_as(classes.linear_cls, linear_ds, validate=False)
-    angular = wrap_as(classes.angular_cls, angular_ds, validate=False)
+    linear = finalize_spatial_from_source(value, classes.linear_cls, linear_ds, validate=False)
+    angular = finalize_spatial_from_source(value, classes.angular_cls, angular_ds, validate=False)
     out = family_from_linear_angular(
         linear,
         angular,
@@ -422,15 +449,17 @@ def family_as_components(value, *, cfg: KinematicsFamilyConfig, classes: Kinemat
         owner=f"{owner}.from_linear_angular",
         validate=False,
     )
-    return wrap_as(classes.family_cls, analysis_object_dataset(out), validate=validate)
+    return finalize_spatial_from_source(
+        value, classes.family_cls, analysis_object_dataset(out), validate=validate
+    )
 
 
 def family_as_vector6(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
     source = analysis_object_dataset(value)
     rep = cfg.get_family_rep(source, owner)
     if rep == "vector6":
-        return wrap_as(classes.family_cls, source, validate=validate)
-    components = wrap_as(classes.family_cls, source, validate=False)
+        return finalize_spatial_from_source(value, classes.family_cls, source, validate=validate)
+    components = finalize_spatial_from_source(value, classes.family_cls, source, validate=False)
     linear = family_linear(components, cfg=cfg, classes=classes, owner=f"{owner}.linear", validate=False)
     angular = family_angular(components, cfg=cfg, classes=classes, owner=f"{owner}.angular", validate=False)
     selection = select_topology_policy_with_intents(
@@ -453,7 +482,7 @@ def family_as_vector6(value, *, cfg: KinematicsFamilyConfig, classes: Kinematics
         set_spatial_rep=lambda ds, _validate, _owner: cfg.set_family_rep(ds, "vector6", False, _owner),
         policy=policy,
     )
-    return wrap_as(classes.family_cls, out_ds, validate=validate)
+    return finalize_spatial_from_source(value, classes.family_cls, out_ds, validate=validate)
 
 
 def _finalize_component_extract(ds: xr.Dataset, *, rep_setter: SetRepFn, kind: str, cfg: KinematicsFamilyConfig, owner: str) -> xr.Dataset:
@@ -473,7 +502,7 @@ def family_linear(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClas
             set_linear_rep=lambda ds, _validate, _owner: cfg.set_linear_rep(ds, "cart", False, _owner),
             set_angular_rep=lambda ds, _validate, _owner: cfg.set_angular_rep(ds, "cart", False, _owner),
         )
-        return wrap_as(classes.linear_cls, linear_ds, validate=validate)
+        return finalize_spatial_from_source(value, classes.linear_cls, linear_ds, validate=validate)
     source = AnalysisObject._from_validated(value_ds) if validate else AnalysisObject._from_unvalidated(value_ds)
     extracted = extract_components(source, opts=ComponentExtractOptions(names=(cfg.pair_opts.left_component_name,)), validate=validate)
     ds = _finalize_component_extract(
@@ -485,7 +514,7 @@ def family_linear(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClas
     )
     parent, child = get_frames(value_ds)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
-    return wrap_as(classes.linear_cls, ds, validate=validate)
+    return finalize_spatial_from_source(value, classes.linear_cls, ds, validate=validate)
 
 
 def family_angular(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsClasses, owner: str, validate: bool):
@@ -499,7 +528,7 @@ def family_angular(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsCla
             set_linear_rep=lambda ds, _validate, _owner: cfg.set_linear_rep(ds, "cart", False, _owner),
             set_angular_rep=lambda ds, _validate, _owner: cfg.set_angular_rep(ds, "cart", False, _owner),
         )
-        return wrap_as(classes.angular_cls, angular_ds, validate=validate)
+        return finalize_spatial_from_source(value, classes.angular_cls, angular_ds, validate=validate)
     source = AnalysisObject._from_validated(value_ds) if validate else AnalysisObject._from_unvalidated(value_ds)
     extracted = extract_components(source, opts=ComponentExtractOptions(names=(cfg.pair_opts.right_component_name,)), validate=validate)
     ds = _finalize_component_extract(
@@ -511,7 +540,7 @@ def family_angular(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsCla
     )
     parent, child = get_frames(value_ds)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
-    return wrap_as(classes.angular_cls, ds, validate=validate)
+    return finalize_spatial_from_source(value, classes.angular_cls, ds, validate=validate)
 
 
 __all__ = [

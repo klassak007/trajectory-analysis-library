@@ -26,6 +26,10 @@ Component layout stores rotation and position payloads. Matrix layout stores a
 matrix-style pose payload. Decomposition returns typed `Position` and
 `Rotation` outputs.
 
+Constructors accept `parent=`, `child=`, `expressed_in=`, and `graph=`.
+Association is passive and does not register the pose. Inspect `pose.graph` or
+return a distinct associated alias with `pose.with_graph(...)`.
+
 ## Representation
 
 ```python
@@ -46,14 +50,18 @@ pose.apply(target)
 ```
 
 Compose and inverse execute through canonical split form: cartesian position
-plus quaternion rotation. `apply(...)` supports compatible positions and
-kinematic payloads.
+plus quaternion rotation. Framed inverse is graph-free and requires the value
+to be expressed in its parent basis; use
+`pose.express_in(parent).inverse()` for a third-frame value. A value without a
+parent is unframed only when its child and expression basis are also absent;
+otherwise complete or clear its framing before inversion. `apply(...)` supports
+compatible positions and kinematic payloads.
 
 ## Frames and Basis
 
 ```python
-pose.express_in(dst, *, edge_pose_fn, opts=None, validate=True)
-Pose.solve_path_transform(src, dst, *, edge_pose_fn, opts=None, validate=True)
+pose.express_in(dst, *, edge_pose_fn=None, graph=None, opts=None, validate=True)
+Pose.solve_path_transform(src, dst, *, edge_pose_fn=None, graph=None, opts=None, validate=True)
 ```
 
 `express_in(...)` changes basis only. Path solving changes relation by
@@ -73,6 +81,8 @@ selects the parameter coordinate used for interpolation.
    :nosignatures:
 
    tal.spatial.Pose
+   tal.spatial.Pose.graph
+   tal.spatial.Pose.with_graph
    tal.spatial.Pose.from_components
    tal.spatial.Pose.from_matrix
    tal.spatial.Pose.decompose

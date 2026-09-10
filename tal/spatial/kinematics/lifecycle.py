@@ -6,6 +6,7 @@ import xarray as xr
 
 from tal.core.typed_lifecycle import TypedLifecycleContext, TypedLifecycleSpec
 
+from ..construction import SpatialConstructionPlan, apply_spatial_construction
 from .family import (
     KinematicsFamilyConfig,
     enforce_angular_invariants,
@@ -31,7 +32,7 @@ def _normalize_kinematics_metadata(
     role: KinematicsLifecycleRole,
 ) -> xr.Dataset:
     if role == "linear":
-        return normalize_typed_metadata(
+        out = normalize_typed_metadata(
             ds,
             rep_getter=cfg.get_linear_rep,
             rep_setter=cfg.set_linear_rep,
@@ -39,8 +40,8 @@ def _normalize_kinematics_metadata(
             cfg=cfg,
             owner=ctx.owner,
         )
-    if role == "angular":
-        return normalize_typed_metadata(
+    elif role == "angular":
+        out = normalize_typed_metadata(
             ds,
             rep_getter=cfg.get_angular_rep,
             rep_setter=cfg.set_angular_rep,
@@ -48,14 +49,22 @@ def _normalize_kinematics_metadata(
             cfg=cfg,
             owner=ctx.owner,
         )
-    return normalize_typed_metadata(
-        ds,
-        rep_getter=cfg.get_family_rep,
-        rep_setter=cfg.set_family_rep,
-        expected_kind=cfg.family_kind,
-        cfg=cfg,
-        owner=ctx.owner,
-    )
+    else:
+        out = normalize_typed_metadata(
+            ds,
+            rep_getter=cfg.get_family_rep,
+            rep_setter=cfg.set_family_rep,
+            expected_kind=cfg.family_kind,
+            cfg=cfg,
+            owner=ctx.owner,
+        )
+    if ctx.options is None:
+        return out
+    if not isinstance(ctx.options, SpatialConstructionPlan):
+        raise TypeError(
+            f"{ctx.owner}: typed spatial construction options must be SpatialConstructionPlan."
+        )
+    return apply_spatial_construction(out, plan=ctx.options, owner=ctx.owner)
 
 
 def _enforce_kinematics_invariants(

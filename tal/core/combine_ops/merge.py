@@ -8,7 +8,11 @@ import xarray as xr
 from .. import validity_values
 from ..param_ops import synchronize_param
 from .align import align_contexts
-from .finalize import finalize_combine_output
+from .finalize import (
+    CombineFinalizationPlan,
+    finalize_combine_output,
+    prepare_combine_finalization,
+)
 from .metadata import (
     canonicalize_optional_names,
     resolve_core_dims,
@@ -262,6 +266,10 @@ def merge_contexts(
     opts: MergeOptions,
     validate: bool,
 ) -> "AnalysisObject":
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner="merge",
+    )
     prealigned = _prealign_contexts(contexts, opts=opts)
     aligned = align_contexts(
         prealigned,
@@ -279,6 +287,7 @@ def merge_contexts(
         merged=merged,
         opts=opts,
         validate=validate,
+        finalization=finalization,
     )
 
 
@@ -303,6 +312,7 @@ def _finalize_merged_context(
     merged: xr.Dataset,
     opts: MergeOptions,
     validate: bool,
+    finalization: CombineFinalizationPlan,
 ) -> "AnalysisObject":
     ds, sequence_dim, batch_dims, param_name, size_name, core_dims = _merge_metadata(aligned, ds=merged)
     ds = _apply_outer_fill_scoped(
@@ -318,7 +328,7 @@ def _finalize_merged_context(
         sequence_dim=sequence_dim,
     )
     return finalize_combine_output(
-        aligned[0],
+        finalization,
         ds,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims if sequence_dim is not None else (),

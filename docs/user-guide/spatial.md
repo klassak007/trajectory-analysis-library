@@ -16,6 +16,7 @@ rotation, transform, or kinematic quantity with a coordinate-frame contract.
 import numpy as np
 import xarray as xr
 from tal.core import AnalysisObject
+from tal.frames import FrameGraph
 from tal.spatial import Pose, Position, Rotation
 
 sample = np.arange(3)
@@ -48,7 +49,15 @@ rot = Rotation(AnalysisObject.from_data(
     validate=True,
 ))
 
-pose = Pose.from_components(rot, pos)
+graph = FrameGraph()
+pose = Pose.from_components(
+    rot,
+    pos,
+    parent="world",
+    child="body",
+    graph=graph,
+)
+detached = pose.with_graph(None)
 out_pos, out_rot = pose.decompose()
 identity_like = pose.compose(pose.inverse())
 rotated = rot.apply(pos)
@@ -63,6 +72,12 @@ pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
 This example builds position and rotation trajectories, composes them into a
 pose, applies transforms, converts representations, and evaluates typed
 rotations/poses on a parameter grid.
+
+Frame declarations are schema metadata. The optional `graph` is a passive,
+wrapper-local association: construction and `with_graph(...)` never create
+frames or register providers. Spatial results retain a shared association;
+Dataset/DataArray conversion and deliberate demotion do not. Use
+`bind_pose(...)` when you intend to register an edge provider.
 
 ## Spatial Types
 
@@ -80,12 +95,24 @@ Spatial constructors validate representation labels. For example, position axes
 must be `x`, `y`, `z`; quaternions must be `x`, `y`, `z`, `w`; matrix layouts
 must use the expected row and column labels.
 
+Direct spatial constructors and the approved Pose, Velocity, and Acceleration
+factories accept `parent=`, `child=`, `expressed_in=`, and `graph=`. Omission
+inherits existing declarations, while explicit `None` clears the corresponding
+declaration or association. `Rotation.from_data(...)` remains a schema-ingress
+factory without these keywords; associate its result with
+`rotation.with_graph(graph)`. `obj.graph` is read-only, and
+`obj.with_graph(graph)` returns a distinct metadata-isolated alias.
+
 ## Transform Algebra
 
 Use `compose(...)`, `inverse()`, and `apply(...)` for local transform algebra.
 Use `Pose.from_components(...)`, `pose.decompose()`, `pose.as_matrix()`,
 `pose.as_components()`, and `Pose.from_matrix(...)` to move between pose
-layouts.
+layouts. Inverse remains graph-free: a framed Pose or Rotation must already be
+expressed in its parent basis. Re-express a third-frame value explicitly with
+`value.express_in(parent).inverse()`. A missing parent denotes an unframed value
+only when the child and expression basis are absent too; otherwise complete or
+clear the partial framing before inversion.
 
 Rotations can be converted with `Rotation.as_matrix()`, `Rotation.as_quat()`,
 and `Rotation.to_rep(...)`.

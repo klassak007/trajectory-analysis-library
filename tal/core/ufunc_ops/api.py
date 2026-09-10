@@ -99,6 +99,7 @@ def apply_binary_ufunc(
         owner=owner,
         validate=validate,
         output_core_dims=runtime.output_core_dims,
+        rewrap_context=runtime.rewrap_context,
     )
 
 

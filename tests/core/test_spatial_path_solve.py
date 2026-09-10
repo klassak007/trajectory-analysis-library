@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import operator
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -8,11 +9,22 @@ from scipy.spatial.transform import Rotation as SciRotation
 
 from tal import AnalysisObject
 from tal.frames import FrameGraph
-from tal.spatial import PathSolveOptions, Pose, Position, Rotation, solve_pose_path_transform, solve_rotation_path_transform
+from tal.spatial import (
+    PathSolveOptions,
+    Pose,
+    Position,
+    Rotation,
+    solve_pose_path_transform,
+    solve_rotation_path_transform,
+)
 from tal.spatial.metadata import get_pose_rep, get_rotation_rep
 from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames
-from tests._path_options_helpers import BAD_PATH_OPTIONS, FalseyPathSolveOptions, forbid_path_resolution
+from tests._path_options_helpers import (
+    BAD_PATH_OPTIONS,
+    FalseyPathSolveOptions,
+    forbid_path_resolution,
+)
 
 _XYZ = ("x", "y", "z")
 _QUAT = ("x", "y", "z", "w")
@@ -449,6 +461,8 @@ def test_spatial_hard_083_path_solver_wraps_resolver_signature_error_with_owner_
 
         with pytest.raises(TypeError) as exc_info:
             solver(sensor, world, **{resolver_arg: bad_resolver})
+    assert type(exc_info.value) is TypeError
+    assert type(exc_info.value.__cause__) is TypeError
     message = str(exc_info.value)
     assert owner in message
     assert "callable(child, parent)" in message
@@ -514,6 +528,8 @@ def test_spatial_hard_085_path_solver_uninspectable_resolver_signature_misuse_pr
         sensor = graph.get_or_create_frame("sensor", parent=body)
         with pytest.raises(TypeError) as exc_info:
             solver(sensor, world, **{resolver_arg: UninspectableBadResolver()})
+    assert type(exc_info.value) is TypeError
+    assert type(exc_info.value.__cause__) is TypeError
     message = str(exc_info.value)
     assert owner in message
     assert "callable(child, parent)" in message

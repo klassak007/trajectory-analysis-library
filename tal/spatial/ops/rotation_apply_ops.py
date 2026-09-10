@@ -23,6 +23,11 @@ from tal.core.schema_read import read_param_coord_name, validate_schema_if_neede
 from tal.utils.frame_schema import set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
 
+from ..association import (
+    SpatialAssociationPlan,
+    attach_spatial_association,
+    resolve_passive_association,
+)
 from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
 from ..policies.frame import resolve_apply_output_frames
 from ..kinematics.vector6_ops import (
@@ -370,18 +375,25 @@ def _rotation_apply_with_owner(
     *,
     validate: bool,
     owner: str,
+    association: SpatialAssociationPlan | None = None,
 ) -> object:
     if not isinstance(target, _SUPPORTED_TARGET_TYPES):
         raise TypeError(
             f"{owner}: target must be Position, LinearVelocity, AngularVelocity, "
             "LinearAcceleration, AngularAcceleration, Velocity, or Acceleration."
         )
+    result_association = association or resolve_passive_association(
+        (rotation, target),
+        owner=owner,
+    )
     rotation._enforce_invariants(owner=owner)
     target._enforce_invariants(owner=owner)
     _ = resolve_apply_output_frames(analysis_object_dataset(rotation), analysis_object_dataset(target), owner=owner)
     if isinstance(target, _VECTOR_TARGET_TYPES):
-        return _apply_to_vector_target(rotation, target, validate=validate, owner=owner)
-    return _apply_to_spatial_target(rotation, target, validate=validate, owner=owner)
+        result = _apply_to_vector_target(rotation, target, validate=validate, owner=owner)
+    else:
+        result = _apply_to_spatial_target(rotation, target, validate=validate, owner=owner)
+    return attach_spatial_association(result, result_association)
 
 
 def rotation_apply(rotation: "Rotation", target: object, *, validate: bool) -> object:

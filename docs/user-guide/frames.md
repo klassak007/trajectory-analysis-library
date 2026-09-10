@@ -96,3 +96,36 @@ operations, not by the frame graph registry itself.
 - {doc}`spatial`
 - {doc}`viewing`
 - API: {doc}`../api/frames`
+
+## Bound spatial transforms
+
+Use `tal.spatial.bind_pose(graph, parent, child, pose)` to attach a pose value
+or a `(child, parent)` callback to an edge. Transform with
+`position.to_frame(destination, graph=graph)` or solve with
+`Pose.solve_path_transform(source, destination, graph=graph)`. Rotation paths
+use the bound pose's rotation component. See the self-contained
+[bound-pose example](../api/types/path_solve.md#minimal-example).
+
+The graph endpoints are the complete edge relation. Each provider frame tag,
+when present, must match its corresponding endpoint; the graph supplies omitted
+tags. The numerical representation must be in the edge-parent basis. Call
+`pose.express_in(parent, graph=graph)` before binding a third-frame value. Lazy
+provider payloads are non-owning: keep their owning AO open through dependent
+computation. Replacing or removing a binding never closes it.
+
+This differs from `ao.frames.bind(...)`, which resolves metadata IDs to frame
+objects and does not attach a spatial provider. Binding a pose leaves motion
+and inertial declarations unchanged.
+
+## Passive spatial association
+
+Spatial constructors accept frame declarations and an optional graph without
+mutating that graph. For example, `Position(data, parent="camera", graph=graph)`
+associates a newly constructed position, while
+`position.with_graph(other_graph)` returns a distinct associated alias.
+
+`position.graph` is wrapper-local runtime context used by later graph-required
+operations when no explicit graph is supplied. It is not serialized into the
+Dataset, and ordinary construction or algebra never falls back to the active
+graph. Association is separate from `bind_pose(...)`: the former remembers a
+graph, while the latter registers an edge provider.

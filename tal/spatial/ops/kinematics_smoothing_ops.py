@@ -149,12 +149,17 @@ def smooth_kinematics_like(
     sequence_size_coord: str | None,
     owner: str,
 ):
-    from ..policies.wrap import wrap_as
+    from ..association import finalize_spatial_from_source
 
     request = SmoothingRequest(source, on, opts, validate, sequence_dim, batch_dims, sequence_size_coord, owner)
     try:
         finalized, spec = _run_smoothing_request(request)
-        return wrap_as(spec.target_cls, finalized, validate=validate)
+        return finalize_spatial_from_source(
+            source,
+            spec.target_cls,
+            finalized,
+            validate=validate,
+        )
     except (TypeError, ValueError) as exc:
         raise _wrap_owner_error(exc, owner=owner) from exc
 

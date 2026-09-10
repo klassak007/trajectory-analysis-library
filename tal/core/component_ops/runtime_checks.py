@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import xarray as xr
 
-from ..orchestration.runtime_checks import require_declared_roles_with_sequence as _require_roles_with_sequence
+from ..orchestration.runtime_checks import (
+    require_declared_roles_with_sequence as _require_roles_with_sequence,
+)
 from .types import ComponentSpec
 
 _NUMERIC_KINDS = {"i", "u", "f", "c"}
@@ -41,6 +43,38 @@ def select_component_var(
     if ds[var_name].dtype.kind not in _NUMERIC_KINDS:
         raise ValueError(f"{prefix} selected var {var_name!r} must be numeric.")
     return var_name
+
+
+def select_patch_component_var(
+    ds: xr.Dataset,
+    *,
+    base_var: str,
+    base_spec: ComponentSpec,
+    patch_spec: ComponentSpec | None,
+    component_name: str,
+    owner: str,
+) -> str:
+    if patch_spec is not None:
+        return select_component_var(
+            ds,
+            spec=patch_spec,
+            component_name=component_name,
+            owner=owner,
+            operand="patch",
+        )
+    fallback_var = base_var if base_var in ds.data_vars else None
+    fallback_spec = ComponentSpec(
+        core_dim=base_spec.core_dim,
+        labels=base_spec.labels,
+        var=fallback_var,
+    )
+    return select_component_var(
+        ds,
+        spec=fallback_spec,
+        component_name=component_name,
+        owner=owner,
+        operand="patch",
+    )
 
 
 def require_component_numeric_var(
@@ -116,4 +150,5 @@ __all__ = [
     "require_exact_label_set",
     "require_explicit_unique_labels",
     "select_component_var",
+    "select_patch_component_var",
 ]

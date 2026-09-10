@@ -5,8 +5,11 @@ from typing import TYPE_CHECKING, Literal
 import xarray as xr
 
 from tal.core.analysis_object import AnalysisObject
+from tal.core.schema import UNSET, UnsetType
 from tal.core.typed_lifecycle import TypedAnalysisObject
+from tal.frames import FrameGraph
 
+from .construction import SpatialTypedConstructionMixin, preflight_spatial_construction
 from .kinematics.family import (
     KinematicsClasses,
     KinematicsFamilyConfig,
@@ -19,6 +22,7 @@ from .kinematics.family import (
     family_to_rep,
 )
 from .kinematics.lifecycle import make_kinematics_lifecycle_spec
+from .kinematics.paired_components import PairAssemblyOptions
 from .kinematics.vector6_ops import ACCELERATION_VECTOR6_OPTS
 from .metadata import (
     get_acceleration_rep,
@@ -31,7 +35,6 @@ from .metadata import (
     set_linear_acceleration_rep,
     validate_spatial_roles,
 )
-from .kinematics.paired_components import PairAssemblyOptions
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 
@@ -133,8 +136,11 @@ def _classes() -> KinematicsClasses:
     )
 
 
-class LinearAcceleration(TypedAnalysisObject):
+class LinearAcceleration(SpatialTypedConstructionMixin, TypedAnalysisObject):
     """Linear acceleration vector type.
+
+    ``parent``, ``child``, and ``expressed_in`` constructor keywords declare
+    frame metadata; ``graph`` adds passive wrapper association only.
 
     Notes
     -----
@@ -143,6 +149,7 @@ class LinearAcceleration(TypedAnalysisObject):
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
     LIFECYCLE = _LINEAR_ACCELERATION_LIFECYCLE
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.linear_acceleration.__init__"
 
     def integrate(
         self,
@@ -193,7 +200,9 @@ class LinearAcceleration(TypedAnalysisObject):
         >>> isinstance(opts, KinematicsIntegralOptions)
         True
         """
-        from .ops.kinematics_temporal_ops import integrate_linear_acceleration_to_linear_velocity
+        from .ops.kinematics_temporal_ops import (
+            integrate_linear_acceleration_to_linear_velocity,
+        )
 
         return integrate_linear_acceleration_to_linear_velocity(
             self,
@@ -272,7 +281,8 @@ class LinearAcceleration(TypedAnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "LinearAcceleration":
@@ -282,8 +292,10 @@ class LinearAcceleration(TypedAnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_pose_fn : object
-            Callable resolving pose edges for frame-path traversal.
+        edge_pose_fn : object, optional
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -317,6 +329,7 @@ class LinearAcceleration(TypedAnalysisObject):
             self,
             dst=dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
             owner="spatial.linear_acceleration.to_frame",
@@ -326,7 +339,8 @@ class LinearAcceleration(TypedAnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "LinearAcceleration":
@@ -336,8 +350,10 @@ class LinearAcceleration(TypedAnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_rotation_fn : object
-            Callable resolving rotation edges for frame-path traversal.
+        edge_rotation_fn : object, optional
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -371,14 +387,18 @@ class LinearAcceleration(TypedAnalysisObject):
             self,
             dst=dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
             owner="spatial.linear_acceleration.express_in",
         )
 
 
-class AngularAcceleration(TypedAnalysisObject):
+class AngularAcceleration(SpatialTypedConstructionMixin, TypedAnalysisObject):
     """Angular acceleration vector type.
+
+    ``parent``, ``child``, and ``expressed_in`` constructor keywords declare
+    frame metadata; ``graph`` adds passive wrapper association only.
 
     Notes
     -----
@@ -387,6 +407,7 @@ class AngularAcceleration(TypedAnalysisObject):
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
     LIFECYCLE = _ANGULAR_ACCELERATION_LIFECYCLE
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.angular_acceleration.__init__"
 
     def integrate(
         self,
@@ -437,7 +458,9 @@ class AngularAcceleration(TypedAnalysisObject):
         >>> isinstance(opts, KinematicsIntegralOptions)
         True
         """
-        from .ops.kinematics_temporal_ops import integrate_angular_acceleration_to_angular_velocity
+        from .ops.kinematics_temporal_ops import (
+            integrate_angular_acceleration_to_angular_velocity,
+        )
 
         return integrate_angular_acceleration_to_angular_velocity(
             self,
@@ -516,7 +539,8 @@ class AngularAcceleration(TypedAnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "AngularAcceleration":
@@ -526,8 +550,10 @@ class AngularAcceleration(TypedAnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_pose_fn : object
-            Callable resolving pose edges for frame-path traversal.
+        edge_pose_fn : object, optional
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -561,6 +587,7 @@ class AngularAcceleration(TypedAnalysisObject):
             self,
             dst=dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
             owner="spatial.angular_acceleration.to_frame",
@@ -570,7 +597,8 @@ class AngularAcceleration(TypedAnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "AngularAcceleration":
@@ -580,8 +608,10 @@ class AngularAcceleration(TypedAnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_rotation_fn : object
-            Callable resolving rotation edges for frame-path traversal.
+        edge_rotation_fn : object, optional
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -615,14 +645,18 @@ class AngularAcceleration(TypedAnalysisObject):
             self,
             dst=dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
             owner="spatial.angular_acceleration.express_in",
         )
 
 
-class Acceleration(TypedAnalysisObject):
+class Acceleration(SpatialTypedConstructionMixin, TypedAnalysisObject):
     """Spatial acceleration family type (linear + angular).
+
+    ``parent``, ``child``, and ``expressed_in`` constructor keywords declare
+    frame metadata; ``graph`` adds passive wrapper association only.
 
     Notes
     -----
@@ -631,9 +665,20 @@ class Acceleration(TypedAnalysisObject):
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
     LIFECYCLE = _ACCELERATION_LIFECYCLE
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.acceleration.__init__"
 
     @classmethod
-    def from_linear_angular(cls, linear: object, angular: object, *, validate: bool = True) -> "Acceleration":
+    def from_linear_angular(
+        cls,
+        linear: object,
+        angular: object,
+        *,
+        parent: str | None | UnsetType = UNSET,
+        child: str | None | UnsetType = UNSET,
+        expressed_in: str | None | UnsetType = UNSET,
+        graph: FrameGraph | None | UnsetType = UNSET,
+        validate: bool = True,
+    ) -> "Acceleration":
         """Assemble an ``Acceleration`` from linear and angular components.
 
         Parameters
@@ -642,6 +687,12 @@ class Acceleration(TypedAnalysisObject):
             Operand/component input consumed by this operation.
         angular : object
             Operand/component input consumed by this operation.
+        parent, child, expressed_in : str or None, optional
+            Frame declarations to inherit, confirm, add, or explicitly clear. Omission
+            inherits the corresponding declaration from the inputs.
+        graph : FrameGraph or None, optional
+            Passive wrapper association. Omission inherits a compatible input
+            association; it does not mutate graph topology.
         validate : bool, optional
             When ``True``, validate output schema/layout invariants before returning.
 
@@ -661,13 +712,22 @@ class Acceleration(TypedAnalysisObject):
         >>> sorted(acceleration.as_dataset().data_vars)  # doctest: +SKIP
         ['angular_acceleration', 'linear_acceleration']
         """
+        owner = "spatial.acceleration.from_linear_angular"
+        overrides = preflight_spatial_construction(
+            parent=parent,
+            child=child,
+            expressed_in=expressed_in,
+            graph=graph,
+            owner=owner,
+        )
         return family_from_linear_angular(
             linear,
             angular,
             cfg=_ACCELERATION_CONFIG,
             classes=_classes(),
-            owner="spatial.acceleration.from_linear_angular",
+            owner=owner,
             validate=validate,
+            overrides=overrides,
         )
 
     @classmethod
@@ -675,6 +735,10 @@ class Acceleration(TypedAnalysisObject):
         cls,
         data: "AnalysisObject | xr.Dataset | xr.DataArray",
         *,
+        parent: str | None | UnsetType = UNSET,
+        child: str | None | UnsetType = UNSET,
+        expressed_in: str | None | UnsetType = UNSET,
+        graph: FrameGraph | None | UnsetType = UNSET,
         validate: bool = True,
     ) -> "Acceleration":
         """Construct an ``Acceleration`` from a 6-vector representation.
@@ -683,6 +747,12 @@ class Acceleration(TypedAnalysisObject):
         ----------
         data : AnalysisObject | xr.Dataset | xr.DataArray
             Input data payload used to construct/derive an output object.
+        parent, child, expressed_in : str or None, optional
+            Frame declarations to inherit, confirm, add, or explicitly clear. Omission
+            inherits the corresponding declaration from ``data``.
+        graph : FrameGraph or None, optional
+            Passive wrapper association. Omission inherits any association from
+            ``data``; it does not mutate graph topology.
         validate : bool, optional
             When ``True``, validate output schema/layout invariants before returning.
 
@@ -701,12 +771,21 @@ class Acceleration(TypedAnalysisObject):
         >>> acceleration = Acceleration.from_vector6(vector6_ao)  # doctest: +SKIP
         >>> acceleration.as_components().linear()  # doctest: +SKIP
         """
+        owner = "spatial.acceleration.from_vector6"
+        overrides = preflight_spatial_construction(
+            parent=parent,
+            child=child,
+            expressed_in=expressed_in,
+            graph=graph,
+            owner=owner,
+        )
         return family_from_vector6(
             data,
             cfg=_ACCELERATION_CONFIG,
             classes=_classes(),
-            owner="spatial.acceleration.from_vector6",
+            owner=owner,
             validate=validate,
+            overrides=overrides,
         )
 
     def to_rep(self, rep: Literal["components", "vector6"], *, validate: bool = True) -> "Acceleration":
@@ -1003,7 +1082,8 @@ class Acceleration(TypedAnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Acceleration":
@@ -1013,8 +1093,10 @@ class Acceleration(TypedAnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_pose_fn : object
-            Callable resolving pose edges for frame-path traversal.
+        edge_pose_fn : object, optional
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -1048,6 +1130,7 @@ class Acceleration(TypedAnalysisObject):
             self,
             dst=dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
             owner="spatial.acceleration.to_frame",
@@ -1057,7 +1140,8 @@ class Acceleration(TypedAnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Acceleration":
@@ -1067,8 +1151,10 @@ class Acceleration(TypedAnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_rotation_fn : object
-            Callable resolving rotation edges for frame-path traversal.
+        edge_rotation_fn : object, optional
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -1102,6 +1188,7 @@ class Acceleration(TypedAnalysisObject):
             self,
             dst=dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
             owner="spatial.acceleration.express_in",
@@ -1115,6 +1202,8 @@ __all__ = [
 ]
 
 
-from .ops.magnitude_ops import install_acceleration_magnitude_methods as _install_acceleration_magnitude_methods
+from .ops.magnitude_ops import (
+    install_acceleration_magnitude_methods as _install_acceleration_magnitude_methods,
+)
 
 _install_acceleration_magnitude_methods(LinearAcceleration, AngularAcceleration)

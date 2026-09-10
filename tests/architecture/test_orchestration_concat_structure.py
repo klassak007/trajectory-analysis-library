@@ -95,15 +95,6 @@ def test_orch_concat_arch_009_concat_sequence_no_local_finalize_owner_helpers() 
         assert needle not in text, f"local finalize owner helper {needle!r} remains in concat_sequence.py"
 
 
-def test_orch_concat_arch_010_concat_finalize_reuses_orchestration_finalize_boundary() -> None:
-    """ID: ORCH_CONCAT_ARCH_010_concat_finalize_reuses_orchestration_finalize_boundary."""
-    text = Path("tal/core/combine_ops/concat_finalize.py").read_text(encoding="utf-8")
-    assert "from .finalize import finalize_combine_output" in text
-    assert "from ..ao_internal import" not in text
-    assert "finalize_structural(" not in text
-    assert "from_unvalidated_like(" not in text
-
-
 def test_orch_concat_metric_001_concat_sequence_driver_size_reduced() -> None:
     """ID: ORCH_CONCAT_METRIC_001_concat_sequence_driver_size_reduced."""
     path = Path("tal/core/combine_ops/concat_sequence.py")

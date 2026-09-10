@@ -7,7 +7,11 @@ import numpy as np
 import xarray as xr
 
 from .align import align_contexts
-from .finalize import finalize_combine_output
+from .finalize import (
+    CombineFinalizationPlan,
+    finalize_combine_output,
+    prepare_combine_finalization,
+)
 from .metadata import canonicalize_optional_names, shared_optional_name
 from .normalize import normalize_inputs, resolve_contexts
 from .options import coerce_core_concat_options
@@ -164,6 +168,7 @@ def concat_core_contexts(
     *,
     opts: CoreConcatOptions,
     validate: bool,
+    finalization: CombineFinalizationPlan,
 ) -> "AnalysisObject":
     sequence_dim, batch_dims, core_dims = _require_shared_declared_roles(contexts, owner="concat_core")
     _require_target_core_dim(core_dims, core_dim=opts.core_dim, owner="concat_core")
@@ -191,7 +196,7 @@ def concat_core_contexts(
         size_name=shared_optional_name([ctx.sequence_size_coord for ctx in contexts]),
     )
     return finalize_combine_output(
-        contexts[0],
+        finalization,
         ds_out,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
@@ -211,11 +216,20 @@ def concat_core(
     options = coerce_core_concat_options(opts, owner="concat_core")
     objects = normalize_inputs(aos, owner="concat_core")
     contexts = resolve_contexts(objects, resolve=CombineResolveOptions(require_sequence=True, owner="concat_core"))
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner="concat_core",
+    )
     aligned = align_contexts(
         contexts,
         opts=AlignOptions(batch_join="exact", sequence_join="exact", fill_value=np.nan, pad_invalid_outer=True),
     )
-    return concat_core_contexts(aligned, opts=options, validate=validate)
+    return concat_core_contexts(
+        aligned,
+        opts=options,
+        validate=validate,
+        finalization=finalization,
+    )
 
 
 __all__ = [

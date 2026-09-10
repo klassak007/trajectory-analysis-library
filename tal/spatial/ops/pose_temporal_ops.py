@@ -7,14 +7,18 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import xarray as xr
 
-from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import read_components
 from tal.core.component_ops.runtime_checks import select_component_var
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.schema_read import read_roles
 
 from ..metadata import get_pose_rep
-from ..temporal.options import PoseTemporalOptions, as_rotation_method, resolve_rotation_method
+from ..temporal.options import (
+    PoseTemporalOptions,
+    as_rotation_method,
+    resolve_rotation_method,
+)
 
 if TYPE_CHECKING:
     from ..pose import Pose
@@ -183,6 +187,26 @@ def _matrix_only_pose_source(
     return source.__class__._from_unvalidated(matrix_only), matrix_var
 
 
+def _matrix_core_dim_renames(
+    source_core: tuple[str, ...],
+    typed_core: tuple[str, ...],
+    *,
+    owner: str,
+) -> dict[str, str]:
+    if not source_core or not typed_core:
+        return {}
+    if len(source_core) != len(typed_core):
+        raise ValueError(
+            f"{owner}: source/typed matrix core dims are incompatible: "
+            f"{source_core!r} vs {typed_core!r}."
+        )
+    return {
+        typed_dim: source_dim
+        for typed_dim, source_dim in zip(typed_core, source_core, strict=True)
+        if typed_dim != source_dim
+    }
+
+
 def _overlay_matrix_payload(
     carrier_ds: xr.Dataset,
     typed_ds: xr.Dataset,
@@ -201,18 +225,9 @@ def _overlay_matrix_payload(
     typed_da = typed_ds[typed_var]
     _, source_seq, _, source_core = read_roles(carrier_ds)
     _, typed_seq, _, typed_core = read_roles(typed_ds)
-    rename_map: dict[str, str] = {}
+    rename_map = _matrix_core_dim_renames(source_core, typed_core, owner=owner)
     if typed_seq is not None and source_seq is not None and typed_seq != source_seq:
         rename_map[typed_seq] = source_seq
-    if source_core and typed_core:
-        if len(source_core) != len(typed_core):
-            raise ValueError(
-                f"{owner}: source/typed matrix core dims are incompatible: "
-                f"{source_core!r} vs {typed_core!r}."
-            )
-        for typed_dim, source_dim in zip(typed_core, source_core, strict=True):
-            if typed_dim != source_dim:
-                rename_map[typed_dim] = source_dim
     if rename_map:
         typed_da = typed_da.reset_coords(drop=True).rename(rename_map)
     if set(typed_da.dims) != set(carrier_da.dims):
@@ -280,7 +295,7 @@ def _rewrap_matrix_aux_unvalidated(
         merged_ds=merged_ds,
         owner=owner,
     )
-    out = source.__class__._from_unvalidated(matrix_template_ds)
+    out = source._rewrap_dataset(matrix_template_ds, validate=False)
     out._bind_dataset(merged_ds)
     return out
 
@@ -291,9 +306,7 @@ def _rewrap_pose_temporal_output(
     merged_ds: xr.Dataset,
     validate: bool,
 ) -> Pose:
-    if validate:
-        return source.__class__._from_validated(merged_ds)
-    return source.__class__._from_unvalidated(merged_ds)
+    return source._rewrap_dataset(merged_ds, validate=validate)
 
 
 def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:

@@ -105,6 +105,17 @@ def get_expressed_in(ds: xr.Dataset, *, owner: str) -> str | None:
     return parent
 
 
+def _get_explicit_expressed_in(
+    ds: xr.Dataset,
+    *,
+    owner: str,
+) -> str | None:
+    block = _read_relation_block(ds, owner=owner)
+    if block is None or "expressed_in" not in block:
+        return None
+    return _normalize_expressed_in(block["expressed_in"], owner=owner)
+
+
 def set_expressed_in(
     ds: xr.Dataset,
     *,
@@ -125,6 +136,21 @@ def set_expressed_in(
         ds,
         _relation_patch(expressed_in=normalized, instantaneous_inertial=current_inertial),
         validate=validate,
+    )
+
+
+def clear_expressed_in(
+    ds: xr.Dataset,
+    *,
+    validate: bool,
+    owner: str,
+) -> xr.Dataset:
+    """Clear an explicit representation-basis identifier functionally."""
+    return set_expressed_in(
+        ds,
+        expressed_in=None,
+        validate=validate,
+        owner=owner,
     )
 
 
@@ -153,7 +179,7 @@ def set_instantaneous_inertial(
 ) -> xr.Dataset:
     ds = _require_dataset(ds, owner=owner)
     normalized = _normalize_instantaneous_inertial(instantaneous_inertial, owner=owner)
-    current_expressed_in = get_expressed_in(ds, owner=owner)
+    current_expressed_in = _get_explicit_expressed_in(ds, owner=owner)
     return merge_schema(
         ds,
         _relation_patch(expressed_in=current_expressed_in, instantaneous_inertial=normalized),
@@ -173,7 +199,7 @@ def normalize_configuration_relation_semantics(
         raise ValueError(
             f"{owner}: tal.ext.spatial.relation.instantaneous_inertial is kinematics-only metadata."
         )
-    expressed_in = get_expressed_in(ds, owner=owner)
+    expressed_in = _get_explicit_expressed_in(ds, owner=owner)
     return merge_schema(
         ds,
         _relation_patch(expressed_in=expressed_in, instantaneous_inertial=None),
@@ -188,7 +214,7 @@ def normalize_kinematic_relation_semantics(
     owner: str,
 ) -> xr.Dataset:
     ds = _require_dataset(ds, owner=owner)
-    expressed_in = get_expressed_in(ds, owner=owner)
+    expressed_in = _get_explicit_expressed_in(ds, owner=owner)
     inertial = get_instantaneous_inertial(ds, owner=owner)
     return merge_schema(
         ds,
@@ -198,6 +224,7 @@ def normalize_kinematic_relation_semantics(
 
 
 __all__ = [
+    "clear_expressed_in",
     "get_expressed_in",
     "get_instantaneous_inertial",
     "normalize_configuration_relation_semantics",

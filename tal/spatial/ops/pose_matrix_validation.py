@@ -76,6 +76,7 @@ def _validate_matrix(
     }
     out = out.assign_coords(coords)
     out.name = matrix.name
+    out.encoding = matrix.encoding.copy()
     return var_name, out
 
 

@@ -5,7 +5,11 @@ from itertools import product
 import xarray as xr
 
 from ..dataset_ownership import analysis_object_dataset
-from .finalize import finalize_combine_output
+from .finalize import (
+    CombineFinalizationPlan,
+    finalize_combine_output,
+    prepare_combine_finalization,
+)
 from .normalize import normalize_inputs, resolve_contexts
 from .options import coerce_core_decompose_options
 from .types import CombineContext, CombineResolveOptions, CoreDecomposeOptions
@@ -130,10 +134,10 @@ def _finalize_leaf(
     batch_dims: tuple[str, ...],
     core_dims: tuple[str, ...],
     validate: bool,
-    source_ao: "AnalysisObject",
+    finalization: CombineFinalizationPlan,
 ) -> "AnalysisObject":
     return finalize_combine_output(
-        context,
+        finalization,
         ds,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
@@ -141,7 +145,6 @@ def _finalize_leaf(
         param_coord=_optional_coord_name(ds, name=context.param_coord),
         sequence_size_coord=_optional_coord_name(ds, name=context.sequence_size_coord),
         validate=validate,
-        source_ao=source_ao,
     )
 
 
@@ -164,6 +167,11 @@ def decompose_core(
     var_name, data = _select_single_numeric_var(context, owner=owner)
     keys = _resolve_keys(data, core_dims=options.core_dims, key_mode=options.key_mode, owner=owner)
     source_ao = _base_finalize_source(context)
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner=owner,
+        source_ao=source_ao,
+    )
     out: dict[tuple[object, ...], "AnalysisObject"] = {}
     for key in keys:
         leaf_ds = _extract_leaf_dataset(
@@ -181,7 +189,7 @@ def decompose_core(
             batch_dims=batch_dims,
             core_dims=remaining_core_dims,
             validate=validate,
-            source_ao=source_ao,
+            finalization=finalization,
         )
     return out
 

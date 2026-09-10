@@ -37,7 +37,6 @@ from tal.core.schema_read import (
 from tal.utils.xarray_namespace import unique_temp_dim
 
 from ..kernels.rotation_mean_kernels import quat_mean_kernel
-from ..policies.wrap import wrap_as
 from .quat_role_dim_ops import resolve_quat_dim_with_role_fallback
 
 if TYPE_CHECKING:
@@ -417,7 +416,7 @@ def rotation_mean(
         owner=owner,
     )
     if not request.reduce_dims:
-        return wrap_as(rotation.__class__, source, validate=validate)
+        return rotation._rewrap_dataset(source, validate=validate)
     if not request.active_reduce_dims:
         return _reduce_structural_dims(
             rotation,

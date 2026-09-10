@@ -12,6 +12,7 @@ from .path_solve import PathSolveOptions, solve_pose_path_transform, solve_rotat
 from .path_solve import KinematicsPathSupportOptions
 from .position import Position
 from .pose import Pose
+from .pose_binding import bind_pose
 from .rotation import Rotation
 from .temporal.surface import AO_TEMPORAL_KIND_VALUES, differentiate, integrate, smooth
 from .velocity import AngularVelocity, LinearVelocity, Velocity
@@ -31,6 +32,7 @@ __all__ = [
     "Pose",
     "Rotation",
     "Velocity",
+    "bind_pose",
     "differentiate",
     "get_edge_motion_class",
     "get_frame_inertial_status",

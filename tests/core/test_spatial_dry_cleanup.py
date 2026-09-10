@@ -9,10 +9,22 @@ import xarray as xr
 
 from tal import AnalysisObject
 from tal import ufuncs as tal_ufuncs
-from tal.core import ComponentRegistryOptions, ComponentSpec, define_components, read_components
+from tal.core import (
+    ComponentRegistryOptions,
+    ComponentSpec,
+    define_components,
+    read_components,
+)
+from tal.core.orchestration.runtime_checks import (
+    resolve_single_numeric_var_single_core_dim,
+)
 from tal.core.schema import set_param_coord
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
-from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
+from tal.frames import FrameGraph
 from tal.spatial import (
     Acceleration,
     AngularAcceleration,
@@ -774,19 +786,15 @@ def test_spatial_hard_119_owner_prefixed_apply_boundaries_preserved_after_intern
         _pose().apply(object(), validate=True)
 
 
-def test_spatial_hard_120_position_to_frame_identity_path_still_enforces_owner_prefixed_validation() -> None:
-    """ID: SPATIAL_HARD_120_position_to_frame_identity_path_still_enforces_owner_prefixed_validation."""
-    source = frame_retag(_position(), parent="world", child="body", validate=True)
-    with pytest.raises(TypeError, match="spatial.position.to_frame"):
-        source.to_frame("world", edge_pose_fn=object(), validate=True)
-
-
 def test_spatial_hard_121_owner_prefixed_frame_path_solver_errors_preserved_after_ops_relayout() -> None:
     """ID: SPATIAL_HARD_121_owner_prefixed_frame_path_solver_errors_preserved_after_ops_relayout."""
+    graph = FrameGraph()
+    parent = graph.get_or_create_frame("a")
+    child = graph.get_or_create_frame("b", parent=parent)
     with pytest.raises(TypeError, match="spatial.pose.solve_path_transform"):
-        Pose.solve_path_transform("a", "b", edge_pose_fn=object(), validate=True)
+        Pose.solve_path_transform(parent, child, graph=graph, edge_pose_fn=object(), validate=True)
     with pytest.raises(TypeError, match="spatial.rotation.solve_path_transform"):
-        Rotation.solve_path_transform("a", "b", edge_rotation_fn=object(), validate=True)
+        Rotation.solve_path_transform(parent, child, graph=graph, edge_rotation_fn=object(), validate=True)
 
 
 def test_spatial_hard_122_removed_flat_internal_module_files_remain_absent() -> None:

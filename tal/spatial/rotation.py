@@ -28,12 +28,17 @@ from tal.core.orchestration.topology import (
 )
 from tal.core.schema_errors import SchemaError
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
-from tal.core.typed_lifecycle import _finish_typed_promotion, _prepare_typed_promotion
 from tal.utils.frame_schema import get_frames, set_frames
 from tal.utils.topology_operation_families import (
     operation_intent_support_for_operation_family,
 )
 
+from .association import (
+    SpatialAssociationPlan,
+    finalize_spatial_as,
+    resolve_passive_association,
+)
+from .construction import SpatialConfigurationConstructionMixin
 from .conversion.finalize import (
     allocate_dim_pair,
     allocate_free_dim_name,
@@ -46,9 +51,11 @@ from .kernels.rotation_kernels import matrix_to_quat_kernel, quat_to_matrix_kern
 from .metadata import (
     get_rotation_rep,
     normalize_configuration_relation_semantics,
+    set_expressed_in,
     set_rotation_rep,
 )
 from .ops.frame_api_ops import rotation_class_solve_path_transform
+from .ops.frame_owner_common import require_parent_basis_for_inverse
 from .ops.quat_role_dim_ops import (
     require_matrix_core_dims,
     require_rotation_ingress_core_roles,
@@ -62,11 +69,10 @@ from .ops.rotation_layout_ops import (
     require_quat_var_and_dim,
 )
 from .policies.frame import resolve_compose_output_frames
-from .policies.wrap import wrap_as
 
 if TYPE_CHECKING:
     from tal.core.param_ops.types import ParamEvalOptions
-    from tal.frames import Frame
+    from tal.frames import Frame, FrameGraph
 
     from .acceleration import Acceleration, AngularAcceleration, LinearAcceleration
     from .path_solve import PathSolveOptions
@@ -198,10 +204,6 @@ def _normalize_target_rep(rep: object, *, owner: str) -> Literal["quat", "matrix
     if cleaned == "matrix":
         return "matrix"
     raise ValueError(f"{owner}: unsupported target rotation representation {cleaned!r}; allowed={sorted(_ALLOWED_TARGET_REPS)!r}.")
-def _wrap_rotation_output(ds: xr.Dataset, *, validate: bool) -> Rotation:
-    return wrap_as(Rotation, ds, validate=validate)
-
-
 def _prepare_compose_quat_inputs(
     left_ds: xr.Dataset,
     right_ds: xr.Dataset,
@@ -339,7 +341,9 @@ def _rotation_compose_with_owner(
     *,
     validate: bool,
     owner: str,
+    association: SpatialAssociationPlan | None = None,
 ) -> Rotation:
+    result_association = association or resolve_passive_association((left, right), owner=owner)
     left._enforce_invariants(owner=owner)
     right._enforce_invariants(owner=owner)
     left_rep = get_rotation_rep(left_ds := analysis_object_dataset(left), owner=owner)
@@ -366,7 +370,7 @@ def _rotation_compose_with_owner(
     )
     composed_quat = set_frames(composed_quat, parent=parent, child=child, validate=False)
     result = _convert_quat_result_to_rep(composed_quat, quat_dim=quat_dim, target_rep=left_rep, owner=owner)
-    return _wrap_rotation_output(result, validate=validate)
+    return finalize_spatial_as(Rotation, result, validate=validate, association=result_association)
 
 
 def _rotation_inverse_with_owner(
@@ -376,17 +380,35 @@ def _rotation_inverse_with_owner(
     owner: str,
 ) -> Rotation:
     rotation._enforce_invariants(owner=owner)
+    require_parent_basis_for_inverse(rotation, owner=owner)
     source_rep = get_rotation_rep(source := analysis_object_dataset(rotation), owner=owner)
     source_quat = rotation.as_quat(validate=False)
     inverse_quat, quat_dim = _inverse_quat_dataset(analysis_object_dataset(source_quat), owner=owner)
     parent, child = get_frames(source)
     inverse_quat = set_frames(inverse_quat, parent=child, child=parent, validate=False)
+    inverse_quat = set_expressed_in(
+        inverse_quat,
+        expressed_in=child,
+        validate=False,
+        owner=owner,
+    )
     result = _convert_quat_result_to_rep(inverse_quat, quat_dim=quat_dim, target_rep=source_rep, owner=owner)
-    return _wrap_rotation_output(result, validate=validate)
+    return rotation._rewrap_dataset(result, validate=validate)
 
 
-class Rotation(AnalysisObject):
+class Rotation(SpatialConfigurationConstructionMixin, AnalysisObject):
     """3D orientation type with quaternion/matrix representations.
+
+    Parameters
+    ----------
+    data : AnalysisObject, xarray.Dataset, or xarray.DataArray
+        Rotation payload accepted by the typed ownership boundary.
+    parent, child, expressed_in : str or None, optional
+        Frame declarations to inherit, confirm, add, or explicitly clear. Omitting a
+        declaration inherits it from ``data``.
+    graph : FrameGraph or None, optional
+        Passive wrapper association. Omission inherits any association from ``data``;
+        this does not create graph topology.
 
     Notes
     -----
@@ -395,15 +417,9 @@ class Rotation(AnalysisObject):
     CANONICAL_REP: str = "quat"
     QUAT_LABELS: tuple[str, str, str, str] = _QUAT_LABELS
     MATRIX_LABELS: tuple[str, str, str] = _MATRIX_LABELS
-
-    def __init__(self, data: AnalysisObject | xr.Dataset | xr.DataArray) -> None:
-        owner = "spatial.rotation.__init__"
-        source = _coerce_rotation_source(data, owner=owner)
-        self._bind_dataset(_prepare_typed_promotion(source, owner=owner))
-        self._normalize_metadata(owner=owner)
-        require_rotation_ingress_core_roles(analysis_object_dataset(self), owner=owner)
-        self._enforce_invariants(owner=owner)
-        _finish_typed_promotion(source, analysis_object_dataset(self))
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.rotation.__init__"
+    SPATIAL_SOURCE_COERCER = staticmethod(_coerce_rotation_source)
+    SPATIAL_PRE_ENFORCE = staticmethod(require_rotation_ingress_core_roles)
 
     @classmethod
     def from_data(
@@ -557,12 +573,12 @@ class Rotation(AnalysisObject):
         source = analysis_object_dataset(self)
         current = get_rotation_rep(source, owner=owner)
         if target == current:
-            return _wrap_rotation_output(source, validate=validate)
+            return self._rewrap_dataset(source, validate=validate)
         if target == "matrix":
             converted = _convert_quat_to_matrix(source, owner=owner)
         else:
             converted = _convert_matrix_to_quat(source, owner=owner)
-        return _wrap_rotation_output(converted, validate=validate)
+        return self._rewrap_dataset(converted, validate=validate)
     
     def as_quat(self, *, validate: bool = True) -> Rotation:
         """Return this rotation in quaternion representation.
@@ -714,10 +730,22 @@ class Rotation(AnalysisObject):
         Rotation
             Inverse rotation.
 
+        Raises
+        ------
+        ValueError
+            If a framed rotation is expressed in a basis other than its
+            parent, or if remaining frame metadata has no declared parent.
+            Re-express it in the parent or complete/clear its framing before
+            inversion.
+
         Notes
         -----
-        The inverse preserves sequence, batch, parameter, validity, and frame
-        metadata.
+        The inverse preserves sequence, batch, parameter, validity,
+        representation, and passive graph association. For framed values it
+        swaps parent and child and establishes the new parent as the output
+        basis. It remains graph-free; for a third-frame value, call
+        ``value.express_in(parent).inverse()``. Only a value with no parent,
+        child, or expression basis is treated as fully unframed.
 
         Examples
         --------
@@ -862,7 +890,8 @@ class Rotation(AnalysisObject):
         src: Frame | str,
         dst: Frame | str,
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: PathSolveOptions | None = None,
         validate: bool = True,
     ) -> Rotation:
@@ -875,7 +904,9 @@ class Rotation(AnalysisObject):
         dst : Frame | str
             Destination frame identifier or ``Frame`` object.
         edge_rotation_fn : object, optional
-            Callable resolving edge rotations during frame-path traversal.
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph``
             (override frame graph), ``strict`` (strict path checks), and
@@ -910,6 +941,7 @@ class Rotation(AnalysisObject):
             src,
             dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )
@@ -917,7 +949,8 @@ class Rotation(AnalysisObject):
         self,
         dst: Frame | str,
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: PathSolveOptions | None = None,
         validate: bool = True,
     ) -> Rotation:
@@ -927,8 +960,10 @@ class Rotation(AnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_rotation_fn : object
-            Callable resolving rotation edges for frame-path traversal.
+        edge_rotation_fn : object, optional
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -962,6 +997,7 @@ class Rotation(AnalysisObject):
             self,
             dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )

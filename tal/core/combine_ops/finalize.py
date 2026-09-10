@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
@@ -9,9 +11,35 @@ from .. import validity_values
 from ..orchestration.schema_finalize import CoreSchemaFinalizeSpec, finalize_with_schema
 from .types import CombineContext
 
+if TYPE_CHECKING:
+    from ..analysis_object import AnalysisObject
+
+
+@dataclass(frozen=True)
+class CombineFinalizationPlan:
+    """Result wrapper and opaque domain context for one combine operation."""
+
+    source: AnalysisObject
+    rewrap_context: object | None
+
+
+def prepare_combine_finalization(
+    contexts: list[CombineContext],
+    *,
+    owner: str,
+    source_ao: AnalysisObject | None = None,
+) -> CombineFinalizationPlan:
+    """Resolve result context before alignment or numerical combine work."""
+    if not contexts:
+        raise ValueError(f"{owner}: expected at least one input.")
+    source = contexts[0].ao if source_ao is None else source_ao
+    values = tuple(context.ao for context in contexts)
+    context = source._prepare_result_rewrap_context(values, owner=owner)
+    return CombineFinalizationPlan(source, context)
+
 
 def finalize_combine_output(
-    context: CombineContext,
+    plan: CombineFinalizationPlan,
     ds: xr.Dataset,
     *,
     sequence_dim: str | None,
@@ -20,9 +48,7 @@ def finalize_combine_output(
     param_coord: str | None,
     sequence_size_coord: str | None,
     validate: bool,
-    source_ao: "AnalysisObject | None" = None,
 ) -> "AnalysisObject":
-    source = _resolve_finalize_source(context, source_ao=source_ao)
     size_name = sequence_size_coord
     candidate = ds
     if sequence_dim is not None:
@@ -38,13 +64,17 @@ def finalize_combine_output(
         param_name=param_coord,
         size_name=size_name,
     )
-    return finalize_with_schema(
-        source,
+    result = finalize_with_schema(
+        plan.source,
         candidate,
         spec=spec,
         validate=validate,
         owner="finalize_combine_output",
         clear_returns_unvalidated=True,
+    )
+    return plan.source._apply_result_rewrap_context(
+        result,
+        context=plan.rewrap_context,
     )
 
 
@@ -89,11 +119,9 @@ def _normalize_sequence_size_coord(
     return ds.assign_coords({sequence_size_coord: validated}), sequence_size_coord
 
 
-def _resolve_finalize_source(
-    context: CombineContext,
-    *,
-    source_ao: "AnalysisObject | None",
-) -> "AnalysisObject":
-    if source_ao is None:
-        return context.ao
-    return source_ao
+__all__ = [
+    "CombineFinalizationPlan",
+    "apply_outer_fill",
+    "finalize_combine_output",
+    "prepare_combine_finalization",
+]

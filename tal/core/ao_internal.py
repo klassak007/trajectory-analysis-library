@@ -56,7 +56,7 @@ def from_unvalidated_like(ao, ds: xr.Dataset):
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    return ao.__class__._from_unvalidated(ds)
+    return ao._rewrap_dataset(ds, validate=False)
 
 
 __all__ = ["finalize_structural", "from_unvalidated_like"]

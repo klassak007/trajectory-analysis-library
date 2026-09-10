@@ -247,13 +247,6 @@ def test_arch_frames_025_slice_d_frame_bind_requires_registered_frame_object_gua
     assert "return _require_registered_frame_object(" in frame_ops
 
 
-def test_arch_frames_026_slice_d_validate_true_rewrap_uses_schema_validation_owner_path() -> None:
-    """ID: ARCH_FRAMES_026_slice_d_validate_true_rewrap_uses_schema_validation_owner_path."""
-    frame_ops = Path("tal/utils/frame_ops.py").read_text(encoding="utf-8")
-    assert "from tal.core.schema import UNSET, UnsetType, validate_schema" in frame_ops
-    assert "return source.__class__._from_validated(validate_schema(ds))" in frame_ops
-
-
 def test_arch_frames_027_visualization_owner_split_and_budget() -> None:
     """ID: ARCH_FRAMES_027_visualization_owner_split_and_budget."""
     visualization = Path("tal/frames/visualization.py")

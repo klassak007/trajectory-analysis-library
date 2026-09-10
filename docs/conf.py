@@ -116,6 +116,7 @@ nitpick_ignore_regex = [
     ("py:class", r"tal\.core\.schema\.UnsetType"),
     ("py:class", r"tal\.io\.options\..*"),
     ("py:class", r"tal\.spatial\.path_solve\..*"),
+    ("py:class", r"tal\.spatial\.construction\.Spatial.*Mixin"),
     ("py:class", r"UnsetType"),
     ("py:class", r"VizKind"),
     ("py:class", r"WeightInput"),

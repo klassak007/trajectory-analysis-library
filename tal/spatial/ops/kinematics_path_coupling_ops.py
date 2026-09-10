@@ -3,28 +3,39 @@ from __future__ import annotations
 import xarray as xr
 
 from tal.core.dataset_ownership import analysis_object_dataset
-from tal.core.orchestration.runtime_checks import select_single_numeric_var
-from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
+from tal.core.orchestration.runtime_checks import (
+    resolve_single_numeric_var_single_core_dim,
+    select_single_numeric_var,
+)
+from tal.frames import Frame
 
 from ..metadata.roles import get_kinematics_kind
-from ..path_solve import PathSolveOptions
 from ..policies.wrap import wrap_like
+from .edge_resolver_ops import (
+    PreparedEdgeResolver,
+    _call_prepared_edge_callback,
+    _trusted_edge_resolver_adapter,
+    call_prepared_edge_resolver,
+)
 from .frame_alignment_policy_ops import align_frame_pair_by_policy
 from .kinematics_path_support_ops import KinematicsPathSupportContext
+from .path_configuration import SelectedPathConfiguration
 
 
-def _edge_rotation_from_pose(edge_pose_fn, *, owner: str):
+def _edge_rotation_from_pose(prepared: PreparedEdgeResolver, *, owner: str):
+    if prepared.resolver is None:
+        return None
     from ..pose import Pose
 
     def _resolver(child, parent):
-        payload = edge_pose_fn(child, parent)
+        payload = call_prepared_edge_resolver(prepared, child, parent, owner=owner)
         try:
             pose = payload if isinstance(payload, Pose) else Pose(payload)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{owner}: edge_pose_fn must return Pose-coercible payload.") from exc
-        return pose.rotation(validate=False)
+        return pose.decompose(validate=False)[1]
 
-    return _resolver
+    return _trusted_edge_resolver_adapter(_resolver)
 
 
 def _accumulator_like(source, *, owner: str) -> xr.DataArray:
@@ -79,12 +90,18 @@ def _motion_component(
     operation: str,
     component: str,
     target_dim: str,
-    src_parent: str,
+    src_parent: Frame,
     edge_rot_fn,
-    opts,
+    configuration: SelectedPathConfiguration,
     owner: str,
 ) -> xr.DataArray:
-    expressed = payload.express_in(src_parent, edge_rotation_fn=edge_rot_fn, opts=opts, validate=False)
+    expressed = _express_motion_in_selected_basis(
+        payload,
+        dst=src_parent,
+        edge_rotation_fn=edge_rot_fn,
+        configuration=configuration,
+        owner=owner,
+    )
     target = expressed.linear(validate=False) if component == "linear" else expressed.angular(validate=False)
     target_ds = analysis_object_dataset(target)
     var_name, payload_dim = resolve_single_numeric_var_single_core_dim(
@@ -98,14 +115,68 @@ def _motion_component(
     return out
 
 
+def _express_motion_in_selected_basis(
+    payload,
+    *,
+    dst: Frame,
+    edge_rotation_fn,
+    configuration: SelectedPathConfiguration,
+    owner: str,
+):
+    from ..acceleration import Acceleration
+    from ..velocity import Velocity
+    from .kinematics_family_frame_ops import (
+        FamilyFrameRequest,
+        acceleration_family_parts,
+        run_family_pair_operation,
+        velocity_family_parts,
+    )
+    from .kinematics_frame_ops import _run_vector_express_in
+
+    is_velocity = isinstance(payload, Velocity)
+    request = FamilyFrameRequest(
+        payload,
+        dst,
+        edge_rotation_fn,
+        configuration.options,
+        False,
+        owner,
+        selected_configuration=configuration,
+    )
+    return run_family_pair_operation(
+        request,
+        parts_resolver=velocity_family_parts if is_velocity else acceleration_family_parts,
+        member_runner=_run_vector_express_in,
+        compose=Velocity.from_linear_angular if is_velocity else Acceleration.from_linear_angular,
+        operation="express_in",
+    )
+
+
+def _edge_motion_payload(step, motion_class: str, *, context: KinematicsPathSupportContext, owner: str):
+    callback = context.motion_callback
+    if context.operation == "velocity":
+        if motion_class not in {"galilean", "dynamic"}:
+            return None
+        if callback is None:
+            raise RuntimeError("velocity support preflight must prepare edge_velocity_fn")
+        payload = _call_prepared_edge_callback(callback, step.child, step.parent, owner=owner)
+        return _coerce_velocity_payload(payload, owner=owner)
+    if motion_class != "dynamic":
+        return None
+    if callback is None:
+        raise RuntimeError("acceleration support preflight must prepare edge_acceleration_fn")
+    payload = _call_prepared_edge_callback(callback, step.child, step.parent, owner=owner)
+    return _coerce_acceleration_payload(payload, owner=owner)
+
+
 def _accumulate_parent_motion(
     source_value,
     source,
     *,
     context: KinematicsPathSupportContext,
     component: str,
-    edge_pose_fn,
-    opts: PathSolveOptions | None,
+    edge_pose_resolver: PreparedEdgeResolver,
+    configuration: SelectedPathConfiguration,
     owner: str,
 ) -> xr.DataArray:
     _, target_dim = resolve_single_numeric_var_single_core_dim(
@@ -114,20 +185,12 @@ def _accumulate_parent_motion(
         what="kinematic vector",
     )
     acc = _accumulator_like(source, owner=owner)
-    edge_rot_fn = _edge_rotation_from_pose(edge_pose_fn, owner=owner)
+    edge_rot_fn = _edge_rotation_from_pose(edge_pose_resolver, owner=owner)
     for step, motion_class in zip(context.path.steps, context.edge_classes, strict=True):
         sign = -1.0 if step.invert else 1.0
-        if context.operation == "velocity":
-            if motion_class not in {"galilean", "dynamic"}:
-                continue
-            payload = _coerce_velocity_payload(context.support.edge_velocity_fn(step.child, step.parent), owner=owner)
-        else:
-            if motion_class != "dynamic":
-                continue
-            payload = _coerce_acceleration_payload(
-                context.support.edge_acceleration_fn(step.child, step.parent),
-                owner=owner,
-            )
+        payload = _edge_motion_payload(step, motion_class, context=context, owner=owner)
+        if payload is None:
+            continue
         acc = _add_by_policy(
             source_value,
             payload,
@@ -137,9 +200,9 @@ def _accumulate_parent_motion(
                 operation=context.operation,
                 component=component,
                 target_dim=target_dim,
-                src_parent=context.src_parent.id,
+                src_parent=context.src_parent,
                 edge_rot_fn=edge_rot_fn,
-                opts=opts,
+                configuration=configuration,
                 owner=owner,
             ),
             left=acc,
@@ -166,8 +229,8 @@ def apply_vector_path_coupling(
     prepared,
     *,
     context: KinematicsPathSupportContext,
-    edge_pose_fn,
-    opts: PathSolveOptions | None,
+    edge_pose_resolver: PreparedEdgeResolver,
+    configuration: SelectedPathConfiguration,
     owner: str,
 ):
     if not context.path.steps:
@@ -178,8 +241,8 @@ def apply_vector_path_coupling(
         prepared,
         context=context,
         component=component,
-        edge_pose_fn=edge_pose_fn,
-        opts=opts,
+        edge_pose_resolver=edge_pose_resolver,
+        configuration=configuration,
         owner=owner,
     )
     prepared_ds = analysis_object_dataset(prepared)

@@ -18,7 +18,7 @@ from ..orchestration.topology import (
 from ..param_ops.batch_labels import labels_selectable_from
 from ..param_ops.guards import assert_unique_dim_labels
 from ..validity_layout import is_left_packed_mask
-from .finalize import finalize_combine_output
+from .finalize import finalize_combine_output, prepare_combine_finalization
 from .normalize import effective_batch_dims, effective_sequence_dim
 from .types import AlignOptions, CombineContext
 
@@ -269,13 +269,17 @@ def align_many(
     validate: bool,
 ) -> list["AnalysisObject"]:
     out: list["AnalysisObject"] = []
+    finalizations = [
+        prepare_combine_finalization([context], owner="align")
+        for context in contexts
+    ]
     aligned = align_contexts(contexts, opts=opts)
     seq = effective_sequence_dim(aligned, owner="align", require=False)
     batch = effective_batch_dims(aligned)
-    for ctx in aligned:
+    for ctx, finalization in zip(aligned, finalizations, strict=True):
         out.append(
             finalize_combine_output(
-                ctx,
+                finalization,
                 ctx.ds,
                 sequence_dim=seq,
                 batch_dims=batch,

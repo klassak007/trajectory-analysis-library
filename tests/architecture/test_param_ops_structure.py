@@ -76,15 +76,6 @@ def test_arch_combine_003_assemble_core_finalize_owner_reuse() -> None:
     assert "set_validity(" not in text
 
 
-def test_arch_combine_004_assemble_core_uses_finalize_source_override_not_leaf_class() -> None:
-    """ID: ARCH_COMBINE_004_assemble_core_uses_finalize_source_override_not_leaf_class."""
-    assemble = Path("tal/core/combine_ops/assemble_core.py").read_text(encoding="utf-8")
-    finalize = Path("tal/core/combine_ops/finalize.py").read_text(encoding="utf-8")
-    assert "source_ao=source_ao" in assemble
-    assert "source_ao:" in finalize
-    assert "_resolve_finalize_source(" in finalize
-
-
 def test_arch_combine_005_core_accessors_use_shared_self_inclusion_layout_helper() -> None:
     """ID: ARCH_COMBINE_005_core_accessors_use_shared_self_inclusion_layout_helper."""
     accessor = Path("tal/core/combine_ops/accessor.py").read_text(encoding="utf-8")

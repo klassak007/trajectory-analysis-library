@@ -245,6 +245,8 @@ def test_spatial_core_c4_003_kinematic_instantaneous_inertial_roles_roundtrip() 
     )
     out = LinearVelocity(ds)
     assert get_instantaneous_inertial(out.as_dataset(copy="none"), owner="test") == frozenset({"parent", "child"})
+    relation = out.as_dataset(copy="none").attrs["tal"]["ext"]["spatial"]["relation"]
+    assert "expressed_in" not in relation
 
 
 def test_spatial_core_c4_004_missing_instantaneous_inertial_defaults_to_empty_frozenset() -> None:

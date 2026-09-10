@@ -14,9 +14,11 @@ def _vector_leaf(
     axis_labels: tuple[object, ...] = ("a", "b", "c", "d"),
     sample_labels: tuple[object, ...] = ("s0", "s1"),
     trial_labels: tuple[object, ...] = ("t0", "t1"),
+    chunked: bool = False,
+    dtype: type[np.generic] = np.float64,
 ) -> AnalysisObject:
     axis_size = len(axis_labels)
-    values = np.arange(2 * 2 * axis_size, dtype=float).reshape(2, 2, axis_size) + offset
+    values = (np.arange(2 * 2 * axis_size).reshape(2, 2, axis_size) + offset).astype(dtype)
     ds = xr.Dataset(
         {"x": (("sample", "trial", "axis"), values)},
         coords={
@@ -25,6 +27,8 @@ def _vector_leaf(
             "axis": np.asarray(axis_labels, dtype=object),
         },
     )
+    if chunked:
+        ds = ds.chunk({"sample": 1})
     return AnalysisObject.from_data(
         ds,
         sequence_dim="sample",
@@ -303,3 +307,45 @@ def test_combine_overlay_core_016_mixed_nan_scalar_types_overlap_equivalent_unde
     expected[{"axis": 0}] = patch_a.as_dataset(copy="none")["x"].isel(axis=0)
     expected[{"axis": 0}] = patch_b.as_dataset(copy="none")["x"].isel(axis=0)
     xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
+
+
+@pytest.mark.parametrize(
+    ("base_chunked", "patch_chunked"),
+    ((False, False), (False, True), (True, False), (True, True)),
+    ids=("numpy-numpy", "numpy-dask", "dask-numpy", "dask-dask"),
+)
+def test_combine_overlay_core_017_mixed_backends_remain_lazy_and_preserve_sources(
+    base_chunked: bool,
+    patch_chunked: bool,
+) -> None:
+    """ID: COMBINE_OVERLAY_CORE_017_mixed_backends_remain_lazy_and_preserve_sources."""
+    from dask.base import is_dask_collection
+    from dask.callbacks import Callback
+
+    base = _vector_leaf(offset=0.0, chunked=base_chunked, dtype=np.int64)
+    patch = _vector_leaf(
+        offset=100.0,
+        axis_labels=("b", "d"),
+        chunked=patch_chunked,
+        dtype=np.int64,
+    )
+    base_before = base.as_dataset(copy="deep")
+    patch_before = patch.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = overlay_core(
+            base,
+            patch,
+            opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace"),
+            validate=True,
+        )
+
+    result_data = result.as_dataset(copy="none")["x"]
+    assert tasks == []
+    assert is_dask_collection(result_data.data) is (base_chunked or patch_chunked)
+    assert result_data.dtype == np.dtype("int64")
+    expected = base.as_dataset(copy="none")["x"].copy(deep=True)
+    expected.loc[{"axis": ["b", "d"]}] = patch.as_dataset(copy="none")["x"]
+    xr.testing.assert_identical(result_data.compute(), expected.compute())
+    xr.testing.assert_identical(base.as_dataset(copy="none"), base_before)
+    xr.testing.assert_identical(patch.as_dataset(copy="none"), patch_before)

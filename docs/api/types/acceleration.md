@@ -31,6 +31,10 @@ combined spatial6 payload.
 `Acceleration` requires valid linear/angular component metadata or a valid
 vector6 representation.
 
+All three acceleration constructors accept frame declarations and passive
+`graph=` association. The read-only `graph` property and functional
+`with_graph(...)` method are inherited by each type.
+
 ## Composition and Decomposition
 
 ```python
@@ -82,6 +86,8 @@ provided and preserve representation/frame metadata when invariants hold.
    :nosignatures:
 
    tal.spatial.LinearAcceleration
+   tal.spatial.LinearAcceleration.graph
+   tal.spatial.LinearAcceleration.with_graph
    tal.spatial.LinearAcceleration.norm
    tal.spatial.LinearAcceleration.magnitude
    tal.spatial.LinearAcceleration.integrate
@@ -89,6 +95,8 @@ provided and preserve representation/frame metadata when invariants hold.
    tal.spatial.LinearAcceleration.to_frame
    tal.spatial.LinearAcceleration.express_in
    tal.spatial.AngularAcceleration
+   tal.spatial.AngularAcceleration.graph
+   tal.spatial.AngularAcceleration.with_graph
    tal.spatial.AngularAcceleration.norm
    tal.spatial.AngularAcceleration.magnitude
    tal.spatial.AngularAcceleration.integrate
@@ -96,6 +104,8 @@ provided and preserve representation/frame metadata when invariants hold.
    tal.spatial.AngularAcceleration.to_frame
    tal.spatial.AngularAcceleration.express_in
    tal.spatial.Acceleration
+   tal.spatial.Acceleration.graph
+   tal.spatial.Acceleration.with_graph
    tal.spatial.Acceleration.from_linear_angular
    tal.spatial.Acceleration.from_vector6
    tal.spatial.Acceleration.linear

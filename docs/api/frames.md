@@ -66,6 +66,10 @@ Frame IDs are stored under `ds.attrs["tal"]["ext"]["frames"]`. Metadata writes
 use the schema writer path. Binding connects those IDs to concrete `Frame`
 objects in a runtime graph; it does not numerically transform AO values.
 
+Spatial wrappers may also remember a graph through constructor `graph=` or
+`with_graph(...)`. That passive association is wrapper-local, is lost on raw
+xarray conversion, and never mutates graph topology or registers a provider.
+
 Functional helpers are also available:
 
 ```python
@@ -81,6 +85,7 @@ from tal.utils.frame_schema import get_frames, set_frames
 - Frozen graphs reject mutation.
 - Graph conflicts require explicit `on_conflict` policies.
 - Metadata-only retagging does not transform spatial payload values.
+- Passive association and provider registration are distinct operations.
 
 ## Autosummary
 

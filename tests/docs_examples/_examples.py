@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import doctest
+import inspect
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -841,8 +843,12 @@ def example_spatial_position_to_frame() -> None:
 def example_spatial_position_basic() -> None:
     position = _make_position(np.asarray([[1.0, 2.0, 3.0]], dtype=float))
     delta = position.as_delta(validate=True)
+    graph = FrameGraph()
+    associated = position.with_graph(graph)
     assert isinstance(delta, Position)
     assert delta.as_dataset(copy="none")["position"].shape == (1, 3)
+    assert associated.graph is graph
+    assert position.graph is None
 
 
 def example_spatial_rotation_from_data() -> None:
@@ -857,9 +863,13 @@ def example_spatial_rotation_from_data() -> None:
         core_dims=("quat",),
         validate=True,
     )
+    graph = FrameGraph()
+    associated = rotation.with_graph(graph)
     ds = rotation.as_dataset(copy="none")
     assert ds["rotation"].shape == (1, 4)
     assert read_roles(ds)[1:] == ("sample", (), ("quat",))
+    assert rotation.graph is None
+    assert associated.graph is graph
 
 
 def example_spatial_rotation_to_rep() -> None:
@@ -913,20 +923,23 @@ def example_spatial_pose_basic() -> None:
     assert isinstance(applied, Position)
 
 
+def example_spatial_bind_pose() -> None:
+    from tal.spatial import bind_pose
+
+    example = doctest.DocTestParser().get_doctest(inspect.getdoc(bind_pose), {}, "bind_pose", None, 0)
+    runner = doctest.DocTestRunner()
+    result = runner.run(example)
+    assert result.failed == 0
+    assert result.attempted > 0
+
+
 def example_spatial_path_solve_pose() -> None:
+    from tal.spatial import bind_pose
+
     graph = FrameGraph()
-    world = graph.get_or_create_frame("world")
-    body = graph.get_or_create_frame("body", parent=world)
-    sensor = graph.get_or_create_frame("sensor", parent=body)
-    edge_map = {
-        ("sensor", "body"): _identity_pose(),
-        ("body", "world"): _identity_pose(),
-    }
-
-    def resolver(child, parent):
-        return edge_map[(child.id, parent.id)]
-
-    out = solve_pose_path_transform(sensor, world, edge_pose_fn=resolver, opts=PathSolveOptions(graph=graph))
+    bind_pose(graph, "world", "body", _identity_pose())
+    sensor = bind_pose(graph, "body", "sensor", _identity_pose())
+    out = solve_pose_path_transform(sensor, "world", graph=graph)
     assert isinstance(out, Pose)
     assert out.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
 
@@ -1652,6 +1665,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "LINALG-VECTOR3-FROM-XYZ": example_linalg_vector3_from_xyz,
     "LINALG-ARRAY-CORE-DIMS": example_linalg_array_core_dims,
     "LINALG-LAYOUT-SURFACE": example_linalg_layout_surface,
+    "SPATIAL-BIND-POSE": example_spatial_bind_pose,
     "SPATIAL-POSITION-TO-FRAME": example_spatial_position_to_frame,
     "SPATIAL-POSITION-BASIC": example_spatial_position_basic,
     "SPATIAL-ROTATION-FROM-DATA": example_spatial_rotation_from_data,

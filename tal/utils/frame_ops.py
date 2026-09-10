@@ -15,9 +15,8 @@ if TYPE_CHECKING:
 
 
 def _rewrap_like(source: "AnalysisObject", ds, *, validate: bool) -> "AnalysisObject":
-    if validate:
-        return source.__class__._from_validated(validate_schema(ds))
-    return source.__class__._from_unvalidated(ds)
+    candidate = validate_schema(ds) if validate else ds
+    return source._rewrap_dataset(candidate, validate=validate)
 
 
 def _normalize_frame_name(value: object, *, owner: str, arg: str) -> str:

@@ -23,6 +23,11 @@ from tal.core.schema_read import read_param_coord_name, validate_schema_if_neede
 from tal.utils.frame_schema import set_frames
 from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
 
+from ..association import (
+    SpatialAssociationPlan,
+    attach_spatial_association,
+    resolve_passive_association,
+)
 from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
 from ..policies.frame import resolve_apply_output_frames
 from ..kernels.pose_apply_kernels import pose_apply_position_kernel
@@ -319,6 +324,7 @@ def _apply_pose_to_spatial_target(
     *,
     parent: str | None,
     child: str | None,
+    association: SpatialAssociationPlan,
     validate: bool,
     owner: str,
 ) -> object:
@@ -335,7 +341,13 @@ def _apply_pose_to_spatial_target(
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
     rotation = _rotation_with_selection_intents(rotation, selection=selection)
-    out = _rotation_apply_with_owner(rotation, target, validate=False, owner=owner)
+    out = _rotation_apply_with_owner(
+        rotation,
+        target,
+        validate=False,
+        owner=owner,
+        association=association,
+    )
     out_ds = set_frames(analysis_object_dataset(out), parent=parent, child=child, validate=False)
     return wrap_like(target, out_ds, validate=validate)
 
@@ -361,17 +373,22 @@ def _pose_apply_with_owner(
     *,
     validate: bool,
     owner: str,
+    association: SpatialAssociationPlan | None = None,
 ) -> object:
     if not isinstance(target, _SUPPORTED_TARGET_TYPES):
         raise TypeError(
             f"{owner}: target must be Position, LinearVelocity, AngularVelocity, "
             "LinearAcceleration, AngularAcceleration, Velocity, or Acceleration."
         )
+    result_association = association or resolve_passive_association(
+        (pose, target),
+        owner=owner,
+    )
     pose._enforce_invariants(owner=owner)
     target._enforce_invariants(owner=owner)
     parent, child = resolve_apply_output_frames(analysis_object_dataset(pose), analysis_object_dataset(target), owner=owner)
     if isinstance(target, Position):
-        return _apply_pose_to_position(
+        result = _apply_pose_to_position(
             pose,
             target,
             parent=parent,
@@ -379,14 +396,17 @@ def _pose_apply_with_owner(
             validate=validate,
             owner=owner,
         )
-    return _apply_pose_to_spatial_target(
-        pose,
-        target,
-        parent=parent,
-        child=child,
-        validate=validate,
-        owner=owner,
-    )
+    else:
+        result = _apply_pose_to_spatial_target(
+            pose,
+            target,
+            parent=parent,
+            child=child,
+            association=result_association,
+            validate=validate,
+            owner=owner,
+        )
+    return attach_spatial_association(result, result_association)
 
 
 def pose_apply(pose: "Pose", target: object, *, validate: bool) -> object:

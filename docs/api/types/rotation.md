@@ -28,6 +28,13 @@ evaluation.
   first declare matrix representation metadata through the spatial metadata
   owner.
 - Malformed frame or spatial-role metadata fails at construction.
+- The direct `Rotation(...)` constructor accepts `parent`, `child`,
+  `expressed_in`, and `graph`. `Rotation.from_data(...)` remains the
+  schema-ingress factory and does not accept those keywords.
+
+Inspect the remembered graph through `rotation.graph`. Use
+`rotation.with_graph(graph)` to associate a `Rotation.from_data(...)` result or
+to create a distinct metadata-isolated alias from any Rotation.
 
 ## Representation
 
@@ -52,8 +59,13 @@ rotation.magnitude()
 ```
 
 `compose(...)` and `inverse()` execute through quaternion semantics and preserve
-the requested representation policy. `apply(...)` supports compatible
-positions, velocities, accelerations, and composite spatial6 payloads.
+the requested representation policy. Framed inverse is graph-free and requires
+the value to be expressed in its parent basis; use
+`rotation.express_in(parent).inverse()` for a third-frame value. A value without
+a parent is unframed only when its child and expression basis are also absent;
+otherwise complete or clear its framing before inversion. `apply(...)` supports
+compatible positions, velocities, accelerations, and composite spatial6
+payloads.
 
 `norm()` and `magnitude()` return geodesic angle magnitude from identity in
 radians.
@@ -61,8 +73,8 @@ radians.
 ## Frames and Path Solving
 
 ```python
-rotation.express_in(dst, *, edge_rotation_fn, opts=None, validate=True)
-Rotation.solve_path_transform(src, dst, *, edge_rotation_fn, opts=None, validate=True)
+rotation.express_in(dst, *, edge_rotation_fn=None, graph=None, opts=None, validate=True)
+Rotation.solve_path_transform(src, dst, *, edge_rotation_fn=None, graph=None, opts=None, validate=True)
 ```
 
 `express_in(...)` changes coordinate basis only. Path solving composes edge
@@ -87,6 +99,8 @@ semantics. `on=...` selects the parameter coordinate used for correspondence.
    :nosignatures:
 
    tal.spatial.Rotation
+   tal.spatial.Rotation.graph
+   tal.spatial.Rotation.with_graph
    tal.spatial.Rotation.from_data
    tal.spatial.Rotation.to_rep
    tal.spatial.Rotation.as_quat

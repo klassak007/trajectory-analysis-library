@@ -7,8 +7,21 @@ from scipy.spatial.transform import Rotation as SciRotation
 
 from tal import AnalysisObject
 from tal.frames import FrameGraph
-from tal.spatial import PathSolveOptions, Pose, Position, Rotation, solve_pose_path_transform, solve_rotation_path_transform
-from tal.spatial.metadata import get_expressed_in, get_pose_rep, get_position_rep, get_rotation_rep, set_expressed_in
+from tal.spatial import (
+    PathSolveOptions,
+    Pose,
+    Position,
+    Rotation,
+    solve_pose_path_transform,
+    solve_rotation_path_transform,
+)
+from tal.spatial.metadata import (
+    get_expressed_in,
+    get_pose_rep,
+    get_position_rep,
+    get_rotation_rep,
+    set_expressed_in,
+)
 from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames
 from tests._path_options_helpers import (
@@ -149,7 +162,7 @@ def test_spatial_core_127h_002_configuration_options_preserve_results(kind, oper
 def test_spatial_core_127h_003_configuration_identity_keeps_field_checks_deferred(kind) -> None:
     """ID: SPATIAL_CORE_127H_003_configuration_identity_keeps_field_checks_deferred."""
     source = _configuration_path_source(kind)
-    opts = PathSolveOptions(graph=object(), strict=False, kinematics_support=object())
+    opts = PathSolveOptions(strict=False, kinematics_support=object())
     probe = ResolutionProbe()
     resolver_arg = "edge_pose_fn" if kind == "pose" else "edge_rotation_fn"
     expected = source.express_in("sensor", **{resolver_arg: probe})
@@ -413,8 +426,11 @@ def test_spatial_hard_091_rotation_pose_class_wrapper_public_boundary_no_raw_run
     """ID: SPATIAL_HARD_091_rotation_pose_class_wrapper_public_boundary_no_raw_runtime_exception_leakage."""
     with pytest.raises(TypeError, match="spatial.rotation.solve_path_transform"):
         Rotation.solve_path_transform(123, "world", edge_rotation_fn=lambda *_: None)  # type: ignore[arg-type]
+    graph = FrameGraph()
+    world = graph.get_or_create_frame("world")
+    sensor = graph.get_or_create_frame("sensor", parent=world)
     with pytest.raises(TypeError, match="spatial.pose.solve_path_transform"):
-        Pose.solve_path_transform("sensor", "world", edge_pose_fn=123)  # type: ignore[arg-type]
+        Pose.solve_path_transform(sensor, world, graph=graph, edge_pose_fn=123)  # type: ignore[arg-type]
 
 
 def test_spatial_hard_092_position_to_frame_dask_lazy_kernel_failure_preserves_c2_owner_context() -> None:
@@ -447,39 +463,39 @@ def test_spatial_hard_092_position_to_frame_dask_lazy_kernel_failure_preserves_c
     assert "spatial.pose.kernel" not in message
 
 
-def test_spatial_hard_093_position_to_frame_identity_request_rejects_non_callable_edge_pose_fn() -> None:
-    """ID: SPATIAL_HARD_093_position_to_frame_identity_request_rejects_non_callable_edge_pose_fn."""
+def test_spatial_core_129b_011_position_identity_skips_unused_resolver() -> None:
+    """ID: SPATIAL_CORE_129B_011_position_identity_skips_unused_resolver."""
     position = frame_retag(
         _position_from_xyz(np.asarray([[1.0, 2.0, 3.0]], dtype=float)),
         parent="world",
         child="tool",
         validate=True,
     )
-    with pytest.raises(TypeError) as exc_info:
-        position.to_frame("world", edge_pose_fn=123, validate=True)  # type: ignore[arg-type]
-    message = str(exc_info.value)
-    assert "spatial.position.to_frame" in message
-    assert "edge_pose_fn must be callable" in message
+    result = position.to_frame("world", edge_pose_fn=123, validate=True)  # type: ignore[arg-type]
+    xr.testing.assert_identical(
+        result.as_dataset(copy="none"),
+        position.as_dataset(copy="none"),
+    )
 
 
-def test_spatial_hard_094_position_to_frame_identity_request_rejects_opts_strict_false() -> None:
-    """ID: SPATIAL_HARD_094_position_to_frame_identity_request_rejects_opts_strict_false."""
+def test_spatial_core_129b_012_position_identity_skips_strict_policy() -> None:
+    """ID: SPATIAL_CORE_129B_012_position_identity_skips_strict_policy."""
     position = frame_retag(
         _position_from_xyz(np.asarray([[1.0, 2.0, 3.0]], dtype=float)),
         parent="world",
         child="tool",
         validate=True,
     )
-    with pytest.raises(ValueError) as exc_info:
-        position.to_frame(
-            "world",
-            edge_pose_fn=lambda *_: None,
-            opts=PathSolveOptions(strict=False),
-            validate=True,
-        )
-    message = str(exc_info.value)
-    assert "spatial.position.to_frame" in message
-    assert "opts.strict=False" in message
+    result = position.to_frame(
+        "world",
+        edge_pose_fn=lambda *_: None,
+        opts=PathSolveOptions(strict=False),
+        validate=True,
+    )
+    xr.testing.assert_identical(
+        result.as_dataset(copy="none"),
+        position.as_dataset(copy="none"),
+    )
 
 
 def test_spatial_hard_095_position_to_frame_identity_request_rejects_explicit_graph_mismatch_even_when_dst_id_matches_parent() -> None:

@@ -6,7 +6,20 @@ from typing import TYPE_CHECKING
 
 from tal.frames import Frame, FrameGraph
 
-from .ops.path_solve_ops import solve_pose_path_transform_impl, solve_rotation_path_transform_impl
+from .ops.edge_resolver_ops import (
+    PreparedEdgeResolver,
+    _PathCallbackSignatureError,
+    _raise_public_signature_error,
+)
+from .ops.path_configuration import (
+    PathConfiguration,
+    SelectedPathConfiguration,
+    resolve_path_configuration,
+)
+from .ops.path_solve_ops import (
+    solve_pose_path_transform_impl,
+    solve_rotation_path_transform_impl,
+)
 
 if TYPE_CHECKING:
     from .pose import Pose
@@ -55,9 +68,10 @@ def solve_rotation_path_transform(
     src: Frame | str,
     dst: Frame | str,
     *,
-    edge_rotation_fn,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None = None,
-) -> "Rotation":
+) -> Rotation:
     """Solve a composed rotation transform from ``src`` to ``dst`` frames.
 
     Parameters
@@ -67,7 +81,10 @@ def solve_rotation_path_transform(
     dst : Frame | str
         Destination frame id/object.
     edge_rotation_fn : object
-        Callable resolving rotation edges for frame-path traversal.
+        Optional explicit rotation resolver. Returned edge values must be
+        represented in the edge parent. When omitted, use bound Pose rotations.
+    graph : FrameGraph or None
+        Graph shorthand. May accompany options only when ``opts.graph`` is unset.
     opts : PathSolveOptions or None
         Only ``None`` selects defaults. Otherwise a ``PathSolveOptions``
         instance is required. Key fields are ``graph`` (default None),
@@ -101,6 +118,7 @@ def solve_rotation_path_transform(
         src,
         dst,
         edge_rotation_fn=edge_rotation_fn,
+        graph=graph,
         opts=opts,
         owner="spatial.path_solve.rotation",
     )
@@ -110,28 +128,38 @@ def _solve_rotation_path_transform_with_owner(
     src: Frame | str,
     dst: Frame | str,
     *,
-    edge_rotation_fn,
-    opts: PathSolveOptions | None,
+    edge_rotation_fn=None,
+    graph: FrameGraph | None = None,
+    opts: PathSolveOptions | None = None,
+    configuration: PathConfiguration | SelectedPathConfiguration | None = None,
+    prepared_resolver: PreparedEdgeResolver | None = None,
     owner: str,
-) -> "Rotation":
-    options = _coerce_path_solve_options(opts, owner=owner)
-    return solve_rotation_path_transform_impl(
-        src,
-        dst,
-        edge_rotation_fn=edge_rotation_fn,
-        graph=options.graph,
-        strict=options.strict,
-        owner=owner,
-    )
+) -> Rotation:
+    if configuration is None:
+        configuration = resolve_path_configuration(opts, graph=graph, owner=owner)
+    try:
+        return solve_rotation_path_transform_impl(
+            src,
+            dst,
+            edge_rotation_fn=edge_rotation_fn,
+            configuration=configuration,
+            owner=owner,
+            prepared_resolver=prepared_resolver,
+        )
+    except _PathCallbackSignatureError as exc:
+        if prepared_resolver is not None and prepared_resolver.propagate_signature_error:
+            raise
+        _raise_public_signature_error(exc)
 
 
 def solve_pose_path_transform(
     src: Frame | str,
     dst: Frame | str,
     *,
-    edge_pose_fn,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
     opts: PathSolveOptions | None = None,
-) -> "Pose":
+) -> Pose:
     """Solve a pose transform between two frames.
 
     Parameters
@@ -141,7 +169,10 @@ def solve_pose_path_transform(
     dst : Frame | str
         Destination frame id/object.
     edge_pose_fn : object
-        Callable resolving pose edges for frame-path traversal.
+        Optional explicit pose resolver. Returned edge values must be
+        represented in the edge parent. When omitted, use bound Pose providers.
+    graph : FrameGraph or None
+        Graph shorthand. May accompany options only when ``opts.graph`` is unset.
     opts : PathSolveOptions or None
         Only ``None`` selects defaults. Otherwise a ``PathSolveOptions``
         instance is required. Key fields are ``graph`` (default None),
@@ -175,6 +206,7 @@ def solve_pose_path_transform(
         src,
         dst,
         edge_pose_fn=edge_pose_fn,
+        graph=graph,
         opts=opts,
         owner="spatial.path_solve.pose",
     )
@@ -184,19 +216,28 @@ def _solve_pose_path_transform_with_owner(
     src: Frame | str,
     dst: Frame | str,
     *,
-    edge_pose_fn,
-    opts: PathSolveOptions | None,
+    edge_pose_fn=None,
+    graph: FrameGraph | None = None,
+    opts: PathSolveOptions | None = None,
+    configuration: PathConfiguration | SelectedPathConfiguration | None = None,
+    prepared_resolver: PreparedEdgeResolver | None = None,
     owner: str,
-) -> "Pose":
-    options = _coerce_path_solve_options(opts, owner=owner)
-    return solve_pose_path_transform_impl(
-        src,
-        dst,
-        edge_pose_fn=edge_pose_fn,
-        graph=options.graph,
-        strict=options.strict,
-        owner=owner,
-    )
+) -> Pose:
+    if configuration is None:
+        configuration = resolve_path_configuration(opts, graph=graph, owner=owner)
+    try:
+        return solve_pose_path_transform_impl(
+            src,
+            dst,
+            edge_pose_fn=edge_pose_fn,
+            configuration=configuration,
+            owner=owner,
+            prepared_resolver=prepared_resolver,
+        )
+    except _PathCallbackSignatureError as exc:
+        if prepared_resolver is not None and prepared_resolver.propagate_signature_error:
+            raise
+        _raise_public_signature_error(exc)
 
 
 __all__ = [

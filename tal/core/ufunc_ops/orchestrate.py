@@ -41,6 +41,7 @@ class BinaryAOContext:
     left: object
     right: object
     output_core_dims: tuple[str, ...] | None = None
+    rewrap_context: object | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class _BinaryRuntimeOperands:
     right_source: AnalysisObject | None
     left_operand: object
     right_operand: object
+    rewrap_context: object | None
 
 
 _SEMANTIC_UFUNC_CONTEXT_OPTIONS = DatasetContextOptions(
@@ -188,10 +190,20 @@ def prepare_unary_ao_context(value: object, *, owner: str) -> UnaryAOContext:
     return UnaryAOContext(source=None, operand=value)
 
 
-def _bootstrap_binary_runtime_operands(left: object, right: object) -> _BinaryRuntimeOperands:
+def _bootstrap_binary_runtime_operands(
+    left: object,
+    right: object,
+    *,
+    owner: str,
+) -> _BinaryRuntimeOperands:
     left_source = left if isinstance(left, AnalysisObject) else None
     right_source = right if isinstance(right, AnalysisObject) else None
     source = left_source if left_source is not None else right_source
+    rewrap_context = (
+        None
+        if source is None
+        else source._prepare_result_rewrap_context((left, right), owner=owner)
+    )
     left_operand = analysis_object_dataset(left) if left_source is not None else left
     right_operand = analysis_object_dataset(right) if right_source is not None else right
     return _BinaryRuntimeOperands(
@@ -200,6 +212,7 @@ def _bootstrap_binary_runtime_operands(left: object, right: object) -> _BinaryRu
         right_source=right_source,
         left_operand=left_operand,
         right_operand=right_operand,
+        rewrap_context=rewrap_context,
     )
 
 
@@ -219,6 +232,7 @@ def _prepare_strict_binary_ao_context(runtime: _BinaryRuntimeOperands) -> Binary
         left=runtime.left_operand,
         right=runtime.right_operand,
         output_core_dims=_read_binary_output_core_dims(runtime),
+        rewrap_context=runtime.rewrap_context,
     )
 
 
@@ -232,7 +246,15 @@ def _prepare_semantic_binary_ao_context(
 ) -> BinaryAOContext:
     left_spec = _semantic_operand(left, index=0, owner=owner, what="binary ufunc left operand")
     right_spec = _semantic_operand(right, index=1, owner=owner, what="binary ufunc right operand")
-    if left_spec is not None and right_spec is not None:
+    if left_spec is not None:
+        if right_spec is None:
+            return _prepare_one_sided_semantic_context(
+                runtime,
+                left_spec,
+                is_left=True,
+                owner=owner,
+                policy=policy,
+            )
         left_operand, right_operand, output_core_dims = _align_semantic_binary_operands(
             left_spec,
             right_spec,
@@ -240,42 +262,51 @@ def _prepare_semantic_binary_ao_context(
             what="binary ufunc semantic broadcast",
             policy=policy,
         )
-        return BinaryAOContext(
-            source=runtime.source,
-            left=left_operand,
-            right=right_operand,
-            output_core_dims=output_core_dims,
-        )
-    output_core_dims: tuple[str, ...] | None = None
-    left_operand = runtime.left_operand
-    right_operand = runtime.right_operand
-    if left_spec is not None:
-        left_operand = _align_semantic_unary_operand(
-            left_spec,
-            owner=owner,
-            what="binary ufunc left semantic broadcast",
-            policy=policy,
-        )
-        output_core_dims = left_spec.context.core_dims
-    if right_spec is not None:
-        right_operand = _align_semantic_unary_operand(
+    if right_spec is not None and left_spec is None:
+        return _prepare_one_sided_semantic_context(
+            runtime,
             right_spec,
+            is_left=False,
             owner=owner,
-            what="binary ufunc right semantic broadcast",
             policy=policy,
         )
-        if output_core_dims is None:
-            output_core_dims = right_spec.context.core_dims
+    if left_spec is None or right_spec is None:
+        return _prepare_strict_binary_ao_context(runtime)
     return BinaryAOContext(
         source=runtime.source,
         left=left_operand,
         right=right_operand,
         output_core_dims=output_core_dims,
+        rewrap_context=runtime.rewrap_context,
+    )
+
+
+def _prepare_one_sided_semantic_context(
+    runtime: _BinaryRuntimeOperands,
+    spec: _SemanticOperand,
+    *,
+    is_left: bool,
+    owner: str,
+    policy: TopologyPolicy,
+) -> BinaryAOContext:
+    side = "left" if is_left else "right"
+    aligned = _align_semantic_unary_operand(
+        spec,
+        owner=owner,
+        what=f"binary ufunc {side} semantic broadcast",
+        policy=policy,
+    )
+    return BinaryAOContext(
+        source=runtime.source,
+        left=aligned if is_left else runtime.left_operand,
+        right=runtime.right_operand if is_left else aligned,
+        output_core_dims=spec.context.core_dims,
+        rewrap_context=runtime.rewrap_context,
     )
 
 
 def prepare_binary_ao_context(left: object, right: object, *, owner: str) -> BinaryAOContext:
-    runtime = _bootstrap_binary_runtime_operands(left, right)
+    runtime = _bootstrap_binary_runtime_operands(left, right, owner=owner)
     policy = _semantic_policy((left, right), owner=owner)
     if policy.mode != "semantic_broadcast":
         return _prepare_strict_binary_ao_context(runtime)

@@ -480,6 +480,16 @@ class AnalysisObject:
             return self.__class__._from_validated(ds)
         return self.__class__._from_unvalidated(ds)
 
+    def _prepare_result_rewrap_context(self, values: tuple[object, ...], *, owner: str) -> object | None:
+        """Prepare an opaque domain result context for a multi-input operation."""
+        _ = (values, owner)
+        return None
+
+    def _apply_result_rewrap_context(self, result: AnalysisObject, *, context: object | None) -> AnalysisObject:
+        """Apply an opaque domain result context after ordinary finalization."""
+        _ = context
+        return result
+
     def b(self, *, mode: Literal["semantic_broadcast"] = "semantic_broadcast") -> Self:
         """Attach a semantic-broadcast intent to an operand-local AO copy.
 
@@ -525,7 +535,7 @@ class AnalysisObject:
 
         intent = resolve_broadcast_intent(mode=mode, owner="AnalysisObject.b")
         previous_alignment = read_alignment_intent(self, owner="AnalysisObject.b")
-        out = self.__class__._from_unvalidated(self._data)
+        out = self._rewrap_dataset(self._data, validate=False)
         if previous_alignment is not None:
             set_alignment_intent(out, previous_alignment)
         set_broadcast_intent(out, intent)
@@ -601,7 +611,7 @@ class AnalysisObject:
                 f"existing={previous_alignment!r}, requested={intent!r}."
             )
         previous_broadcast = read_broadcast_intent(self, owner="AnalysisObject.a")
-        out = self.__class__._from_unvalidated(self._data)
+        out = self._rewrap_dataset(self._data, validate=False)
         set_alignment_intent(out, previous_alignment if previous_alignment is not None else intent)
         if previous_broadcast is not None:
             set_broadcast_intent(out, previous_broadcast)
@@ -1184,9 +1194,7 @@ class AnalysisObject:
             core_dims=core_dims,
             validate=validate,
         )
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def set_param_coord(
         self,
@@ -1231,9 +1239,7 @@ class AnalysisObject:
         tal.core.schema.set_param_coord
         """
         ds = _set_param_coord(self._data, name=name, validate=validate)
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def set_validity(
         self,
@@ -1298,9 +1304,7 @@ class AnalysisObject:
             layout=layout,
             validate=validate,
         )
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def merge_schema(
         self,
@@ -1337,9 +1341,7 @@ class AnalysisObject:
         tal.core.schema.merge_schema
         """
         ds = _merge_schema(self._data, patch=patch, validate=validate)
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def validate_schema(self) -> AnalysisObject:
         """Validate schema and return a validated AO instance.
@@ -1368,7 +1370,7 @@ class AnalysisObject:
         >>> isinstance(ao.validate_schema(), AnalysisObject)
         True
         """
-        return self.__class__._from_validated(_validate_schema(self._data))
+        return self._rewrap_dataset(_validate_schema(self._data), validate=True)
 
 
 from .reducer_ops.surface import install_analysis_object_reducers as _install_analysis_object_reducers

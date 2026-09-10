@@ -8,7 +8,7 @@ import xarray as xr
 
 from ..dataset_ownership import analysis_object_dataset
 from .align import align_contexts
-from .finalize import finalize_combine_output
+from .finalize import finalize_combine_output, prepare_combine_finalization
 from .metadata import shared_optional_name
 from .normalize import normalize_inputs, resolve_contexts
 from .types import AlignOptions, CombineContext, CombineResolveOptions
@@ -243,6 +243,11 @@ def _finalize_assembled_output(
     source_ao: "AnalysisObject",
 ) -> "AnalysisObject":
     ds = assembled.rename(output_var).to_dataset()
+    finalization = prepare_combine_finalization(
+        list(contexts),
+        owner="assemble_core",
+        source_ao=source_ao,
+    )
     param_name = shared_optional_name([ctx.param_coord for ctx in contexts])
     size_name = shared_optional_name([ctx.sequence_size_coord for ctx in contexts])
     if param_name is not None and param_name not in ds.coords:
@@ -250,7 +255,7 @@ def _finalize_assembled_output(
     if size_name is not None and size_name not in ds.coords:
         size_name = None
     return finalize_combine_output(
-        contexts[0],
+        finalization,
         ds,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
@@ -258,7 +263,6 @@ def _finalize_assembled_output(
         param_coord=param_name,
         sequence_size_coord=size_name,
         validate=validate,
-        source_ao=source_ao,
     )
 
 
