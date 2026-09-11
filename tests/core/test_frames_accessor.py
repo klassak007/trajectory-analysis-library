@@ -5,12 +5,11 @@ import xarray as xr
 
 from tal import AnalysisObject
 from tal.core.schema_errors import SchemaError
-from tal.frames import FrameGraph
+from tal.frames import Frame, FrameGraph
+from tal.spatial import Position
 from tal.utils.frame_ops import (
-    frame_bind,
     frame_ids,
     frame_remap_ids,
-    frame_rename,
     frame_retag,
 )
 
@@ -67,46 +66,6 @@ def test_frame_core_015_ao_frames_remap_ids_deterministic_injective_behavior() -
     assert frame_ids(one_pass) == ("camera", "scope")
 
 
-def test_frame_core_016_ao_frames_bind_resolve_create_missing_and_conflict_policy() -> None:
-    """ID: FRAME_CORE_016_ao_frames_bind_resolve_create_missing_and_conflict_policy."""
-    ao = _make_tagged_ao(parent="world", child="camera")
-    graph = FrameGraph()
-    parent, child = frame_bind(ao, graph=graph, create_missing=True, on_conflict="error")
-    assert parent is not None and child is not None
-    assert parent.id == "world"
-    assert child.id == "camera"
-    assert child.parent is parent
-
-    graph.get_or_create_frame("other")
-    conflict_ao = frame_retag(ao, parent="other", child="camera", validate=True)
-    before_parent = graph.get_frame("camera").parent
-    with pytest.raises(ValueError, match="frames.bind:"):
-        frame_bind(conflict_ao, graph=graph, create_missing=True, on_conflict="error")
-    assert graph.get_frame("camera").parent is before_parent
-
-    replace_parent, replace_child = frame_bind(
-        conflict_ao,
-        graph=graph,
-        create_missing=True,
-        on_conflict="replace",
-    )
-    assert replace_parent is not None and replace_child is not None
-    assert replace_parent.id == "other"
-    assert replace_child.parent is replace_parent
-
-
-def test_frame_core_017_ao_frames_rename_frame_syncs_graph_and_metadata() -> None:
-    """ID: FRAME_CORE_017_ao_frames_rename_frame_syncs_graph_and_metadata."""
-    ao = _make_tagged_ao(parent="world", child="camera")
-    graph = FrameGraph()
-    frame_bind(ao, graph=graph, create_missing=True, on_conflict="error")
-
-    out = frame_rename(ao, "camera", "cam0", graph=graph, on_conflict="error", validate=True)
-    assert graph.get_frame("camera") is None
-    assert graph.get_frame("cam0") is not None
-    assert frame_ids(out) == ("world", "cam0")
-
-
 def test_frame_core_018_ao_frames_functional_accessor_parity() -> None:
     """ID: FRAME_CORE_018_ao_frames_functional_accessor_parity."""
     ao = _make_tagged_ao(parent="world", child="camera")
@@ -119,25 +78,6 @@ def test_frame_core_018_ao_frames_functional_accessor_parity() -> None:
     fn_remap = frame_remap_ids(ao, {"world": "earth", "camera": "cam"}, validate=True)
     acc_remap = ao.frames.remap_ids({"world": "earth", "camera": "cam"}, validate=True)
     assert frame_ids(fn_remap) == frame_ids(acc_remap)
-
-    graph_a = FrameGraph()
-    graph_b = FrameGraph()
-    fn_parent, fn_child = frame_bind(ao, graph=graph_a, create_missing=True, on_conflict="error")
-    acc_parent, acc_child = ao.frames.bind(graph=graph_b, create_missing=True, on_conflict="error")
-    assert (fn_parent.id if fn_parent else None, fn_child.id if fn_child else None) == (
-        acc_parent.id if acc_parent else None,
-        acc_child.id if acc_child else None,
-    )
-
-
-def test_frame_hard_020_ao_frames_bind_missing_runtime_frame_fail_closed_when_create_missing_false() -> None:
-    """ID: FRAME_HARD_020_ao_frames_bind_missing_runtime_frame_fail_closed_when_create_missing_false."""
-    ao = _make_tagged_ao(parent="world", child="camera")
-    graph = FrameGraph()
-    with pytest.raises(ValueError, match="frames.bind: parent frame 'world' not found in graph"):
-        frame_bind(ao, graph=graph, create_missing=False, on_conflict="error")
-    assert graph.get_frame("world") is None
-    assert graph.get_frame("camera") is None
 
 
 def test_frame_hard_021_ao_frames_remap_ids_rejects_invalid_mapping_shape() -> None:
@@ -153,75 +93,13 @@ def test_frame_hard_021_ao_frames_remap_ids_rejects_invalid_mapping_shape() -> N
         frame_remap_ids(ao, {"a": "x", "b": "x"}, validate=True)
 
 
-def test_frame_hard_022_ao_frames_rename_frame_propagates_graph_conflict_policy_fail_closed() -> None:
-    """ID: FRAME_HARD_022_ao_frames_rename_frame_propagates_graph_conflict_policy_fail_closed."""
-    ao = _make_tagged_ao(parent="world", child="camera")
-    graph = FrameGraph()
-    frame_bind(ao, graph=graph, create_missing=True, on_conflict="error")
-    graph.get_or_create_frame("cam0")
-
-    before_ids = frame_ids(ao)
-    before_graph = tuple(sorted(graph._frames))
-    with pytest.raises(ValueError, match="frames.rename_frame:"):
-        frame_rename(ao, "camera", "cam0", graph=graph, on_conflict="error", validate=True)
-    assert frame_ids(ao) == before_ids
-    assert tuple(sorted(graph._frames)) == before_graph
-    assert graph.get_frame("camera") is not None
-
-
 def test_frame_hard_023_ao_frames_accessor_type_boundary_no_raw_runtime_exceptions() -> None:
     """ID: FRAME_HARD_023_ao_frames_accessor_type_boundary_no_raw_runtime_exceptions."""
     ao = _make_tagged_ao()
     with pytest.raises(TypeError, match="expected AnalysisObject, xr.Dataset, or xr.DataArray"):
         frame_ids(object())
-    with pytest.raises(TypeError, match="graph must be FrameGraph or None"):
-        frame_bind(ao, graph="bad", create_missing=True, on_conflict="error")  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="old must be a non-empty string frame id"):
-        frame_rename(ao, old=123, new="next", graph=FrameGraph(), on_conflict="error", validate=True)  # type: ignore[arg-type]
-
-
-def test_frame_hard_024_ao_frames_rename_frame_atomic_no_graph_mutation_on_metadata_failure() -> None:
-    """ID: FRAME_HARD_024_ao_frames_rename_frame_atomic_no_graph_mutation_on_metadata_failure."""
-    ao = _make_tagged_ao(parent="world", child="camera")
-    graph = FrameGraph()
-    frame_bind(ao, graph=graph, create_missing=True, on_conflict="error")
-
-    broken_ds = ao.as_dataset(copy="none").copy(deep=True)
-    broken_tal = dict(broken_ds.attrs["tal"])
-    broken_ext = dict(broken_tal.get("ext", {}))
-    broken_frames = dict(broken_ext.get("frames", {}))
-    broken_frames["child"] = 123
-    broken_ext["frames"] = broken_frames
-    broken_tal["ext"] = broken_ext
-    broken_ds.attrs["tal"] = broken_tal
-    broken_ao = AnalysisObject._from_unvalidated(broken_ds)
-
-    with pytest.raises(SchemaError, match="tal.ext.frames.child"):
-        frame_rename(broken_ao, "camera", "cam0", graph=graph, on_conflict="error", validate=True)
-
-    camera = graph.get_frame("camera")
-    world = graph.get_frame("world")
-    assert camera is not None
-    assert world is not None
-    assert graph.get_frame("cam0") is None
-    assert camera.parent is world
-
-
-def test_frame_hard_025_ao_frames_bind_rejects_non_frame_registry_entries() -> None:
-    """ID: FRAME_HARD_025_ao_frames_bind_rejects_non_frame_registry_entries."""
-    ao = _make_tagged_ao(parent="world", child="camera")
-    graph = FrameGraph()
-    marker = object()
-    graph._frames["world"] = marker  # type: ignore[assignment]
-
-    with pytest.raises(
-        ValueError,
-        match="frames.bind: parent frame 'world' is not a registered Frame object in graph",
-    ):
-        frame_bind(ao, graph=graph, create_missing=True, on_conflict="error")
-
-    assert graph._frames["world"] is marker
-    assert graph.get_frame("camera") is None
+    with pytest.raises(TypeError, match="frames.resolve: graph must be FrameGraph or None"):
+        ao.frames.resolve("bad")  # type: ignore[arg-type]
 
 
 def test_frame_hard_026_ao_frames_validate_true_retag_and_remap_fail_closed_on_invalid_schema() -> None:
@@ -239,19 +117,87 @@ def test_frame_hard_026_ao_frames_validate_true_retag_and_remap_fail_closed_on_i
     assert frame_ids(permissive_remap) == ("map", "sensor")
 
 
-def test_frame_hard_027_ao_frames_rename_validate_true_schema_failure_prevents_graph_mutation() -> None:
-    """ID: FRAME_HARD_027_ao_frames_rename_validate_true_schema_failure_prevents_graph_mutation."""
-    base = _make_tagged_ao(parent="world", child="camera")
-    invalid = _with_invalid_roles(base)
+def test_frame_core_129c_005_frames_resolve_read_only_selection() -> None:
+    """ID: FRAME_CORE_129C_005_frames_resolve_read_only_selection."""
+    associated = FrameGraph()
+    world = associated.get_or_create_frame("world")
+    camera = associated.get_or_create_frame("camera", parent=world)
+    other = FrameGraph()
+    other_world = other.get_or_create_frame("world")
+    other_camera = other.get_or_create_frame("camera", parent=other_world)
+
+    data = AnalysisObject.from_data(
+        xr.DataArray(
+            [1.0, 2.0, 3.0],
+            dims="axis",
+            coords={"axis": ["x", "y", "z"]},
+            name="position",
+        ),
+        core_dims=("axis",),
+    )
+    spatial = Position(data, parent="world", child="camera", graph=associated)
+    before = tuple((frame.id, frame.parent.id if frame.parent else None) for frame in (world, camera))
+    assert spatial.frames.resolve() == (world, camera)
+    assert spatial.frames.resolve(other) == (other_world, other_camera)
+    after = tuple((frame.id, frame.parent.id if frame.parent else None) for frame in (world, camera))
+    assert after == before
+
+
+def test_frame_hard_129c_006_resolve_absent_and_missing_ids_without_mutation(monkeypatch) -> None:
+    """ID: FRAME_HARD_129C_006_resolve_absent_and_missing_ids_without_mutation."""
     graph = FrameGraph()
-    frame_bind(base, graph=graph, create_missing=True, on_conflict="error")
+    assert _make_base_ao().frames.resolve(graph) == (None, None)
+    monkeypatch.setattr(
+        "tal.utils.frame_ops.get_active_frame_graph",
+        lambda: pytest.fail("absent frame IDs must not select a graph"),
+    )
+    assert _make_base_ao().frames.resolve() == (None, None)
+    monkeypatch.undo()
 
-    with pytest.raises(SchemaError, match="tal.core.roles.sequence_dim"):
-        frame_rename(invalid, "camera", "cam0", graph=graph, on_conflict="error", validate=True)
+    partial = _make_base_ao().frames.retag(parent="world")
+    with pytest.raises(ValueError, match="frames.resolve: parent frame 'world' not found"):
+        partial.frames.resolve(graph)
+    assert graph.get_frame("world") is None
+    world = graph.get_or_create_frame("world")
+    assert partial.frames.resolve(graph) == (world, None)
 
-    camera = graph.get_frame("camera")
-    world = graph.get_frame("world")
-    assert camera is not None
-    assert world is not None
-    assert graph.get_frame("cam0") is None
-    assert camera.parent is world
+    active = FrameGraph()
+    active_world = active.get_or_create_frame("world")
+    active_camera = active.get_or_create_frame("camera", parent=active_world)
+    with active:
+        assert _make_tagged_ao().frames.resolve() == (active_world, active_camera)
+
+
+def test_frame_hard_129c_007_mutating_accessor_surfaces_are_removed() -> None:
+    """ID: FRAME_HARD_129C_007_mutating_accessor_surfaces_are_removed."""
+    from tal.utils import frame_ops
+
+    accessor = _make_tagged_ao().frames
+    assert not hasattr(accessor, "bind")
+    assert not hasattr(accessor, "rename_frame")
+    assert not hasattr(frame_ops, "frame_bind")
+    assert not hasattr(frame_ops, "frame_rename")
+
+
+@pytest.mark.parametrize("role", ["parent", "child"])
+def test_frame_hard_129c_008_resolve_rejects_foreign_frame_results(role: str) -> None:
+    """ID: FRAME_HARD_129C_008_resolve_rejects_foreign_frame_results."""
+
+    class ForeignLookupGraph(FrameGraph):
+        def __init__(self, foreign: Frame) -> None:
+            super().__init__()
+            self.foreign = foreign
+
+        def get_frame(self, name: str) -> Frame | None:
+            return self.foreign if name == self.foreign.id else None
+
+    owner_graph = FrameGraph()
+    foreign = owner_graph.get_or_create_frame("world")
+    selected_graph = ForeignLookupGraph(foreign)
+    tagged = _make_base_ao().frames.retag(**{role: "world"})
+
+    with pytest.raises(ValueError, match="frames.resolve: frame belongs to a different FrameGraph"):
+        tagged.frames.resolve(selected_graph)
+
+    assert owner_graph.get_frame("world") is foreign
+    assert foreign.parent is None

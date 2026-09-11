@@ -90,7 +90,26 @@ def test_bound_paths_match_explicit_resolvers(dynamic, rep, reverse, kind):
     assert len(calls) == (2 if dynamic else 0)
 
 
-@pytest.mark.parametrize("failure", ["payload", "signature", "tags", "same", "cycle", "parent", "foreign", "unregistered", "frozen", "policy", "empty", "endpoint_type", "replace_parent", "graph_type"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "payload",
+        "signature",
+        "tags",
+        "same",
+        "cycle",
+        "parent",
+        "foreign",
+        "unregistered",
+        "frozen",
+        "policy",
+        "policy_type",
+        "empty",
+        "endpoint_type",
+        "replace_parent",
+        "graph_type",
+    ],
+)
 def test_binding_preflight_is_atomic(failure):
     """ID: BIND_127H_002_preflight_failures_are_atomic."""
     graph = FrameGraph()
@@ -107,6 +126,7 @@ def test_binding_preflight_is_atomic(failure):
     if failure == "unregistered": child = Frame(name="ghost", graph=graph)
     if failure == "frozen": graph.freeze()
     if failure == "policy": policy = "merge"
+    if failure == "policy_type": policy = object()
     if failure == "empty": child = "  "
     if failure == "endpoint_type": child = object()
     if failure == "replace_parent": child, policy = body, "replace"

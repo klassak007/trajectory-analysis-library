@@ -82,7 +82,7 @@ from tal.spatial.metadata.frame_motion import (
     set_edge_motion_class,
     set_frame_inertial_status,
 )
-from tal.utils.frame_ops import frame_bind, frame_retag
+from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames, set_frames
 from tal.utils.topology_operation_families import (
     operation_intent_support_for_operation_family,
@@ -1388,7 +1388,6 @@ def example_frames_api_surface() -> None:
     from tal.utils.frame_ops import (
         frame_ids,
         frame_remap_ids,
-        frame_rename,
         frame_retag,
     )
 
@@ -1418,7 +1417,9 @@ def example_frames_api_surface() -> None:
     tagged = frame_retag(ao, parent="world", child="base")
     assert frame_ids(tagged) == ("world", "base")
     assert frame_remap_ids(tagged, {"base": "base_link"}).frames.ids() == ("world", "base_link")
-    renamed = frame_rename(tagged, "base", "base_link", graph=graph)
+    assert tagged.frames.resolve(graph) == (world, base)
+    base.rename("base_link")
+    renamed = frame_remap_ids(tagged, {"base": "base_link"})
     assert renamed.frames.ids() == ("world", "base_link")
 
 
@@ -1520,17 +1521,22 @@ def example_linalg_layout_surface() -> None:
     assert concatenated.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).as_dataset(copy="none")["v"].sel(axis="y").item() == 9.0
 
 
-def example_utils_frame_bind() -> None:
-    ao = AnalysisObject.from_data(
-        xr.Dataset({"value": ("sample", np.asarray([1.0], dtype=float))}, coords={"sample": [0]}),
-        sequence_dim="sample",
-        core_dims=(),
-        validate=True,
+def example_spatial_pose_register() -> None:
+    labels = ["x", "y", "z", "w"]
+    matrix = AnalysisObject.from_data(
+        xr.DataArray(
+            np.eye(4),
+            dims=("row", "col"),
+            coords={"row": labels, "col": labels},
+            name="pose_matrix",
+        ),
+        core_dims=("row", "col"),
     )
-    tagged = AnalysisObject._from_unvalidated(set_frames(ao.as_dataset(copy="none"), parent="world", child="sensor", validate=False))
     graph = FrameGraph()
-    parent, child = frame_bind(tagged, graph=graph, create_missing=True, on_conflict="error")
-    assert (parent.id if parent is not None else None, child.id if child is not None else None) == ("world", "sensor")
+    pose = Pose.from_matrix(matrix, parent="world", child="body", graph=graph)
+    assert pose.register() is pose
+    parent, child = pose.frames.resolve()
+    assert (parent.id, child.id) == ("world", "body")
 
 
 def example_utils_frames_accessor() -> None:
@@ -1543,11 +1549,14 @@ def example_utils_frames_accessor() -> None:
     tagged = ao.frames.retag(parent="world", child="tool")
     remapped = tagged.frames.remap_ids({"world": "map", "tool": "tool_0"})
     graph = FrameGraph()
-    parent, child = remapped.frames.bind(graph=graph, create_missing=True)
+    parent = graph.get_or_create_frame("map")
+    child = graph.get_or_create_frame("tool_0", parent=parent)
+    resolved_parent, resolved_child = remapped.frames.resolve(graph)
     assert tagged.frames.ids() == ("world", "tool")
     assert remapped.frames.ids() == ("map", "tool_0")
-    assert (parent.id, child.id) == ("map", "tool_0")
-    renamed = remapped.frames.rename_frame("tool_0", "tool_1", graph=graph)
+    assert (resolved_parent, resolved_child) == (parent, child)
+    child.rename("tool_1")
+    renamed = remapped.frames.remap_ids({"tool_0": "tool_1"})
     assert renamed.frames.ids() == ("map", "tool_1")
 
 
@@ -1702,7 +1711,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "FRAMES-API-SURFACE": example_frames_api_surface,
     "VIZ-LINE": example_viz_line,
     "VIZ-SURFACE-ACCESSORS": example_viz_surface_accessors,
-    "UTILS-FRAME-BIND": example_utils_frame_bind,
+    "SPATIAL-POSE-REGISTER": example_spatial_pose_register,
     "UTILS-FRAMES-ACCESSOR": example_utils_frames_accessor,
     "UTILS-FRAME-SCHEMA-GET": example_utils_frame_schema_get,
     "UTILS-FRAME-SCHEMA-SET": example_utils_frame_schema_set,

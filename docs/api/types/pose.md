@@ -30,6 +30,12 @@ Constructors accept `parent=`, `child=`, `expressed_in=`, and `graph=`.
 Association is passive and does not register the pose. Inspect `pose.graph` or
 return a distinct associated alias with `pose.with_graph(...)`.
 
+Use `pose.register()` after associating a canonical parent/child Pose with a
+graph. It accepts static and parameterized native-rate providers, returns the
+same Pose by identity, and never implicitly reparents an existing frame.
+`tal.spatial.bind_pose(...)` remains the advanced graph-first API for callable
+or exact unparameterized providers.
+
 ## Representation
 
 ```python
@@ -83,6 +89,7 @@ selects the parameter coordinate used for interpolation.
    tal.spatial.Pose
    tal.spatial.Pose.graph
    tal.spatial.Pose.with_graph
+   tal.spatial.Pose.register
    tal.spatial.Pose.from_components
    tal.spatial.Pose.from_matrix
    tal.spatial.Pose.decompose

@@ -231,22 +231,6 @@ def test_arch_frames_023_slice_d_no_direct_schema_attrs_mutation_or_forbidden_im
     assert "from tal.core import" not in frame_ops
 
 
-def test_arch_frames_024_slice_d_frame_rename_preflights_metadata_before_graph_mutation() -> None:
-    """ID: ARCH_FRAMES_024_slice_d_frame_rename_preflights_metadata_before_graph_mutation."""
-    frame_ops = Path("tal/utils/frame_ops.py").read_text(encoding="utf-8")
-    remap_pos = frame_ops.index("remapped = frame_remap_ids(")
-    rename_pos = frame_ops.index("resolved_graph.rename_frame(")
-    assert remap_pos < rename_pos
-
-
-def test_arch_frames_025_slice_d_frame_bind_requires_registered_frame_object_guard() -> None:
-    """ID: ARCH_FRAMES_025_slice_d_frame_bind_requires_registered_frame_object_guard."""
-    frame_ops = Path("tal/utils/frame_ops.py").read_text(encoding="utf-8")
-    assert "def _require_registered_frame_object(" in frame_ops
-    assert "is not a registered Frame object in graph" in frame_ops
-    assert "return _require_registered_frame_object(" in frame_ops
-
-
 def test_arch_frames_027_visualization_owner_split_and_budget() -> None:
     """ID: ARCH_FRAMES_027_visualization_owner_split_and_budget."""
     visualization = Path("tal/frames/visualization.py")
@@ -398,19 +382,6 @@ def test_frame_doc_003_phase7_slice_c_snapshot_docs_and_api_entries_present() ->
     assert "snapshot_to_networkx" in api_frames
     assert "snapshot_from_seeds" in user_frames
     assert "render_snapshot_ascii" in user_frames
-
-
-def test_frame_doc_004_phase7_slice_d_ao_frames_accessor_docs_and_api_entries_present() -> None:
-    """ID: FRAME_DOC_004_phase7_slice_d_ao_frames_accessor_docs_and_api_entries_present."""
-    api_analysis_object = Path("docs/api/analysis-object.md").read_text(encoding="utf-8")
-    api_frames = Path("docs/api/frames.md").read_text(encoding="utf-8")
-    user_frames = Path("docs/user-guide/frames.md").read_text(encoding="utf-8")
-    assert "ao.frames" in api_analysis_object
-    assert "rename_frame" in api_frames
-    assert "frame_retag" in api_frames
-    assert "frame_bind" in api_frames
-    assert "ao.frames" in user_frames
-    assert "rename_frame" in user_frames
 
 
 def test_frame_doc_005_framegraph_visualization_docs_and_api_entries_present() -> None:

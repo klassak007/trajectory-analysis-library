@@ -685,7 +685,7 @@ def example_guide_frames_basic() -> None:
         edge_value_fn=lambda child, parent: [(child.id, parent.id)],
         compose=lambda acc, value: acc + value,
         inverse=lambda value: [(value[0][1], value[0][0])],
-        identity=lambda: [],
+        identity=list,
     )
     snapshot = snapshot_from_seeds(("drone",), graph=graph)
     ascii_tree = render_snapshot_ascii(snapshot)
@@ -697,14 +697,15 @@ def example_guide_frames_basic() -> None:
     )
     retagged = ao.frames.retag(parent="ship", child="drone")
     parent, child = retagged.frames.ids()
-    bound_parent, bound_child = retagged.frames.bind(graph=graph, create_missing=True)
+    resolved_parent, resolved_child = retagged.frames.resolve(graph)
     assert [node.id for node in path.nodes] == ["drone", "ship", "world"]
     assert steps == [("drone", "ship"), ("ship", "world")]
     assert "drone" in ascii_tree
     assert (parent, child) == ("ship", "drone")
-    assert bound_parent is ship
-    assert bound_child.id == "drone"
-    renamed = retagged.frames.rename_frame("drone", "drone_0", graph=graph)
+    assert resolved_parent is ship
+    assert resolved_child is drone
+    drone.rename("drone_0")
+    renamed = retagged.frames.remap_ids({"drone": "drone_0"})
     assert renamed.frames.ids() == ("ship", "drone_0")
 
 

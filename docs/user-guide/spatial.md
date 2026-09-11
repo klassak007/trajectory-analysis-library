@@ -77,7 +77,8 @@ Frame declarations are schema metadata. The optional `graph` is a passive,
 wrapper-local association: construction and `with_graph(...)` never create
 frames or register providers. Spatial results retain a shared association;
 Dataset/DataArray conversion and deliberate demotion do not. Use
-`bind_pose(...)` when you intend to register an edge provider.
+`pose.register()` for an associated static or native-rate Pose, or
+`bind_pose(...)` for a callable or exact unparameterized provider.
 
 ## Spatial Types
 

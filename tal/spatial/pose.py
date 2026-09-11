@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Self
 
 import numpy as np
 import xarray as xr
@@ -701,6 +701,69 @@ class Pose(SpatialConfigurationConstructionMixin, AnalysisObject):
         True
         """
         return pose_compose(self, other, validate=validate)
+
+    def register(self, *, on_conflict: str = "error") -> Self:
+        """Register this Pose as its associated graph edge provider.
+
+        Parameters
+        ----------
+        on_conflict : str, optional
+            Defaults to ``"error"``. Use ``"replace"`` to replace an existing
+            provider on the same graph relationship.
+
+        Returns
+        -------
+        Self
+            This exact Pose object after successful registration.
+
+        Raises
+        ------
+        TypeError
+            If ``on_conflict`` has the wrong type.
+        ValueError
+            If ``on_conflict`` has an unsupported value, or if the Pose has no
+            associated graph, lacks a canonical edge declaration, uses
+            unsupported exact sampling, or conflicts with graph topology or an
+            existing provider.
+
+        Notes
+        -----
+        Registration may create missing endpoint frames but never reparents an
+        existing child. Static and parameterized native-rate poses are accepted.
+        Exact unparameterized sequence providers remain available through
+        :func:`tal.spatial.bind_pose`. The graph stores a metadata-isolated,
+        association-free, non-owning provider projection.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.frames import FrameGraph
+        >>> from tal.spatial import Pose
+        >>> labels = ["x", "y", "z", "w"]
+        >>> matrix = AnalysisObject.from_data(
+        ...     xr.DataArray(
+        ...         np.eye(4),
+        ...         dims=("row", "col"),
+        ...         coords={"row": labels, "col": labels},
+        ...         name="pose_matrix",
+        ...     ),
+        ...     core_dims=("row", "col"),
+        ... )
+        >>> graph = FrameGraph()
+        >>> pose = Pose.from_matrix(
+        ...     matrix, parent="world", child="body", graph=graph
+        ... )
+        >>> pose.register() is pose
+        True
+        >>> tuple(frame.id for frame in pose.frames.resolve())
+        ('world', 'body')
+        """
+        from .pose_binding import _register_pose
+
+        return _register_pose(self, on_conflict=on_conflict)
+
     def inverse(self, *, validate: bool = True) -> "Pose":
         """Return the inverse rigid transform.
 

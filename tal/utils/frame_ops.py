@@ -28,18 +28,6 @@ def _normalize_frame_name(value: object, *, owner: str, arg: str) -> str:
     raise ValueError(f"{owner}: {arg} must be a non-empty string frame id.")
 
 
-def _validate_on_conflict(value: str, *, owner: str) -> str:
-    if value in {"error", "replace"}:
-        return value
-    raise ValueError(f"{owner}: on_conflict must be 'error' or 'replace'.")
-
-
-def _normalize_create_missing(value: object, *, owner: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    raise TypeError(f"{owner}: create_missing must be bool, got {type(value).__name__}.")
-
-
 def _normalize_remap_mapping(mapping: Mapping[object, object], *, owner: str) -> dict[str, str]:
     if not isinstance(mapping, Mapping):
         raise TypeError(f"{owner}: mapping must be a mapping[str, str].")
@@ -56,34 +44,29 @@ def _normalize_remap_mapping(mapping: Mapping[object, object], *, owner: str) ->
     return out
 
 
-def _resolve_graph(graph: FrameGraph | None, *, owner: str) -> FrameGraph:
-    if graph is None:
-        return get_active_frame_graph()
-    if isinstance(graph, FrameGraph):
+def _remembered_graph(source: AnalysisObject, *, owner: str) -> FrameGraph | None:
+    candidate = getattr(source, "graph", None)
+    if candidate is None or isinstance(candidate, FrameGraph):
+        return candidate
+    raise TypeError(f"{owner}: source graph association must be FrameGraph or None.")
+
+
+def _require_graph_argument(graph: object, *, owner: str) -> FrameGraph | None:
+    if graph is None or isinstance(graph, FrameGraph):
         return graph
     raise TypeError(f"{owner}: graph must be FrameGraph or None, got {type(graph).__name__}.")
 
 
-def _resolve_or_create_frame(
-    graph: FrameGraph,
-    frame_id: str,
+def _resolve_read_graph(
+    source: AnalysisObject,
+    graph: FrameGraph | None,
     *,
-    create_missing: bool,
     owner: str,
-    role: str,
-) -> Frame:
-    resolved: object = graph.get_frame(frame_id)
-    if resolved is None and create_missing:
-        resolved = graph.get_or_create_frame(frame_id)
-    if resolved is None:
-        raise ValueError(f"{owner}: {role} frame {frame_id!r} not found in graph.")
-    return _require_registered_frame_object(
-        resolved,
-        graph=graph,
-        frame_id=frame_id,
-        owner=owner,
-        role=role,
-    )
+) -> FrameGraph:
+    if graph is not None:
+        return graph
+    remembered = _remembered_graph(source, owner=owner)
+    return remembered if remembered is not None else get_active_frame_graph()
 
 
 def _require_registered_frame_object(
@@ -95,10 +78,32 @@ def _require_registered_frame_object(
     role: str,
 ) -> Frame:
     if not isinstance(value, Frame):
+        raise TypeError(f"{owner}: {role} frame {frame_id!r} is not a registered Frame object in graph.")
+    if value.id != frame_id:
         raise ValueError(f"{owner}: {role} frame {frame_id!r} is not a registered Frame object in graph.")
-    if value._graph is not graph or value.id != frame_id or graph._frames.get(frame_id) is not value:
-        raise ValueError(f"{owner}: {role} frame {frame_id!r} is not a registered Frame object in graph.")
+    graph._assert_owned(value, context=owner)
     return value
+
+
+def _resolve_frame_id(
+    graph: FrameGraph,
+    frame_id: str | None,
+    *,
+    owner: str,
+    role: str,
+) -> Frame | None:
+    if frame_id is None:
+        return None
+    resolved = graph.get_frame(frame_id)
+    if resolved is None:
+        raise ValueError(f"{owner}: {role} frame {frame_id!r} not found in graph.")
+    return _require_registered_frame_object(
+        resolved,
+        graph=graph,
+        frame_id=frame_id,
+        owner=owner,
+        role=role,
+    )
 
 
 def frame_ids(ao: object) -> tuple[str | None, str | None]:
@@ -223,156 +228,6 @@ def frame_remap_ids(
     return _rewrap_like(source, updated, validate=validate)
 
 
-def frame_bind(
-    ao: object,
-    *,
-    graph: FrameGraph | None = None,
-    create_missing: bool = True,
-    on_conflict: str = "error",
-) -> tuple[Frame | None, Frame | None]:
-    """Bind AO frame ids to concrete ``Frame`` objects.
-
-    Parameters
-    ----------
-    ao : object
-    graph : FrameGraph
-        Optional graph override.
-    create_missing : bool
-        Create missing frames when True.
-    on_conflict : str
-        Conflict policy ("error" or "replace").
-
-    Returns
-    -------
-    tuple[Frame | None, Frame | None]
-
-    Notes
-    -----
-    Uses fail-closed frame id validation and graph registration checks.
-
-    Examples
-    --------
-    >>> import xarray as xr
-    >>> from tal.core import AnalysisObject
-    >>> from tal.frames import FrameGraph
-    >>> ao = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-    >>> tagged = ao.frames.retag(parent="world", child="tool")
-    >>> parent, child = tagged.frames.bind(graph=FrameGraph(), create_missing=True)
-    >>> (parent.id, child.parent.id)
-    ('world', 'world')
-    """
-    owner = "frames.bind"
-    source = coerce_analysis_object_input(ao, owner=owner)
-    policy = _validate_on_conflict(on_conflict, owner=owner)
-    create_flag = _normalize_create_missing(create_missing, owner=owner)
-    resolved_graph = _resolve_graph(graph, owner=owner)
-    return _frame_bind_impl(
-        source=source,
-        policy=policy,
-        create_flag=create_flag,
-        resolved_graph=resolved_graph,
-        owner=owner,
-    )
-
-
-def _frame_bind_impl(
-    *,
-    source: "AnalysisObject",
-    policy: str,
-    create_flag: bool,
-    resolved_graph: FrameGraph,
-    owner: str,
-) -> tuple[Frame | None, Frame | None]:
-    parent_id, child_id = get_frames(analysis_object_dataset(source))
-    parent = None
-    child = None
-    if parent_id is not None:
-        parent = _resolve_or_create_frame(
-            resolved_graph,
-            parent_id,
-            create_missing=create_flag,
-            owner=owner,
-            role="parent",
-        )
-    if child_id is not None:
-        child = _resolve_or_create_frame(
-            resolved_graph,
-            child_id,
-            create_missing=create_flag,
-            owner=owner,
-            role="child",
-        )
-    if parent is not None and child is not None and child.parent is not parent:
-        try:
-            resolved_graph.reparent_frame(child, parent, on_conflict=policy)
-        except ValueError as exc:
-            raise ValueError(f"{owner}: {exc}") from exc
-    return parent, child
-
-
-def frame_rename(
-    ao: object,
-    old: str,
-    new: str,
-    *,
-    graph: FrameGraph | None = None,
-    on_conflict: str = "error",
-    validate: bool = True,
-) -> "AnalysisObject":
-    """Rename a frame id in AO metadata and optionally in a backing graph.
-
-    Parameters
-    ----------
-    ao : object
-        AnalysisObject-like input value.
-    old : str
-        Frame/schema rewrite selector used by this operation.
-    new : str
-        Frame/schema rewrite selector used by this operation.
-    graph : FrameGraph | None, optional
-        Optional ``FrameGraph`` override used for path resolution.
-    on_conflict : str, optional
-        Conflict policy controlling behavior when target ids already exist.
-    validate : bool, optional
-        When ``True``, validate output schema/layout invariants before returning.
-
-    Returns
-    -------
-    AnalysisObject
-        Result of applying this operation with TAL semantic constraints preserved.
-
-    Notes
-    -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
-
-    Examples
-    --------
-    >>> import xarray as xr
-    >>> from tal.core import AnalysisObject
-    >>> from tal.frames import FrameGraph
-    >>> from tal.utils.frame_ops import frame_rename
-    >>> graph = FrameGraph()
-    >>> _ = graph.get_or_create_frame("world")
-    >>> _ = graph.get_or_create_frame("tool")
-    >>> ao = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-    >>> tagged = ao.frames.retag(parent="world", child="tool")
-    >>> frame_rename(tagged, "tool", "tool_0", graph=graph).frames.ids()
-    ('world', 'tool_0')
-    """
-    owner = "frames.rename_frame"
-    source = coerce_analysis_object_input(ao, owner=owner)
-    old_id = _normalize_frame_name(old, owner=owner, arg="old")
-    new_id = _normalize_frame_name(new, owner=owner, arg="new")
-    policy = _validate_on_conflict(on_conflict, owner=owner)
-    resolved_graph = _resolve_graph(graph, owner=owner)
-    remapped = frame_remap_ids(source, {old_id: new_id}, validate=validate)
-    try:
-        resolved_graph.rename_frame(old_id, new_id, on_conflict=policy)
-    except ValueError as exc:
-        raise ValueError(f"{owner}: {exc}") from exc
-    return remapped
-
-
 class FramesAccessor:
     """Frame utility accessor mounted on ``AnalysisObject`` as ``ao.frames``.
 
@@ -482,85 +337,35 @@ class FramesAccessor:
         """
         return frame_remap_ids(self._ao, mapping, validate=validate)
 
-    def bind(
+    def resolve(
         self,
-        *,
         graph: FrameGraph | None = None,
-        create_missing: bool = True,
-        on_conflict: str = "error",
     ) -> tuple[Frame | None, Frame | None]:
-        """Bind AO frame ids to registered ``Frame`` objects in a ``FrameGraph``.
+        """Resolve present frame IDs without mutating graph topology.
 
         Parameters
         ----------
-        graph : FrameGraph | None, optional
-            Optional ``FrameGraph`` override used for path resolution.
-        create_missing : bool, optional
-            Whether missing frame identifiers should be created in the target graph.
-        on_conflict : str, optional
-            Conflict policy controlling behavior when identifiers already exist.
+        graph : FrameGraph or None, optional
+            Explicit graph override. Otherwise a remembered spatial graph is
+            preferred before the active graph.
 
         Returns
         -------
         tuple[Frame | None, Frame | None]
-            Bound parent and child frames. Missing ids return ``None`` in their
-            corresponding position.
+            Registered parent and child frames. An absent metadata ID produces
+            ``None`` in the corresponding position.
+
+        Raises
+        ------
+        TypeError
+            If ``graph`` is neither a ``FrameGraph`` nor ``None``.
+        ValueError
+            If a present frame ID is not registered in the selected graph.
 
         Notes
         -----
-        When both ids are present, the child is parented under the parent in the
-        target graph according to ``on_conflict``.
-
-        Examples
-        --------
-        >>> import xarray as xr
-        >>> from tal.core import AnalysisObject
-        >>> from tal.frames import FrameGraph
-        >>> ao = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-        >>> tagged = ao.frames.retag(parent="world", child="tool")
-        >>> parent, child = tagged.frames.bind(graph=FrameGraph(), create_missing=True)
-        >>> (parent.id, child.id)
-        ('world', 'tool')
-        """
-        return frame_bind(
-            self._ao,
-            graph=graph,
-            create_missing=create_missing,
-            on_conflict=on_conflict,
-        )
-
-    def rename_frame(
-        self,
-        old: str,
-        new: str,
-        *,
-        graph: FrameGraph | None = None,
-        on_conflict: str = "error",
-        validate: bool = True,
-    ) -> "AnalysisObject":
-        """Rename a frame id in this object (and graph when provided).
-
-        Parameters
-        ----------
-        old : str
-            Existing frame id to replace.
-        new : str
-            Replacement frame id.
-        graph : FrameGraph | None, optional
-            Optional ``FrameGraph`` override used for path resolution.
-        on_conflict : str, optional
-            Conflict policy controlling behavior when target ids already exist.
-        validate : bool, optional
-            When ``True``, validate output schema/layout invariants before returning.
-
-        Returns
-        -------
-        AnalysisObject
-            AO with matching frame metadata renamed.
-
-        Notes
-        -----
-        When ``graph`` is provided, the runtime graph frame is renamed as well.
+        Resolution never creates, attaches, reparents, renames, or removes a
+        frame. An explicit graph overrides a remembered wrapper association.
 
         Examples
         --------
@@ -568,21 +373,24 @@ class FramesAccessor:
         >>> from tal.core import AnalysisObject
         >>> from tal.frames import FrameGraph
         >>> graph = FrameGraph()
-        >>> _ = graph.get_or_create_frame("world")
-        >>> _ = graph.get_or_create_frame("tool")
-        >>> ao = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-        >>> tagged = ao.frames.retag(parent="world", child="tool")
-        >>> tagged.frames.rename_frame("tool", "tool_0", graph=graph).frames.ids()
-        ('world', 'tool_0')
+        >>> world = graph.get_or_create_frame("world")
+        >>> tool = graph.get_or_create_frame("tool", parent=world)
+        >>> ao = AnalysisObject.from_data(
+        ...     xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}),
+        ...     sequence_dim="sample", core_dims=(), validate=True,
+        ... ).frames.retag(parent="world", child="tool")
+        >>> ao.frames.resolve(graph) == (world, tool)
+        True
         """
-        return frame_rename(
-            self._ao,
-            old,
-            new,
-            graph=graph,
-            on_conflict=on_conflict,
-            validate=validate,
-        )
+        owner = "frames.resolve"
+        selected_arg = _require_graph_argument(graph, owner=owner)
+        parent_id, child_id = get_frames(analysis_object_dataset(self._ao))
+        if parent_id is None and child_id is None:
+            return None, None
+        selected = _resolve_read_graph(self._ao, selected_arg, owner=owner)
+        parent = _resolve_frame_id(selected, parent_id, owner=owner, role="parent")
+        child = _resolve_frame_id(selected, child_id, owner=owner, role="child")
+        return parent, child
 
 
 def install_analysis_object_frames_accessor() -> None:
@@ -640,10 +448,8 @@ def install_analysis_object_frames_accessor() -> None:
 
 __all__ = [
     "FramesAccessor",
-    "frame_bind",
     "frame_ids",
     "frame_remap_ids",
-    "frame_rename",
     "frame_retag",
     "install_analysis_object_frames_accessor",
 ]

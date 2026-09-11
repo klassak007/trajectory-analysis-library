@@ -1,19 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
+from tal.core.dataset_ownership import analysis_object_dataset
+from tal.core.schema_read import read_param_coord_name, read_roles
+from tal.core.schema_validate import validate_schema_structure
 from tal.frames import Frame, FrameGraph
 from tal.frames.registry import (
     _require_frame_name,
     get_edge_to_parent_runtime_ext,
     set_edge_to_parent_runtime_ext,
 )
+from tal.utils.frame_schema import get_frames
 
+from .association import associated_graph
 from .ops.pose_provider_ops import (
     POSE_PROVIDER_KEY,
     BoundPoseProvider,
     prepare_pose_provider,
 )
+
+if TYPE_CHECKING:
+    from .pose import Pose
+
+_ProviderTopology = Literal["static", "dynamic", "exact"]
+_ConflictPolicy = Literal["error", "replace"]
 
 
 @dataclass(frozen=True)
@@ -22,6 +34,32 @@ class _BindingPlan:
     parent_id: str
     child_id: str
     provider: BoundPoseProvider
+
+
+def _require_conflict_policy(value: object, *, owner: str) -> _ConflictPolicy:
+    if not isinstance(value, str):
+        raise TypeError(f"{owner}: on_conflict must be 'error' or 'replace'.")
+    if value == "error":
+        return "error"
+    if value == "replace":
+        return "replace"
+    raise ValueError(f"{owner}: on_conflict must be 'error' or 'replace'.")
+
+
+def _provider_topology(pose: Pose) -> _ProviderTopology:
+    ds = analysis_object_dataset(pose)
+    validate_schema_structure(ds)
+    _, sequence_dim, _, _ = read_roles(ds)
+    param_coord = read_param_coord_name(ds)
+    if sequence_dim is None:
+        return "static"
+    return "dynamic" if param_coord is not None else "exact"
+
+
+def _registration_endpoint(value: str | None, *, role: str, owner: str) -> str:
+    if value is None:
+        raise ValueError(f"{owner}: Pose requires a nonempty {role} frame declaration.")
+    return _require_frame_name(value, owner=owner, arg=role)
 
 
 def _endpoint(value: Frame | str, *, graph: FrameGraph, arg: str, owner: str) -> tuple[str, Frame | None]:
@@ -59,12 +97,18 @@ def _require_bindable_edge(
         raise ValueError(f"{owner}: edge already has a bound Pose provider; use on_conflict='replace'.")
 
 
-def _plan_binding(graph, parent, child, provider, *, on_conflict: str, owner: str) -> _BindingPlan:
+def _plan_binding(
+    graph,
+    parent,
+    child,
+    provider,
+    *,
+    on_conflict: _ConflictPolicy,
+    owner: str,
+) -> _BindingPlan:
     if not isinstance(graph, FrameGraph):
         raise TypeError(f"{owner}: graph must be FrameGraph.")
     graph._assert_mutable(context=owner)
-    if on_conflict not in ("error", "replace"):
-        raise ValueError(f"{owner}: on_conflict must be 'error' or 'replace'.")
     parent_id, parent_frame = _endpoint(parent, graph=graph, arg="parent", owner=owner)
     child_id, child_frame = _endpoint(child, graph=graph, arg="child", owner=owner)
     _require_bindable_edge(
@@ -78,6 +122,42 @@ def _plan_binding(graph, parent, child, provider, *, on_conflict: str, owner: st
     )
     normalized = prepare_pose_provider(provider, child_id=child_id, parent_id=parent_id, owner=owner)
     return _BindingPlan(graph, parent_id, child_id, normalized)
+
+
+def _commit_binding(plan: _BindingPlan, *, owner: str) -> Frame:
+    parent_frame = plan.graph.get_or_create_frame(plan.parent_id)
+    child_frame = plan.graph.get_or_create_frame(plan.child_id, parent=parent_frame)
+    set_edge_to_parent_runtime_ext(child_frame, POSE_PROVIDER_KEY, plan.provider, owner=owner)
+    return child_frame
+
+
+def _register_pose(pose: Pose, *, on_conflict: str = "error") -> Pose:
+    """Register one associated Pose through the shared edge-binding owner."""
+    owner = "spatial.pose.register"
+    policy = _require_conflict_policy(on_conflict, owner=owner)
+    graph = associated_graph(pose)
+    if graph is None:
+        raise ValueError(f"{owner}: Pose must be associated with a FrameGraph before registration.")
+    parent, child = get_frames(analysis_object_dataset(pose))
+    parent_id = _registration_endpoint(parent, role="parent", owner=owner)
+    child_id = _registration_endpoint(child, role="child", owner=owner)
+    if parent_id == child_id:
+        raise ValueError(f"{owner}: parent and child frame declarations must be distinct.")
+    if _provider_topology(pose) == "exact":
+        raise ValueError(
+            f"{owner}: sequence-backed Pose registration requires a declared param_coord; "
+            "use bind_pose(...) for an exact unparameterized provider."
+        )
+    plan = _plan_binding(
+        graph,
+        parent_id,
+        child_id,
+        pose,
+        on_conflict=policy,
+        owner=owner,
+    )
+    _commit_binding(plan, owner=owner)
+    return pose
 
 
 def bind_pose(graph: FrameGraph, parent: Frame | str, child: Frame | str, provider: object, *, on_conflict: str = "error") -> Frame:
@@ -103,9 +183,11 @@ def bind_pose(graph: FrameGraph, parent: Frame | str, child: Frame | str, provid
     Raises
     ------
     TypeError
-        If graph, endpoint types, or an inspectable callback signature are invalid.
+        If graph, endpoint, conflict-policy types, or an inspectable callback
+        signature are invalid.
     ValueError
-        If graph mutation, topology, provider layout, or frame tags conflict.
+        If the conflict-policy value, graph mutation, topology, provider
+        layout, or frame tags are invalid.
 
     Notes
     -----
@@ -148,8 +230,6 @@ def bind_pose(graph: FrameGraph, parent: Frame | str, child: Frame | str, provid
     True
     """
     owner = "spatial.bind_pose"
-    plan = _plan_binding(graph, parent, child, provider, on_conflict=on_conflict, owner=owner)
-    parent_frame = plan.graph.get_or_create_frame(plan.parent_id)
-    child_frame = plan.graph.get_or_create_frame(plan.child_id, parent=parent_frame)
-    set_edge_to_parent_runtime_ext(child_frame, POSE_PROVIDER_KEY, plan.provider, owner=owner)
-    return child_frame
+    policy = _require_conflict_policy(on_conflict, owner=owner)
+    plan = _plan_binding(graph, parent, child, provider, on_conflict=policy, owner=owner)
+    return _commit_binding(plan, owner=owner)
