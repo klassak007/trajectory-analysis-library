@@ -8,6 +8,7 @@ from tal.utils.numba_support import njit_kernel, require_numba
 
 from . import fixed_size_primitives as _fixed_primitives
 from . import higher_order_interp_primitives as _interp_primitives
+from . import quaternion_interp_primitives as _quat_interp_primitives
 from ._fixed_size_constants import STATUS_INVALID_QUAT, STATUS_OK
 from .higher_order_interp_backends import (
     PoseInterpWindow,
@@ -46,6 +47,14 @@ def _jit_kernel_helpers(numba) -> None:
 
 
 def _jit_primitive_helpers(numba) -> None:
+    _quat_interp_primitives.normalize_quat_tuple = njit_kernel(
+        numba,
+        _fixed_primitives.normalize_quat_tuple,
+    )
+    _interp_primitives._shared_slerp_quat = njit_kernel(
+        numba,
+        _quat_interp_primitives.slerp_quat,
+    )
     _interp_primitives.normalize_quat_tuple = njit_kernel(numba, _fixed_primitives.normalize_quat_tuple)
     _interp_primitives.quat_multiply = njit_kernel(numba, _fixed_primitives.quat_multiply)
     for name in (
@@ -58,7 +67,6 @@ def _jit_primitive_helpers(numba) -> None:
         "quat_log_unit",
         "quat_exp_vector",
         "_quat_tangent",
-        "_normalize_quat_result",
         "slerp_unit",
         "squad_quat",
         "catmull_rom_vec3",

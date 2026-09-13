@@ -81,6 +81,7 @@ test = [
 ]
 dev = [
     "build>=1.4",
+    "psutil>=5.9",
     "tal[notebooks,test]",
 ]
 full = ["tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]"]

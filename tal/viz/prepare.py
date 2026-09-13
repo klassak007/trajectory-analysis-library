@@ -7,8 +7,15 @@ import xarray as xr
 
 from tal.core.group_ops.foundation import resolve_grouping_foundation_context
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
-from tal.core.reducer_ops.validity import apply_structural_mask, resolve_structural_valid_mask
-from tal.utils.xarray_namespace import dataarray_namespace_names, dataset_namespace_names, unique_temp_dim
+from tal.core.reducer_ops.validity import (
+    apply_structural_mask,
+    resolve_structural_valid_mask,
+)
+from tal.utils.xarray_namespace import (
+    dataarray_namespace_names,
+    dataset_namespace_names,
+    unique_temp_dim,
+)
 
 from .options import VizKind
 from .plan import VizRuntimeContext
@@ -230,7 +237,7 @@ def _attach_group_key_coord(
         owner=f"{owner}.group_key",
     )
     if len(foundation.keys) != 1:
-        raise ValueError(f"{owner}: opts.group_key must resolve to exactly one key in Slice A/B.")
+        raise ValueError(f"{owner}: opts.group_key must resolve to exactly one key.")
     key = foundation.keys[0].data
     missing = tuple(dim for dim in key.dims if dim not in data.dims)
     if missing:

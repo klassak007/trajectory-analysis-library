@@ -7,11 +7,10 @@ import numpy as np
 from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
 from tal.utils.numba_support import njit_kernel, require_numba
 
-from .fixed_size_primitives import normalize_quat_row as _normalized_quat
+from . import quaternion_interp_primitives as _quat_interp_primitives
 from .fixed_size_primitives import normalize_quat_tuple as _normalize_quat_tuple
 
 _QUAT_SIZE = 4
-_LERP_DOT_THRESHOLD = 0.9995
 _STATUS_OK = 0
 _STATUS_INVALID_QUAT = 1
 _STATUS_ALPHA_RANGE = 2
@@ -25,13 +24,13 @@ def _compiled_slerp_block():
 
 
 def _jit_kernel_helpers(numba) -> None:
-    global _fill_nan, _normalize_quat_tuple, _normalized_quat, _slerp_sample, _write_lerp, _write_normalized_tuple, _write_slerp
+    global _fill_nan, _shared_slerp_quat, _slerp_sample
+    _quat_interp_primitives.normalize_quat_tuple = njit_kernel(
+        numba,
+        _normalize_quat_tuple,
+    )
+    _shared_slerp_quat = njit_kernel(numba, _quat_interp_primitives.slerp_quat)
     _fill_nan = njit_kernel(numba, _fill_nan)
-    _normalized_quat = njit_kernel(numba, _normalized_quat)
-    _normalize_quat_tuple = njit_kernel(numba, _normalize_quat_tuple)
-    _write_normalized_tuple = njit_kernel(numba, _write_normalized_tuple)
-    _write_lerp = njit_kernel(numba, _write_lerp)
-    _write_slerp = njit_kernel(numba, _write_slerp)
     _slerp_sample = njit_kernel(numba, _slerp_sample)
 
 
@@ -117,72 +116,30 @@ def _fill_nan(out):
     out.fill(np.nan)
 
 
-def _write_normalized_tuple(out, row, idx, quat):
-    status, x, y, z, w = _normalize_quat_tuple(quat)
-    if status != _STATUS_OK:
-        return _STATUS_INVALID_QUAT
-    out[row, idx, 0] = x
-    out[row, idx, 1] = y
-    out[row, idx, 2] = z
-    out[row, idx, 3] = w
-    return status
-
-
-def _write_lerp(out, row, idx, q0, q1, t):
-    return _write_normalized_tuple(
-        out,
-        row,
-        idx,
-        (
-            q0[0] + t * (q1[0] - q0[0]),
-            q0[1] + t * (q1[1] - q0[1]),
-            q0[2] + t * (q1[2] - q0[2]),
-            q0[3] + t * (q1[3] - q0[3]),
-        ),
-    )
-
-
-def _write_slerp(out, row, idx, q0, q1, dot, t):
-    theta0 = np.arccos(dot)
-    sin_theta0 = np.sin(theta0)
-    theta = t * theta0
-    sin_theta = np.sin(theta)
-    s0 = np.cos(theta) - dot * sin_theta / sin_theta0
-    s1 = sin_theta / sin_theta0
-    return _write_normalized_tuple(
-        out,
-        row,
-        idx,
-        (
-            s0 * q0[0] + s1 * q1[0],
-            s0 * q0[1] + s1 * q1[1],
-            s0 * q0[2] + s1 * q1[2],
-            s0 * q0[3] + s1 * q1[3],
-        ),
-    )
-
-
 def _slerp_sample(q0_rows, q1_rows, alpha_rows, row, idx, out):
     t = alpha_rows[row, idx]
     if not np.isfinite(t):
         return _STATUS_OK
     if t < 0.0 or t > 1.0:
         return _STATUS_ALPHA_RANGE
-    status0, q00, q01, q02, q03 = _normalized_quat(q0_rows, row, idx)
-    status1, q10, q11, q12, q13 = _normalized_quat(q1_rows, row, idx)
-    if status0 != _STATUS_OK or status1 != _STATUS_OK:
-        return _STATUS_INVALID_QUAT
-    q0 = (q00, q01, q02, q03)
-    q1 = (q10, q11, q12, q13)
-    dot = q00 * q10 + q01 * q11 + q02 * q12 + q03 * q13
-    if dot < 0.0:
-        dot = -dot
-        q1 = (-q10, -q11, -q12, -q13)
-    if dot > 1.0:
-        dot = 1.0
-    if dot > _LERP_DOT_THRESHOLD:
-        return _write_lerp(out, row, idx, q0, q1, t)
-    return _write_slerp(out, row, idx, q0, q1, dot, t)
+    q0 = (
+        q0_rows[row, idx, 0],
+        q0_rows[row, idx, 1],
+        q0_rows[row, idx, 2],
+        q0_rows[row, idx, 3],
+    )
+    q1 = (
+        q1_rows[row, idx, 0],
+        q1_rows[row, idx, 1],
+        q1_rows[row, idx, 2],
+        q1_rows[row, idx, 3],
+    )
+    status, result = _shared_slerp_quat(q0, q1, t)
+    if status != _STATUS_OK:
+        return status
+    for component in range(_QUAT_SIZE):
+        out[row, idx, component] = result[component]
+    return status
 
 
 def _slerp_block_impl(q0_rows, q1_rows, alpha_rows, valid_rows):

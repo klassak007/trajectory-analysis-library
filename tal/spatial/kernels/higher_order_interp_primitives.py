@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._fixed_size_constants import STATUS_INVALID_QUAT, STATUS_OK
+from ._fixed_size_constants import STATUS_OK
 from .fixed_size_primitives import normalize_quat_tuple, quat_multiply
+from .quaternion_interp_primitives import slerp_quat as _shared_slerp_quat
 
-_LERP_DOT_THRESHOLD = 0.9995
 _SMALL_VECTOR_NORM = 1.0e-12
 
 
@@ -80,44 +80,9 @@ def _quat_tangent(center, previous, next_quat):
     return quat_multiply(center, quat_exp_vector(tangent))
 
 
-def _normalize_quat_result(quat):
-    status, normalized = _normalize_tuple_or_status(quat)
-    if status != STATUS_OK:
-        return (np.nan, np.nan, np.nan, np.nan)
-    return normalized
-
-
 def slerp_unit(q0, q1, alpha: float):
-    right = q1
-    dot = _dot_quat(q0, right)
-    if dot < 0.0:
-        dot = -dot
-        right = _flip_quat(right)
-    if dot > 1.0:
-        dot = 1.0
-    if dot > _LERP_DOT_THRESHOLD:
-        return _normalize_quat_result(
-            (
-                q0[0] + alpha * (right[0] - q0[0]),
-                q0[1] + alpha * (right[1] - q0[1]),
-                q0[2] + alpha * (right[2] - q0[2]),
-                q0[3] + alpha * (right[3] - q0[3]),
-            )
-        )
-    theta0 = np.arccos(dot)
-    sin_theta0 = np.sin(theta0)
-    theta = alpha * theta0
-    sin_theta = np.sin(theta)
-    s0 = np.cos(theta) - dot * sin_theta / sin_theta0
-    s1 = sin_theta / sin_theta0
-    return _normalize_quat_result(
-        (
-            s0 * q0[0] + s1 * right[0],
-            s0 * q0[1] + s1 * right[1],
-            s0 * q0[2] + s1 * right[2],
-            s0 * q0[3] + s1 * right[3],
-        )
-    )
+    _, result = _shared_slerp_quat(q0, q1, alpha)
+    return result
 
 
 def squad_quat(q_prev, q0, q1, q_next, alpha: float):

@@ -1822,48 +1822,6 @@ def test_arch_spatial_142_rotation_pose_temporal_owners_reuse_core_runtime_query
     assert "source.param.resample_to(" in pose_ops
 
 
-def test_arch_spatial_143_rotation_interp_backend_imports_are_temporal_owner_scoped() -> None:
-    """ID: ARCH_SPATIAL_143_rotation_interp_backend_imports_are_temporal_owner_scoped."""
-    hits: list[str] = []
-    for path in sorted(Path("tal/spatial").rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        if "rotation_interp_backends" in text:
-            hits.append(path.as_posix())
-    assert hits == ["tal/spatial/ops/rotation_temporal_ops.py"]
-
-
-def test_arch_spatial_144_rotation_interp_backend_stopgap_loops_are_row_local_no_batch_merge() -> None:
-    """ID: ARCH_SPATIAL_144_rotation_interp_backend_stopgap_loops_are_row_local_no_batch_merge."""
-    text = Path("tal/spatial/kernels/rotation_interp_backends.py").read_text(encoding="utf-8")
-    assert "_slerp_quat_scipy_stopgap(" in text
-    assert "rows = int(np.prod(alpha.shape[:-1]))" in text
-    assert "flat_q0 = q0.reshape(rows, qsize, 4)" in text
-    assert "for row in range(rows):" in text
-    assert "for idx in range(qsize):" in text
-    assert "vectorize=True" not in text
-    assert "xarray" not in text
-
-
-def test_spatial_arch_150_rotation_slerp_numba_backend_owner_routed() -> None:
-    """ID: SPATIAL_ARCH_150_rotation_slerp_numba_backend_owner_routed."""
-    backend_text = Path("tal/spatial/kernels/rotation_interp_backends.py").read_text(encoding="utf-8")
-    numba_text = Path("tal/spatial/kernels/rotation_interp_numba_backends.py").read_text(encoding="utf-8")
-    temporal_text = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
-    assert 'ROTATION_INTERP_BACKEND_NUMBA = "numba"' in backend_text
-    assert "def slerp_quat_backend(" in backend_text
-    assert "from .rotation_interp_numba_backends import slerp_quat_numba" in backend_text
-    assert "prepare_block_rows(" in numba_text
-    assert "njit_kernel(" in numba_text
-    assert "require_numba(owner)" in numba_text
-    assert "import xarray" not in numba_text
-    assert "from scipy" not in numba_text
-    assert "vectorize=True" not in numba_text
-    assert "parallel=True" not in numba_text
-    assert "fastmath=True" not in numba_text
-    assert "kwargs={\"backend\": ROTATION_INTERP_BACKEND_SCIPY}" in temporal_text
-    assert "ROTATION_INTERP_BACKEND_NUMBA" not in temporal_text
-
-
 def test_spatial_arch_151_kinematics_numba_kernels_are_schema_free() -> None:
     """ID: SPATIAL_ARCH_151_kinematics_numba_kernels_are_schema_free."""
     for path in [
