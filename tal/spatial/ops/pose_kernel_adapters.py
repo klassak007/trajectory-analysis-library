@@ -96,7 +96,10 @@ def apply_pose_compose_translation_kernel(
         vectorize=False,
         dask="parallelized",
         output_dtypes=[np.float64],
-        dask_gufunc_kwargs={"output_sizes": {left_dim: 3}},
+        dask_gufunc_kwargs={
+            "output_sizes": {left_dim: 3},
+            "allow_rechunk": True,
+        },
     )
     return out_t.assign_coords({left_dim: list(_XYZ_LABELS)})
 
@@ -121,4 +124,3 @@ def apply_pose_inverse_translation_kernel(
         dask_gufunc_kwargs={"output_sizes": {pos_dim: 3}},
     )
     return out_t.assign_coords({pos_dim: list(_XYZ_LABELS)})
-

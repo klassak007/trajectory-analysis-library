@@ -5,9 +5,18 @@ from collections.abc import Sequence
 import numpy as np
 import xarray as xr
 
-from ..param_engine import ParamMapOptions, apply_param_map, build_param_map, normalize_query_grid
+from ..param_engine import (
+    ParamMapOptions,
+    apply_param_map,
+    build_param_map,
+    normalize_query_grid,
+)
 from .finalize import finalize_param_output
-from .guards import assert_query_dim_safe, assert_reserved_metadata_safe, mark_reserved_coord
+from .guards import (
+    assert_query_dim_safe,
+    assert_reserved_metadata_safe,
+    mark_reserved_coord,
+)
 from .types import ParamEvalOptions, ParamRuntimeContext
 
 
@@ -25,8 +34,15 @@ def _apply_map_dataset(
         if not np.issubdtype(np.dtype(var.dtype), np.number):
             raise TypeError(f"param at/resample: non-numeric sequence variable {name!r} is not supported.")
         out_vars[str(name)] = apply_param_map(var, param_map=param_map, sequence_dim=sequence_dim)
-    base_coords = {cname: coord for cname, coord in ds.coords.items() if sequence_dim not in coord.dims}
-    return xr.Dataset(data_vars=out_vars, coords=base_coords)
+    out = xr.Dataset(data_vars=out_vars)
+    sequence_coords = [
+        name for name, coord in ds.coords.items() if sequence_dim in coord.dims
+    ]
+    base = ds.drop_vars([*ds.data_vars, *sequence_coords], errors="ignore")
+    collisions = tuple(name for name in base.coords if name in out.coords)
+    if collisions:
+        out = out.drop_vars(collisions)
+    return out.assign_coords(base.coords)
 
 
 def evaluate_param(

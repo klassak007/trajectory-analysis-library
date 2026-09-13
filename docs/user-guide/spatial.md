@@ -57,6 +57,9 @@ pose = Pose.from_components(
     child="body",
     graph=graph,
 )
+pose.register()
+body_samples = Position(pos, parent="body", child="probe", graph=graph)
+world_samples = body_samples.to_frame("world")
 detached = pose.with_graph(None)
 out_pos, out_rot = pose.decompose()
 identity_like = pose.compose(pose.inverse())
@@ -71,7 +74,9 @@ pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
 
 This example builds position and rotation trajectories, composes them into a
 pose, applies transforms, converts representations, and evaluates typed
-rotations/poses on a parameter grid.
+rotations/poses on a parameter grid. Registration retains the Pose's native
+sampling; `to_frame` evaluates that provider on `body_samples`' parameter grid
+without repeating `graph=`.
 
 Frame declarations are schema metadata. The optional `graph` is a passive,
 wrapper-local association: construction and `with_graph(...)` never create

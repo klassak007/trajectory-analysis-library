@@ -12,13 +12,13 @@ from ...utils.topology_operation_families import (
 from ..orchestration.alignment import align_exact_for_plan
 from ..orchestration.alignment_intent import select_topology_policy_with_intents
 from ..orchestration.context import DatasetContext
+from ..orchestration.indexing import require_exact_lane_indexes
 from ..orchestration.topology import (
     STRICT_EXACT_POLICY,
     SemanticTopology,
     TopologyOperand,
     resolve_binary_topology,
 )
-from .key_index import require_exact_lane_indexes
 from .label_plan import object_label_vector
 from .options import validate_grouping_bin_spec
 from .row_dim_compat import require_row_dim_compatibility

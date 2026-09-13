@@ -67,11 +67,14 @@ compatible positions and kinematic payloads.
 
 ```python
 pose.express_in(dst, *, edge_pose_fn=None, graph=None, opts=None, validate=True)
-Pose.solve_path_transform(src, dst, *, edge_pose_fn=None, graph=None, opts=None, validate=True)
+Pose.solve_path_transform(src, dst, *, edge_pose_fn=None, graph=None, query=None, opts=None, validate=True)
 ```
 
 `express_in(...)` changes basis only. Path solving changes relation by
 composing edge poses along a frame graph path.
+Direct class solves accept `query=` for dynamic providers. Object
+`express_in(...)` uses the pose's own parameter grid when a required provider
+is dynamic.
 
 ## Parameter Evaluation
 

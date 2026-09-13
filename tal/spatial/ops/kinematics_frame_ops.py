@@ -22,11 +22,11 @@ from .frame_owner_common import (
     require_source_parent,
     source_expressed_in_id,
 )
+from .kinematics_dynamic_path_ops import couple_vector_path, prepare_vector_path_request
 from .kinematics_family_frame_ops import (
     FamilyFrameRequest,
     PreparedFramePathRequest,
     acceleration_family_parts,
-    prepare_frame_path_request,
     run_family_pair_operation,
     velocity_family_parts,
 )
@@ -66,8 +66,7 @@ def _canonicalize_vector_source_basis(
     src_parent: str,
     src_child: str | None,
     src_expressed_in: str,
-    configuration: SelectedPathConfiguration,
-    prepared_resolver: PreparedEdgeResolver,
+    path_request: PreparedFramePathRequest,
     solve_pose,
     pose_apply,
     owner: str,
@@ -84,20 +83,23 @@ def _canonicalize_vector_source_basis(
         ),
         validate=False,
     )
-    basis_to_parent = solve_pose(
-        src_expressed_in,
-        src_parent,
-        edge_pose_fn=request.edge_fn,
-        configuration=configuration,
-        prepared_resolver=prepared_resolver,
-        owner=owner,
-    )
+    basis_to_parent = path_request.source_basis
+    if basis_to_parent is None:
+        basis_to_parent = solve_pose(
+            src_expressed_in,
+            src_parent,
+            edge_pose_fn=request.edge_fn,
+            configuration=path_request.configuration,
+            prepared_resolver=path_request.resolver,
+            caller=source,
+            owner=owner,
+        )
     canonical = pose_apply(
         basis_to_parent,
         source_in_basis,
         validate=False,
         owner=owner,
-        association=SpatialAssociationPlan(configuration.graph),
+        association=SpatialAssociationPlan(path_request.configuration.graph),
     )
     ds = _with_relation_semantics(
         source,
@@ -148,41 +150,6 @@ def _run_vector_to_frame(
     )
 
 
-def _couple_vector_path(
-    source,
-    prepared,
-    request: FamilyFrameRequest,
-    *,
-    configuration: SelectedPathConfiguration,
-    prepared_resolver: PreparedEdgeResolver,
-    owner: str,
-):
-    from .kinematics_path_coupling_ops import apply_vector_path_coupling
-    from .kinematics_path_support_ops import resolve_kinematics_path_support
-
-    support = resolve_kinematics_path_support(
-        source,
-        dst=request.dst,
-        configuration=configuration,
-        prepared_resolver=prepared_resolver,
-        owner=f"{owner}.support",
-    )
-    return apply_vector_path_coupling(
-        source,
-        prepared,
-        context=support,
-        edge_pose_resolver=prepared_resolver,
-        configuration=configuration,
-        owner=f"{owner}.support",
-    )
-
-
-def _prepared_path_or_resolve(request, prepared_path, *, owner: str, resolver_arg: str):
-    if prepared_path is not None:
-        return prepared_path
-    return prepare_frame_path_request(request, owner=owner, resolver_arg=resolver_arg)
-
-
 def _apply_solved_vector_path(
     source,
     prepared,
@@ -192,18 +159,22 @@ def _apply_solved_vector_path(
     configuration: SelectedPathConfiguration,
     prepared_resolver: PreparedEdgeResolver,
     solve_pose,
+    solved_path=None,
     owner: str,
 ):
     from .pose_apply_ops import _pose_apply_with_owner
 
-    solved = solve_pose(
-        src_parent,
-        request.dst,
-        edge_pose_fn=request.edge_fn,
-        configuration=configuration,
-        prepared_resolver=prepared_resolver,
-        owner=owner,
-    )
+    solved = solved_path
+    if solved is None:
+        solved = solve_pose(
+            src_parent,
+            request.dst,
+            edge_pose_fn=request.edge_fn,
+            configuration=configuration,
+            prepared_resolver=prepared_resolver,
+            caller=source,
+            owner=owner,
+        )
     out = _pose_apply_with_owner(
         solved,
         prepared,
@@ -234,29 +205,29 @@ def _run_vector_to_frame_non_identity(
 ):
     from .pose_apply_ops import _pose_apply_with_owner
 
-    path_request = _prepared_path_or_resolve(
-        request, prepared_path, owner=owner, resolver_arg="edge_pose_fn",
+    path_request = prepare_vector_path_request(
+        request,
+        prepared_path,
+        owner=owner,
+        resolver_arg="edge_pose_fn",
+        with_support=True,
     )
-    configuration = path_request.configuration
-    prepared_resolver = path_request.resolver
     prepared = _canonicalize_vector_source_basis(
         source,
         request,
         src_parent=src_parent,
         src_child=src_child,
         src_expressed_in=src_expressed_in,
+        path_request=path_request,
         solve_pose=solve_pose,
         pose_apply=_pose_apply_with_owner,
-        configuration=configuration,
-        prepared_resolver=prepared_resolver,
         owner=owner,
     )
-    prepared = _couple_vector_path(
+    prepared = couple_vector_path(
         source,
         prepared,
         request,
-        configuration=configuration,
-        prepared_resolver=prepared_resolver,
+        prepared=path_request,
         owner=owner,
     )
     return _apply_solved_vector_path(
@@ -264,9 +235,10 @@ def _run_vector_to_frame_non_identity(
         prepared,
         request,
         src_parent=src_parent,
-        configuration=configuration,
-        prepared_resolver=prepared_resolver,
+        configuration=path_request.configuration,
+        prepared_resolver=path_request.resolver,
         solve_pose=solve_pose,
+        solved_path=path_request.solved,
         owner=owner,
     )
 
@@ -320,17 +292,20 @@ def _apply_vector_expression(
     from ..path_solve import _solve_rotation_path_transform_with_owner
     from .rotation_apply_ops import _rotation_apply_with_owner
 
-    path_request = _prepared_path_or_resolve(
+    path_request = prepare_vector_path_request(
         request, prepared_path, owner=owner, resolver_arg="edge_rotation_fn"
     )
-    solved = _solve_rotation_path_transform_with_owner(
-        source_basis,
-        request.dst,
-        edge_rotation_fn=request.edge_fn,
-        configuration=path_request.configuration,
-        prepared_resolver=path_request.resolver,
-        owner=owner,
-    )
+    solved = path_request.solved
+    if solved is None:
+        solved = _solve_rotation_path_transform_with_owner(
+            source_basis,
+            request.dst,
+            edge_rotation_fn=request.edge_fn,
+            configuration=path_request.configuration,
+            prepared_resolver=path_request.resolver,
+            caller=source,
+            owner=owner,
+        )
     out = _rotation_apply_with_owner(
         clear_framing(solved, owner=owner),
         source,

@@ -5,9 +5,19 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import pandas as pd
 import xarray as xr
-from tal.utils.xarray_namespace import dataarray_namespace_names, rename_dims_collision_safe, unique_temp_dim
 
-from ..ordered_dtypes import is_float64_exact_integer, is_integral_dtype, is_ordered_real_numeric_dtype
+from tal.utils.xarray_namespace import (
+    dataarray_namespace_names,
+    rename_dims_collision_safe,
+    unique_temp_dim,
+)
+
+from ..orchestration.indexing import require_unique_lane_indexes
+from ..ordered_dtypes import (
+    is_float64_exact_integer,
+    is_integral_dtype,
+    is_ordered_real_numeric_dtype,
+)
 from .types import QueryGrid
 
 
@@ -177,13 +187,7 @@ def _assert_unique_axis_labels(
 ) -> None:
     if dim not in da.dims:
         return
-    index = da.get_index(dim)
-    if bool(getattr(index, "is_unique", True)):
-        return
-    raise ValueError(
-        f"{owner}: labels along {dim!r} must be unique. "
-        "Provide unique coordinate labels on query-aligned axes."
-    )
+    require_unique_lane_indexes(da, lane_dim=dim, owner=owner)
 
 
 def _validate_query_axis_labels(
@@ -247,8 +251,23 @@ def _reindex_batch_dim(
         dim=dim,
         owner="normalize_query_grid",
     )
-    source_index = query.get_index(dim)
-    target_index = indexer.get_index(dim)
+    source_xindex = query.xindexes.get(dim)
+    target_xindex = indexer.xindexes.get(dim)
+    if (
+        source_xindex is not None
+        and target_xindex is not None
+        and source_xindex.equals(target_xindex)
+    ):
+        return query
+    try:
+        source_index = query.get_index(dim)
+        target_index = indexer.get_index(dim)
+    except TypeError as exc:
+        raise ValueError(
+            f"normalize_query_grid: batch index along {dim!r} cannot be reindexed."
+        ) from exc
+    if source_index.equals(target_index):
+        return query
     if is_integral_dtype(query.dtype) and not bool(target_index.isin(source_index).all()):
         raise ValueError(
             "normalize_query_grid: integral query batch reindex would introduce missing labels "

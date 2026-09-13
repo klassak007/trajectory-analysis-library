@@ -42,6 +42,8 @@ class KinematicsPathSupportContext:
     operation: str
     edge_classes: tuple[str, ...]
     motion_callback: _PreparedPathCallback | None
+    motion_payloads: tuple[object | None, ...]
+    finalized: bool = False
 
 
 @dataclass(frozen=True)
@@ -186,6 +188,63 @@ def _prepare_support_callbacks(
     return _PreparedSupportCallbacks(edge_class, frame_status)
 
 
+def _coerce_motion_payload(payload: object, *, operation: str, owner: str):
+    if operation == "velocity":
+        from ..velocity import Velocity
+
+        if isinstance(payload, Velocity):
+            return payload
+        raise ValueError(f"{owner}: edge_velocity_fn must return Velocity payloads.")
+    from ..acceleration import Acceleration
+
+    if isinstance(payload, Acceleration):
+        return payload
+    raise ValueError(f"{owner}: edge_acceleration_fn must return Acceleration payloads.")
+
+
+def _motion_required(operation: str, motion_class: str) -> bool:
+    if operation == "velocity":
+        return motion_class in {"galilean", "dynamic"}
+    return motion_class == "dynamic"
+
+
+def _acquire_motion_payloads(
+    path: FramePath,
+    edge_classes: tuple[str, ...],
+    *,
+    operation: str,
+    callback: _PreparedPathCallback | None,
+    owner: str,
+) -> tuple[object | None, ...]:
+    payloads: list[object | None] = []
+    for step, motion_class in zip(path.steps, edge_classes, strict=True):
+        if not _motion_required(operation, motion_class):
+            payloads.append(None)
+            continue
+        if callback is None:
+            raise RuntimeError("motion support preflight did not prepare its callback")
+        payload = _call_prepared_edge_callback(callback, step.child, step.parent, owner=owner)
+        payloads.append(_coerce_motion_payload(payload, operation=operation, owner=owner))
+    return tuple(payloads)
+
+
+def finalize_kinematics_path_support(
+    context: KinematicsPathSupportContext,
+    payloads: tuple[object | None, ...],
+) -> KinematicsPathSupportContext:
+    return KinematicsPathSupportContext(
+        graph=context.graph,
+        src_parent=context.src_parent,
+        src_child=context.src_child,
+        dst=context.dst,
+        path=context.path,
+        operation=context.operation,
+        edge_classes=context.edge_classes,
+        motion_callback=context.motion_callback,
+        motion_payloads=payloads,
+        finalized=True,
+    )
+
 def _require_bound_path_providers(
     path: FramePath,
     prepared_resolver: PreparedEdgeResolver,
@@ -198,21 +257,34 @@ def _require_bound_path_providers(
         require_bound_pose_provider(step.child, step.parent, owner=owner)
 
 
-def resolve_kinematics_path_support(
+def _resolve_support_path(
     source,
     *,
     dst: Frame | str,
-    configuration: SelectedPathConfiguration,
-    prepared_resolver: PreparedEdgeResolver,
+    graph: FrameGraph,
     owner: str,
-) -> KinematicsPathSupportContext:
-    opts, graph = configuration.options, configuration.graph
+) -> tuple[Frame, Frame | None, Frame, FramePath, str]:
     src_parent, src_child = _resolve_source_frames(source, graph, owner=owner)
     dst_frame = resolve_path_endpoint(dst, graph=graph, owner=owner, arg="dst")
     operation = _operation_kind(source, owner=owner)
-    path = find_path(src_parent, dst_frame)
+    try:
+        path = find_path(src_parent, dst_frame)
+    except ValueError as exc:
+        raise ValueError(f"{owner}: {exc}") from exc
+    return src_parent, src_child, dst_frame, path, operation
+
+
+def _resolve_support_policy(
+    source,
+    path: FramePath,
+    *,
+    opts: PathSolveOptions,
+    src_parent: Frame,
+    src_child: Frame | None,
+    operation: str,
+    owner: str,
+) -> tuple[tuple[str, ...], _PreparedPathCallback | None]:
     support = _resolve_support(opts, owner=owner)
-    _require_bound_path_providers(path, prepared_resolver, owner=owner)
     inertial_roles = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
     callbacks = _prepare_support_callbacks(
         support,
@@ -233,6 +305,41 @@ def resolve_kinematics_path_support(
         support=support,
         owner=owner,
     )
+    return edge_classes, motion_callback
+
+
+def resolve_kinematics_path_support(
+    source,
+    *,
+    dst: Frame | str,
+    configuration: SelectedPathConfiguration,
+    prepared_resolver: PreparedEdgeResolver,
+    owner: str,
+) -> KinematicsPathSupportContext:
+    opts, graph = configuration.options, configuration.graph
+    src_parent, src_child, dst_frame, path, operation = _resolve_support_path(
+        source,
+        dst=dst,
+        graph=graph,
+        owner=owner,
+    )
+    _require_bound_path_providers(path, prepared_resolver, owner=owner)
+    edge_classes, motion_callback = _resolve_support_policy(
+        source,
+        path,
+        opts=opts,
+        src_parent=src_parent,
+        src_child=src_child,
+        operation=operation,
+        owner=owner,
+    )
+    motion_payloads = _acquire_motion_payloads(
+        path,
+        edge_classes,
+        operation=operation,
+        callback=motion_callback,
+        owner=owner,
+    )
     return KinematicsPathSupportContext(
         graph=graph,
         src_parent=src_parent,
@@ -242,10 +349,12 @@ def resolve_kinematics_path_support(
         operation=operation,
         edge_classes=edge_classes,
         motion_callback=motion_callback,
+        motion_payloads=motion_payloads,
     )
 
 
 __all__ = [
     "KinematicsPathSupportContext",
+    "finalize_kinematics_path_support",
     "resolve_kinematics_path_support",
 ]

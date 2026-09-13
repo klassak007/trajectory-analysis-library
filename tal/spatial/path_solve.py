@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import numpy as np
+import xarray as xr
 
 from tal.frames import Frame, FrameGraph
 
@@ -20,10 +23,13 @@ from .ops.path_solve_ops import (
     solve_pose_path_transform_impl,
     solve_rotation_path_transform_impl,
 )
+from .temporal.options import PoseTemporalOptions
 
 if TYPE_CHECKING:
     from .pose import Pose
     from .rotation import Rotation
+
+PathQuery = xr.DataArray | np.ndarray | Sequence[float] | float
 
 
 @dataclass(frozen=True)
@@ -39,7 +45,11 @@ class PathSolveOptions:
     """Options for frame-path transform solving.
 
     ``graph`` selects the topology source, ``strict`` controls path policy,
-    and ``kinematics_support`` supplies velocity/acceleration transport support.
+    ``kinematics_support`` supplies velocity/acceleration transport support,
+    and ``temporal`` controls evaluation of native-rate providers. Temporal
+    ``on`` selects provider coordinates only; its shared nested ``query_dim``
+    names the direct-query sequence axis and remains internal for object
+    transforms whose caller topology is restored.
 
     Notes
     -----
@@ -53,6 +63,7 @@ class PathSolveOptions:
     graph: FrameGraph | None = None
     strict: bool = True
     kinematics_support: KinematicsPathSupportOptions | None = None
+    temporal: PoseTemporalOptions | None = None
 
 
 def _coerce_path_solve_options(opts: object | None, *, owner: str) -> PathSolveOptions:
@@ -70,6 +81,7 @@ def solve_rotation_path_transform(
     *,
     edge_rotation_fn=None,
     graph: FrameGraph | None = None,
+    query: PathQuery | None = None,
     opts: PathSolveOptions | None = None,
 ) -> Rotation:
     """Solve a composed rotation transform from ``src`` to ``dst`` frames.
@@ -85,10 +97,16 @@ def solve_rotation_path_transform(
         represented in the edge parent. When omitted, use bound Pose rotations.
     graph : FrameGraph or None
         Graph shorthand. May accompany options only when ``opts.graph`` is unset.
+    query : object, optional
+        Explicit scalar, one-dimensional, or labeled batched direct query
+        grid. For a multidimensional DataArray, leading dimensions own output
+        batch topology and the final dimension is the query axis. Required
+        when any edge provider is dynamic.
     opts : PathSolveOptions or None
         Only ``None`` selects defaults. Otherwise a ``PathSolveOptions``
         instance is required. Key fields are ``graph`` (default None),
-        ``strict`` (default True), and ``kinematics_support`` (default None).
+        ``strict`` (default True), ``kinematics_support`` (default None), and
+        ``temporal`` (default None).
 
     Returns
     -------
@@ -119,6 +137,7 @@ def solve_rotation_path_transform(
         dst,
         edge_rotation_fn=edge_rotation_fn,
         graph=graph,
+        query=query,
         opts=opts,
         owner="spatial.path_solve.rotation",
     )
@@ -130,9 +149,11 @@ def _solve_rotation_path_transform_with_owner(
     *,
     edge_rotation_fn=None,
     graph: FrameGraph | None = None,
+    query: PathQuery | None = None,
     opts: PathSolveOptions | None = None,
     configuration: PathConfiguration | SelectedPathConfiguration | None = None,
     prepared_resolver: PreparedEdgeResolver | None = None,
+    caller=None,
     owner: str,
 ) -> Rotation:
     if configuration is None:
@@ -143,6 +164,8 @@ def _solve_rotation_path_transform_with_owner(
             dst,
             edge_rotation_fn=edge_rotation_fn,
             configuration=configuration,
+            query=query,
+            caller=caller,
             owner=owner,
             prepared_resolver=prepared_resolver,
         )
@@ -158,6 +181,7 @@ def solve_pose_path_transform(
     *,
     edge_pose_fn=None,
     graph: FrameGraph | None = None,
+    query: PathQuery | None = None,
     opts: PathSolveOptions | None = None,
 ) -> Pose:
     """Solve a pose transform between two frames.
@@ -173,10 +197,16 @@ def solve_pose_path_transform(
         represented in the edge parent. When omitted, use bound Pose providers.
     graph : FrameGraph or None
         Graph shorthand. May accompany options only when ``opts.graph`` is unset.
+    query : object, optional
+        Explicit scalar, one-dimensional, or labeled batched direct query
+        grid. For a multidimensional DataArray, leading dimensions own output
+        batch topology and the final dimension is the query axis. Required
+        when any edge provider is dynamic.
     opts : PathSolveOptions or None
         Only ``None`` selects defaults. Otherwise a ``PathSolveOptions``
         instance is required. Key fields are ``graph`` (default None),
-        ``strict`` (default True), and ``kinematics_support`` (default None).
+        ``strict`` (default True), ``kinematics_support`` (default None), and
+        ``temporal`` (default None).
 
     Returns
     -------
@@ -207,6 +237,7 @@ def solve_pose_path_transform(
         dst,
         edge_pose_fn=edge_pose_fn,
         graph=graph,
+        query=query,
         opts=opts,
         owner="spatial.path_solve.pose",
     )
@@ -218,9 +249,11 @@ def _solve_pose_path_transform_with_owner(
     *,
     edge_pose_fn=None,
     graph: FrameGraph | None = None,
+    query: PathQuery | None = None,
     opts: PathSolveOptions | None = None,
     configuration: PathConfiguration | SelectedPathConfiguration | None = None,
     prepared_resolver: PreparedEdgeResolver | None = None,
+    caller=None,
     owner: str,
 ) -> Pose:
     if configuration is None:
@@ -231,6 +264,8 @@ def _solve_pose_path_transform_with_owner(
             dst,
             edge_pose_fn=edge_pose_fn,
             configuration=configuration,
+            query=query,
+            caller=caller,
             owner=owner,
             prepared_resolver=prepared_resolver,
         )

@@ -16,8 +16,8 @@ from tal.spatial import PathSolveOptions, solve_pose_path_transform, solve_rotat
 ```
 
 ```python
-rotation = solve_rotation_path_transform(src, dst, *, edge_rotation_fn=None, graph=None, opts=None)
-pose = solve_pose_path_transform(src, dst, *, edge_pose_fn=None, graph=None, opts=None)
+rotation = solve_rotation_path_transform(src, dst, *, edge_rotation_fn=None, graph=None, query=None, opts=None)
+pose = solve_pose_path_transform(src, dst, *, edge_pose_fn=None, graph=None, query=None, opts=None)
 ```
 
 Path solving does not mutate the graph. It validates endpoint resolution, edge
@@ -94,6 +94,70 @@ callable, a boundary-only ``TypeError`` is conservatively treated as invocation
 misuse; failures observed after entering a Python callback are callback failures.
 Public errors and their direct causes expose only public exception types, and
 callback failures name the failing edge.
+
+## Native-rate providers and direct queries
+
+Providers are classified from declared TAL roles: static providers have no
+sequence role, dynamic providers have a sequence role and parameter coordinate,
+and exact providers have a sequence role without a parameter coordinate. A
+dynamic direct solve requires `query=`. Object operations derive the grid from
+the caller, so a registered native-rate provider can be used directly:
+
+```python
+native_edge = Pose.from_components(rotation, position, parent="world", child="body", graph=graph)
+native_edge.register()
+body_samples = Position(samples, parent="body", child="probe", graph=graph)
+world_samples = body_samples.to_frame("world")
+```
+
+For a direct solve, the configured query dimension names the result sequence
+axis. For a scalar or one-dimensional query it is also the parameter
+coordinate:
+
+```python
+from tal.spatial.temporal import PoseTemporalOptions
+
+result = solve_pose_path_transform(
+    "body",
+    "world",
+    graph=graph,
+    query=np.linspace(0.0, 1.0, 101),
+    opts=PathSolveOptions(temporal=PoseTemporalOptions()),
+)
+```
+
+A labeled multidimensional `xarray.DataArray` query owns the output topology:
+every leading dimension is a batch dimension and the final dimension becomes
+the configured sequence axis. Query-only batch dimensions broadcast providers.
+Shared dimensions must have exactly equal public xarray index topology.
+Provider-only batch dimensions are removed only when they have size one; a
+non-singleton provider-only dimension is rejected rather than creating an
+implicit Cartesian expansion. TAL stores batch-varying query values in a
+collision-safe auxiliary parameter coordinate (for example `query_value`).
+Scalar and one-dimensional queries remain unbatched.
+
+```python
+batched_query = xr.DataArray(
+    [[0.0, 0.5], [0.5, 1.0]],
+    dims=("trial", "when"),
+    coords={"trial": ["a", "b"], "when": [0, 1]},
+)
+batched = solve_pose_path_transform(
+    "native_body",
+    "world",
+    graph=graph,
+    query=batched_query,
+)
+assert batched.as_dataset(copy="none").attrs["tal"]["core"]["roles"]["batch_dims"] == ["trial"]
+```
+
+All dynamic providers must cover every structurally valid query in their closed
+coordinate domains. Interior gaps are interpolated; extrapolation is rejected,
+and TAL does not impose a maximum-gap policy. `PoseTemporalOptions.on` selects
+each provider's source coordinate without renaming the caller/direct grid.
+Numeric and datetime domains cannot be mixed; clock synchronization and unit
+conversion remain caller responsibilities. An exact provider cannot be used
+with `query=` or mixed with a dynamic provider.
 
 An existing edge without a provider can be bound. Replacing a provider requires
 `on_conflict="replace"` and preserves unrelated edge metadata. It cannot reparent

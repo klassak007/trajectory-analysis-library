@@ -12,10 +12,16 @@ from tal.core.orchestration.resolve import resolve_param_runtime_context
 from tal.core.param_engine import ParamMapOptions, build_param_map, normalize_query_grid
 from tal.core.param_engine.map_apply import gather_along_sequence
 from tal.core.param_ops.finalize import finalize_param_output
-from tal.core.param_ops.guards import assert_query_dim_safe, assert_reserved_metadata_safe
+from tal.core.param_ops.guards import (
+    assert_query_dim_safe,
+    assert_reserved_metadata_safe,
+)
 from tal.core.param_ops.types import ParamRuntimeContext
 
-from ..kernels.rotation_interp_backends import ROTATION_INTERP_BACKEND_SCIPY, slerp_quat_backend
+from ..kernels.rotation_interp_backends import (
+    ROTATION_INTERP_BACKEND_SCIPY,
+    slerp_quat_backend,
+)
 from ..metadata import get_rotation_rep
 from ..temporal.options import RotationTemporalOptions, resolve_rotation_method
 
@@ -92,6 +98,7 @@ def _build_quat_param_map(
         query_dim=opts.query_dim,
         batch_dims=context.batch_dims,
         batch_coords=context.batch_coords,
+        param_kind=context.param_kind,
     )
     pmap = build_param_map(
         param=context.spec.coord,
@@ -100,6 +107,7 @@ def _build_quat_param_map(
         query_dim=grid.query_dim,
         valid_mask=context.valid_mask,
         options=ParamMapOptions(method=method, duplicate_policy=opts.duplicate_policy),
+        param_kind=context.param_kind,
     )
     return grid.values, pmap
 
@@ -142,7 +150,7 @@ def _evaluate_quat_nearest_linear(
         vectorize=False,
         dask="parallelized",
         output_dtypes=[np.float64],
-        dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}},
+        dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}, "allow_rechunk": True},
     )
     normalized = normalized.assign_coords({quat_dim: source.coords[quat_dim]})
     normalized = _order_query_then_core(normalized, query_dim=pmap.query_dim, core_dim=quat_dim)
@@ -189,7 +197,7 @@ def _evaluate_quat_slerp(
         vectorize=False,
         dask="parallelized",
         output_dtypes=[np.float64],
-        dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}},
+        dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}, "allow_rechunk": True},
     )
     out = out.assign_coords({quat_dim: source.coords[quat_dim]})
     out = _order_query_then_core(out, query_dim=pmap.query_dim, core_dim=quat_dim)

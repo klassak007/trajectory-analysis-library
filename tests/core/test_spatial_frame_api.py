@@ -780,8 +780,15 @@ def test_spatial_core_c8_001_frame_aware_ops_default_to_sequence_alignment_with_
         )
         edge_pose = _with_sample_and_param(edge_pose, sample=[1], param_name="tau", param=[10.0])
         opts = PathSolveOptions(graph=graph)
-        with pytest.raises(ValueError, match="spatial.position.to_frame"):
-            source.to_frame("world", edge_pose_fn=lambda *_: edge_pose, opts=opts, validate=True)
+        out = source.to_frame("world", edge_pose_fn=lambda *_: edge_pose, opts=opts, validate=True)
+    np.testing.assert_allclose(
+        out.as_dataset(copy="none")["position"].values[0],
+        np.asarray([0.5, 1.0, 0.0]),
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert out.as_dataset(copy="none").coords["sample"].values.tolist() == [0]
+    assert out.as_dataset(copy="none").coords["tau"].values.tolist() == [10.0]
 
 
 def test_spatial_core_c8_002_frame_aware_ops_support_explicit_param_alignment_when_valid() -> None:

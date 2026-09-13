@@ -1406,9 +1406,14 @@ def test_spatial_hard_c8_003_frame_aware_alignment_does_not_invoke_hidden_interp
 
 def test_spatial_hard_c8_004_kinematic_coupling_default_sequence_primary_key_fails_on_sequence_label_mismatch_even_when_param_labels_match() -> None:
     """ID: SPATIAL_HARD_C8_004_kinematic_coupling_default_sequence_primary_key_fails_on_sequence_label_mismatch_even_when_param_labels_match."""
-    source, pose_fn, _rot_fn, opts = _build_c8_param_alignment_case()
-    with pytest.raises(ValueError, match="strict exact policy|exact"):
-        source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
+    source, pose_fn, rot_fn, opts = _build_c8_param_alignment_case()
+    out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
+    basis = solve_rotation_path_transform(
+        "world", "map", edge_rotation_fn=rot_fn, opts=opts,
+    )
+    basis_m = basis.as_matrix(validate=True).as_dataset(copy="none")["rotation"].values[0]
+    expected = basis_m @ np.asarray([1.0, 0.0, 0.0], dtype=float)
+    np.testing.assert_allclose(_single_var_values(out)[0], expected, atol=1e-6, rtol=0.0)
 
 
 @pytest.mark.parametrize("kind", _KINEMATIC_PATH_KINDS)
@@ -1632,10 +1637,303 @@ def test_kinematic_coupling_reuses_prepared_pose_resolver(failure, expected):
             opts=opts,
         )
     assert type(exc_info.value) is expected
-    expected_cause = ValueError if failure == "internal_typeerror" else TypeError
-    assert type(exc_info.value.__cause__) is expected_cause
-    # The required source-basis path fails before later motion support is needed.
-    assert support_calls == []
+    assert type(exc_info.value.__cause__) is TypeError
+    expected_support = (
+        []
+        if failure in {"not_callable", "inspectable_signature"}
+        else [("map", "world")]
+    )
+    assert support_calls == expected_support
+
+
+def test_spatial_core_129d_008_dynamic_family_support_uses_one_caller_grid() -> None:
+    """ID: SPATIAL_CORE_129D_008_dynamic_family_support_uses_one_caller_grid."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        map_frame = graph.get_or_create_frame("map", parent=world)
+        set_edge_motion_class(map_frame, "dynamic", world)
+    source = Velocity.from_linear_angular(
+        frame_retag(
+            _linear_velocity(np.asarray([[20.0, 0.0, 0.0]] * 3)),
+            parent="world",
+            child="probe",
+            validate=True,
+        ),
+        frame_retag(
+            _angular_velocity(np.zeros((3, 3))),
+            parent="world",
+            child="probe",
+            validate=True,
+        ),
+        validate=True,
+    )
+    source = _with_sample_and_param(source, sample=[4, 5, 6], param_name="caller_t", param=[0.0, 5.0, 10.0])
+    edge_pose = _with_sample_and_param(
+        frame_retag(
+            _pose_from_translation_and_quat(
+                np.zeros((2, 3)),
+                np.asarray([_quat("z", 0.0), _quat("z", 0.0)]),
+            ),
+            parent="world",
+            child="map",
+            validate=True,
+        ),
+        sample=[0, 1],
+        param_name="pose_t",
+        param=[0.0, 10.0],
+    )
+    support_value = Velocity.from_linear_angular(
+        frame_retag(
+            _linear_velocity(np.asarray([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])),
+            parent="world",
+            child="map",
+            validate=True,
+        ),
+        frame_retag(
+            _angular_velocity(np.zeros((2, 3))),
+            parent="world",
+            child="map",
+            validate=True,
+        ),
+        validate=True,
+    )
+    support_value = _with_sample_and_param(
+        support_value,
+        sample=[10, 11],
+        param_name="support_t",
+        param=[0.0, 10.0],
+    )
+    support_calls: list[tuple[str, str]] = []
+    pose_calls: list[tuple[str, str]] = []
+
+    def support_fn(child, parent):
+        support_calls.append((child.id, parent.id))
+        return support_value
+
+    def pose_fn(child, parent):
+        pose_calls.append((child.id, parent.id))
+        return edge_pose
+
+    opts = PathSolveOptions(
+        graph=graph,
+        kinematics_support=KinematicsPathSupportOptions(edge_velocity_fn=support_fn),
+    )
+    out = source.to_frame("map", edge_pose_fn=pose_fn, opts=opts, validate=True)
+    assert support_calls == [("map", "world")]
+    assert pose_calls == [("map", "world")]
+    ds = out.as_dataset(copy="none")
+    assert ds.coords["sample"].values.tolist() == [4, 5, 6]
+    assert ds.coords["caller_t"].values.tolist() == [0.0, 5.0, 10.0]
+    np.testing.assert_allclose(
+        out.linear().as_dataset(copy="none")["linear_velocity"].sel(lin_axis="x"),
+        [20.0, 15.0, 10.0],
+        atol=1e-6,
+        rtol=0.0,
+    )
+
+
+def _dynamic_129d_pose(*, parent: str, child: str) -> Pose:
+    value = _with_sample_and_param(
+        _pose_from_translation_and_quat(
+            np.zeros((2, 3)),
+            np.asarray([_quat("z", 0.0), _quat("z", 0.0)]),
+        ),
+        sample=[0, 1],
+        param_name="edge_t",
+        param=[0.0, 10.0],
+    )
+    return frame_retag(value, parent=parent, child=child, validate=True)
+
+
+def _dynamic_129d_motion(*, basis: str) -> Velocity:
+    value = Velocity.from_linear_angular(
+        frame_retag(
+            _linear_velocity(np.asarray([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])),
+            parent="world",
+            child="map",
+            validate=True,
+        ),
+        frame_retag(
+            _angular_velocity(np.zeros((2, 3))),
+            parent="world",
+            child="map",
+            validate=True,
+        ),
+        validate=True,
+    )
+    value = _with_sample_and_param(
+        value,
+        sample=[10, 11],
+        param_name="motion_t",
+        param=[0.0, 10.0],
+    )
+    return _with_expressed_in(value, basis)
+
+
+def _dynamic_129d_source() -> Velocity:
+    value = Velocity.from_linear_angular(
+        frame_retag(
+            _linear_velocity(np.asarray([[20.0, 0.0, 0.0]] * 3)),
+            parent="world",
+            child="probe",
+            validate=True,
+        ),
+        frame_retag(
+            _angular_velocity(np.zeros((3, 3))),
+            parent="world",
+            child="probe",
+            validate=True,
+        ),
+        validate=True,
+    )
+    return _with_sample_and_param(
+        value,
+        sample=[4, 5, 6],
+        param_name="caller_t",
+        param=[0.0, 5.0, 10.0],
+    )
+
+
+def test_spatial_core_129d_010_callback_discovered_basis_joins_one_provider_plan() -> None:
+    """ID: SPATIAL_CORE_129D_010_callback_discovered_basis_joins_one_provider_plan."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        map_frame = graph.get_or_create_frame("map", parent=world)
+        graph.get_or_create_frame("camera", parent=world)
+        set_edge_motion_class(map_frame, "dynamic", world)
+    edges = {
+        ("map", "world"): _dynamic_129d_pose(parent="world", child="map"),
+        ("camera", "world"): _dynamic_129d_pose(parent="world", child="camera"),
+    }
+    motion = _dynamic_129d_motion(basis="camera")
+    pose_calls: list[tuple[str, str]] = []
+    motion_calls: list[tuple[str, str]] = []
+
+    def pose_fn(child, parent):
+        pose_calls.append((child.id, parent.id))
+        return edges[(child.id, parent.id)]
+
+    def motion_fn(child, parent):
+        motion_calls.append((child.id, parent.id))
+        return motion
+
+    opts = PathSolveOptions(
+        graph=graph,
+        kinematics_support=KinematicsPathSupportOptions(edge_velocity_fn=motion_fn),
+    )
+    out = _dynamic_129d_source().to_frame("map", edge_pose_fn=pose_fn, opts=opts)
+    assert motion_calls == [("map", "world")]
+    assert pose_calls == [("map", "world"), ("camera", "world")]
+    ds = out.as_dataset(copy="none")
+    assert ds.coords["caller_t"].values.tolist() == [0.0, 5.0, 10.0]
+    np.testing.assert_allclose(
+        out.linear().as_dataset(copy="none")["linear_velocity"].sel(lin_axis="x"),
+        [20.0, 15.0, 10.0],
+        atol=1e-6,
+        rtol=0.0,
+    )
+
+
+def test_spatial_hard_129d_010_support_precedes_provider_acquisition() -> None:
+    """ID: SPATIAL_HARD_129D_010_support_precedes_provider_acquisition."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        map_frame = graph.get_or_create_frame("map", parent=world)
+        graph.get_or_create_frame("camera", parent=world)
+        set_edge_motion_class(map_frame, "dynamic", world)
+    edges = {
+        ("map", "world"): _dynamic_129d_pose(parent="world", child="map"),
+        ("camera", "world"): _dynamic_129d_pose(parent="world", child="camera"),
+    }
+    motion = _dynamic_129d_motion(basis="camera")
+    events: list[tuple[str, str, str]] = []
+
+    def pose_fn(child, parent):
+        events.append(("provider", child.id, parent.id))
+        return edges[(child.id, parent.id)]
+
+    def motion_fn(child, parent):
+        events.append(("support", child.id, parent.id))
+        return motion
+
+    opts = PathSolveOptions(
+        graph=graph,
+        kinematics_support=KinematicsPathSupportOptions(
+            edge_velocity_fn=motion_fn,
+        ),
+    )
+    _dynamic_129d_source().to_frame("map", edge_pose_fn=pose_fn, opts=opts)
+
+    assert events == [
+        ("support", "map", "world"),
+        ("provider", "map", "world"),
+        ("provider", "camera", "world"),
+    ]
+
+
+def test_spatial_hard_129d_003_callback_discovered_basis_preflights_bound_provider() -> None:
+    """ID: SPATIAL_HARD_129D_003_callback_discovered_basis_preflights_bound_provider."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        map_frame = graph.get_or_create_frame("map", parent=world)
+        graph.get_or_create_frame("camera", parent=world)
+        set_edge_motion_class(map_frame, "dynamic", world)
+    bind_pose(graph, world, map_frame, _dynamic_129d_pose(parent="world", child="map"))
+    motion_value = _dynamic_129d_motion(basis="camera")
+    motion = Velocity(motion_value.as_dataset(copy="none").chunk({"sample": 1}))
+    calls: list[tuple[str, str]] = []
+
+    def motion_fn(child, parent):
+        calls.append((child.id, parent.id))
+        return motion
+
+    opts = PathSolveOptions(
+        graph=graph,
+        kinematics_support=KinematicsPathSupportOptions(edge_velocity_fn=motion_fn),
+    )
+    from dask.callbacks import Callback
+
+    tasks: list[object] = []
+    with (
+        Callback(pretask=lambda key, *_: tasks.append(key)),
+        pytest.raises(ValueError, match="missing bound Pose provider.*camera.*world"),
+    ):
+        _dynamic_129d_source().to_frame("map", opts=opts)
+    assert calls == [("map", "world")]
+    assert tasks == []
+
+
+def test_spatial_hard_129d_004_transitive_exact_dynamic_mix_fails_closed() -> None:
+    """ID: SPATIAL_HARD_129D_004_transitive_exact_dynamic_mix_fails_closed."""
+    graph = FrameGraph()
+    with graph:
+        world = graph.get_or_create_frame("world")
+        map_frame = graph.get_or_create_frame("map", parent=world)
+        camera = graph.get_or_create_frame("camera", parent=world)
+        set_edge_motion_class(map_frame, "dynamic", world)
+    bind_pose(graph, world, map_frame, _dynamic_129d_pose(parent="world", child="map"))
+    exact = frame_retag(
+        _pose_from_translation_and_quat(
+            np.zeros((2, 3)),
+            np.asarray([_quat("z", 0.0), _quat("z", 0.0)]),
+        ),
+        parent="world",
+        child="camera",
+        validate=True,
+    )
+    bind_pose(graph, world, camera, exact)
+    support = KinematicsPathSupportOptions(
+        edge_velocity_fn=lambda *_: _dynamic_129d_motion(basis="camera")
+    )
+    with pytest.raises(ValueError, match="exact providers cannot be combined with dynamic"):
+        _dynamic_129d_source().to_frame(
+            "map",
+            opts=PathSolveOptions(graph=graph, kinematics_support=support),
+        )
 
 
 def test_trusted_pose_rotation_adapter_consumes_signature_marker():

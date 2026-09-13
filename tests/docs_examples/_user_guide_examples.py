@@ -437,6 +437,9 @@ def example_guide_spatial_pose() -> None:
         child="body",
         graph=graph,
     )
+    pose.register()
+    body_samples = Position(pos, parent="body", child="probe", graph=graph)
+    world_samples = body_samples.to_frame("world")
     associated_pos = pos.with_graph(graph)
     detached = pose.with_graph(None)
     out_pos, out_rot = pose.decompose()
@@ -461,6 +464,8 @@ def example_guide_spatial_pose() -> None:
     assert pose_rs.as_dataset(copy="none").sizes["sample"] == 5
     assert pose.graph is graph
     assert detached.graph is None
+    assert world_samples.graph is graph
+    assert read_param_coord_name(world_samples.as_dataset(copy="none")) == "time_s"
 
 
 def example_guide_geo_lla() -> None:

@@ -72,6 +72,7 @@ def _transform_position_to_frame(
         dst,
         edge_pose_fn=edge_pose_fn,
         configuration=selected,
+        caller=position,
         owner=owner,
     )
     result = _pose_apply_with_owner(
@@ -131,6 +132,7 @@ def rotation_class_solve_path_transform(
     *,
     edge_rotation_fn=None,
     graph: FrameGraph | None = None,
+    query=None,
     opts: PathSolveOptions | None,
     validate: bool,
 ) -> Rotation:
@@ -142,6 +144,7 @@ def rotation_class_solve_path_transform(
         dst,
         edge_rotation_fn=edge_rotation_fn,
         graph=graph,
+        query=query,
         opts=opts,
         owner=owner,
     )
@@ -160,6 +163,7 @@ def pose_class_solve_path_transform(
     *,
     edge_pose_fn=None,
     graph: FrameGraph | None = None,
+    query=None,
     opts: PathSolveOptions | None,
     validate: bool,
 ) -> Pose:
@@ -171,6 +175,7 @@ def pose_class_solve_path_transform(
         dst,
         edge_pose_fn=edge_pose_fn,
         graph=graph,
+        query=query,
         opts=opts,
         owner=owner,
     )

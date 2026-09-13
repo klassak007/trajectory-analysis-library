@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal, Self
 
 import numpy as np
@@ -840,6 +841,7 @@ class Pose(SpatialConfigurationConstructionMixin, AnalysisObject):
         *,
         edge_pose_fn=None,
         graph: FrameGraph | None = None,
+        query: xr.DataArray | np.ndarray | Sequence[float] | float | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Pose":
@@ -855,10 +857,15 @@ class Pose(SpatialConfigurationConstructionMixin, AnalysisObject):
             Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
         graph : FrameGraph or None, optional
             Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
+        query : object, optional
+            Explicit direct query grid. A multidimensional DataArray uses its
+            leading dimensions as output batches and final dimension as the
+            query axis. Required for dynamic providers.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph``
             (override frame graph), ``strict`` (strict path checks), and
-            ``kinematics_support`` for velocity/acceleration transport metadata.
+            ``kinematics_support`` for velocity/acceleration transport metadata,
+            and ``temporal`` for native-rate provider evaluation.
         validate : bool, optional
             When ``True``, validate output schema/layout invariants before returning.
 
@@ -890,6 +897,7 @@ class Pose(SpatialConfigurationConstructionMixin, AnalysisObject):
             dst,
             edge_pose_fn=edge_pose_fn,
             graph=graph,
+            query=query,
             opts=opts,
             validate=validate,
         )

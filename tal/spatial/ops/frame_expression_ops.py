@@ -131,6 +131,7 @@ def position_express_in(
         dst,
         edge_rotation_fn=edge_rotation_fn,
         configuration=selected_config,
+        caller=position,
         owner=owner,
     )
     rotated = _rotation_apply_with_owner(
@@ -202,6 +203,7 @@ def rotation_express_in(
             dst,
             edge_rotation_fn=edge_rotation_fn,
             configuration=selected_config,
+            caller=rotation,
             owner=owner,
         ).as_quat(validate=False),
         owner=owner,
@@ -247,6 +249,7 @@ def pose_express_in(
         dst,
         edge_pose_fn=edge_pose_fn,
         configuration=selected_config,
+        caller=pose,
         owner=owner,
     )
     out = _reexpress_pose_components(
@@ -273,6 +276,7 @@ def _solve_pose_basis_rotation(
     *,
     edge_pose_fn=None,
     configuration: PathConfiguration | SelectedPathConfiguration,
+    caller,
     owner: str,
 ):
     from ..path_solve import _solve_pose_path_transform_with_owner
@@ -282,6 +286,7 @@ def _solve_pose_basis_rotation(
         dst,
         edge_pose_fn=edge_pose_fn,
         configuration=configuration,
+        caller=caller,
         owner=owner,
     )
     _, basis_rotation = basis_pose.decompose(validate=False)

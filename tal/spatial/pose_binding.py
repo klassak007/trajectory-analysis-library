@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from tal.core.dataset_ownership import analysis_object_dataset
-from tal.core.schema_read import read_param_coord_name, read_roles
-from tal.core.schema_validate import validate_schema_structure
 from tal.frames import Frame, FrameGraph
 from tal.frames.registry import (
     _require_frame_name,
@@ -20,11 +18,11 @@ from .ops.pose_provider_ops import (
     BoundPoseProvider,
     prepare_pose_provider,
 )
+from .ops.provider_topology import ProviderTopology, classify_provider_topology
 
 if TYPE_CHECKING:
     from .pose import Pose
 
-_ProviderTopology = Literal["static", "dynamic", "exact"]
 _ConflictPolicy = Literal["error", "replace"]
 
 
@@ -46,14 +44,8 @@ def _require_conflict_policy(value: object, *, owner: str) -> _ConflictPolicy:
     raise ValueError(f"{owner}: on_conflict must be 'error' or 'replace'.")
 
 
-def _provider_topology(pose: Pose) -> _ProviderTopology:
-    ds = analysis_object_dataset(pose)
-    validate_schema_structure(ds)
-    _, sequence_dim, _, _ = read_roles(ds)
-    param_coord = read_param_coord_name(ds)
-    if sequence_dim is None:
-        return "static"
-    return "dynamic" if param_coord is not None else "exact"
+def _provider_topology(pose: Pose) -> ProviderTopology:
+    return classify_provider_topology(pose)
 
 
 def _registration_endpoint(value: str | None, *, role: str, owner: str) -> str:

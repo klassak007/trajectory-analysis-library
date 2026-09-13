@@ -2856,8 +2856,6 @@ def test_arch_spatial_c7_001_kinematics_to_frame_reuses_c1_b4_b5_owners_without_
     assert "from ..path_solve import _solve_pose_path_transform_with_owner" in wrapper_text
     assert "_run_vector_to_frame_non_identity(" in wrapper_text
     assert "_pose_apply_with_owner(" in wrapper_text
-    assert "resolve_kinematics_path_support(" in wrapper_text
-    assert "apply_vector_path_coupling(" in wrapper_text
     for text in (wrapper_text, support_text, coupling_text):
         assert "from ..kernels" not in text
         assert "xr.apply_ufunc(" not in text

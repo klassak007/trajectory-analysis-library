@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from ..acceleration import Acceleration
     from ..path_solve import PathSolveOptions
     from ..velocity import Velocity
+    from .kinematics_path_support_ops import KinematicsPathSupportContext
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,9 @@ class FamilyFrameRequest:
 class PreparedFramePathRequest:
     configuration: SelectedPathConfiguration
     resolver: PreparedEdgeResolver
+    support: KinematicsPathSupportContext | None = None
+    solved: object | None = None
+    source_basis: object | None = None
 
 
 def prepare_frame_path_request(
@@ -105,7 +109,39 @@ def _prepare_family_path_request(
         resolver_arg = "edge_rotation_fn"
     if dst_frame_id(request.dst, owner=request.owner) == current:
         return None
-    return prepare_frame_path_request(request, owner=request.owner, resolver_arg=resolver_arg)
+    prepared = prepare_frame_path_request(request, owner=request.owner, resolver_arg=resolver_arg)
+    if operation == "to_frame":
+        from .kinematics_dynamic_path_ops import complete_kinematics_path_request
+
+        return complete_kinematics_path_request(request, prepared, owner=request.owner)
+    solved = _solve_family_path(request, prepared, operation=operation)
+    return PreparedFramePathRequest(prepared.configuration, prepared.resolver, solved=solved)
+
+
+def _solve_family_path(
+    request: FamilyFrameRequest,
+    prepared: PreparedFramePathRequest,
+    *,
+    operation: str,
+):
+    from ..path_solve import (
+        _solve_pose_path_transform_with_owner,
+        _solve_rotation_path_transform_with_owner,
+    )
+
+    src_parent, _ = require_source_parent(request.source, owner=request.owner)
+    source = src_parent if operation == "to_frame" else source_expressed_in_id(request.source, owner=request.owner)
+    solve = _solve_pose_path_transform_with_owner if operation == "to_frame" else _solve_rotation_path_transform_with_owner
+    edge_arg = {"edge_pose_fn": request.edge_fn} if operation == "to_frame" else {"edge_rotation_fn": request.edge_fn}
+    return solve(
+        source,
+        request.dst,
+        configuration=prepared.configuration,
+        prepared_resolver=prepared.resolver,
+        caller=request.source,
+        owner=request.owner,
+        **edge_arg,
+    )
 
 
 def _restore_rep(value, *, source_rep: str, validate: bool):
@@ -133,13 +169,15 @@ def run_family_pair_operation(
     member_runner,
     compose: Callable[..., object],
     operation: str,
+    prepared_path: PreparedFramePathRequest | None = None,
 ):
     rep, linear, angular = parts_resolver(
         request.source,
         validate=request.validate,
         owner=request.owner,
     )
-    prepared_path = _prepare_family_path_request(request, operation=operation)
+    if prepared_path is None:
+        prepared_path = _prepare_family_path_request(request, operation=operation)
     linear_out = member_runner(
         linear, request, owner=f"{request.owner}.linear", prepared_path=prepared_path,
     )

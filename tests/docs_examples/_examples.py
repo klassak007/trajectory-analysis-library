@@ -943,6 +943,50 @@ def example_spatial_path_solve_pose() -> None:
     assert isinstance(out, Pose)
     assert out.as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
 
+    native = Pose.from_components(
+        _make_rotation(
+            np.asarray(
+                [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+                dtype=float,
+            )
+        ),
+        _make_position(np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float)),
+        parent="world",
+        child="native_body",
+        graph=graph,
+    )
+    native_ds = native.as_dataset(copy="none").assign_coords(time_s=("sample", [0.0, 1.0]))
+    native = Pose(native_ds, graph=graph).set_param_coord(name="time_s", validate=True)
+    native.register()
+    dynamic = solve_pose_path_transform(
+        "native_body",
+        "world",
+        graph=graph,
+        query=[0.0, 0.5, 1.0],
+    )
+    np.testing.assert_allclose(
+        dynamic.as_dataset(copy="none")["position"].sel(axis="x"),
+        [0.0, 0.5, 1.0],
+    )
+    batched_query = xr.DataArray(
+        [[0.0, 0.5], [0.5, 1.0]],
+        dims=("trial", "when"),
+        coords={"trial": ["a", "b"], "when": [0, 1]},
+    )
+    batched = solve_pose_path_transform(
+        "native_body",
+        "world",
+        graph=graph,
+        query=batched_query,
+    )
+    batch_roles = batched.as_dataset(copy="none").attrs["tal"]["core"]["roles"]
+    assert batch_roles["batch_dims"] == ["trial"]
+    assert batch_roles["sequence_dim"] == "query"
+    np.testing.assert_allclose(
+        batched.as_dataset(copy="none")["position"].sel(axis="x"),
+        batched_query,
+    )
+
 
 def example_spatial_velocity_components() -> None:
     velocity = Velocity.from_linear_angular(

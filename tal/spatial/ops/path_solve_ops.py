@@ -6,7 +6,7 @@ import xarray as xr
 from tal.core.analysis_object import AnalysisObject
 from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.schema_errors import SchemaError
-from tal.frames import Frame, find_path, fold_path
+from tal.frames import Frame, FramePath, find_path, fold_path
 from tal.utils.frame_schema import set_frames
 
 from ..association import attach_spatial_association
@@ -30,10 +30,12 @@ from .path_configuration import (
     require_strict_path_policy,
     resolve_path_endpoint_plan,
 )
+from .path_query_ops import complete_path_query, require_path_temporal_options
 from .pose_ops import _pose_compose_with_owner, _pose_inverse_with_owner
 from .pose_provider_ops import (
     normalize_edge_provider_dataset,
     normalize_pose_provider,
+    require_bound_pose_provider,
     resolve_bound_pose,
 )
 
@@ -149,6 +151,39 @@ def _resolved_path(endpoints: ResolvedPathEndpointPlan, *, owner: str):
     return path
 
 
+def _preflight_bound_path(path: FramePath, prepared: PreparedEdgeResolver, *, owner: str) -> None:
+    if prepared.resolver is not None:
+        return
+    for step in path.steps:
+        require_bound_pose_provider(step.child, step.parent, owner=owner)
+
+
+def _acquire_path_values(
+    path: FramePath,
+    prepared: PreparedEdgeResolver,
+    *,
+    kind: str,
+    owner: str,
+) -> tuple[Rotation | Pose, ...]:
+    return tuple(
+        _resolve_edge_value(
+            prepared,
+            step.child,
+            step.parent,
+            kind=kind,
+            owner=owner,
+        )
+        for step in path.steps
+    )
+
+
+def _path_value_map(path: FramePath, values: tuple[Rotation | Pose, ...]):
+    return {
+        (step.child.id, step.parent.id): value
+        for step, value in zip(path.steps, values, strict=True)
+    }
+
+
 def _associated_rotation_identity(
     endpoints: ResolvedPathEndpointPlan,
     *,
@@ -189,16 +224,11 @@ def _finalize_rotation_path(
     return attach_spatial_association(Rotation._from_validated(out), endpoints.association)
 
 
-def _fold_rotation_path(path, prepared: PreparedEdgeResolver, *, owner: str) -> Rotation | None:
+def _fold_rotation_path(path: FramePath, values: tuple[Rotation | Pose, ...], *, owner: str) -> Rotation | None:
+    value_map = _path_value_map(path, values)
     result = fold_path(
         path,
-        edge_value_fn=lambda child, parent: _resolve_edge_value(
-            prepared,
-            child,
-            parent,
-            kind="rotation",
-            owner=owner,
-        ),
+        edge_value_fn=lambda child, parent: value_map[(child.id, parent.id)],
         compose=lambda acc, value: _compose_rotation_acc(acc, value, owner=owner),
         inverse=lambda value: _rotation_inverse_with_owner(value, validate=False, owner=owner),
         identity=lambda: None,
@@ -212,6 +242,8 @@ def solve_rotation_path_transform_impl(
     *,
     edge_rotation_fn: object,
     configuration: PathConfiguration | SelectedPathConfiguration,
+    query: object | None = None,
+    caller: object | None = None,
     owner: str = "spatial.path_solve.rotation",
     prepared_resolver: PreparedEdgeResolver | None = None,
 ) -> Rotation:
@@ -229,7 +261,12 @@ def solve_rotation_path_transform_impl(
         owner=owner,
         arg="edge_rotation_fn",
     )
-    result = _fold_rotation_path(_resolved_path(endpoints, owner=owner), prepared, owner=owner)
+    path = _resolved_path(endpoints, owner=owner)
+    temporal = require_path_temporal_options(endpoints.configuration.options.temporal, owner=owner)
+    _preflight_bound_path(path, prepared, owner=owner)
+    values = _acquire_path_values(path, prepared, kind="rotation", owner=owner)
+    complete = complete_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    result = _fold_rotation_path(path, complete.values, owner=owner)
     if result is None:
         return _associated_rotation_identity(endpoints, owner=owner)
     return _finalize_rotation_path(result, endpoints, owner=owner)
@@ -275,16 +312,11 @@ def _finalize_pose_path(
     return attach_spatial_association(Pose._from_validated(out), endpoints.association)
 
 
-def _fold_pose_path(path, prepared: PreparedEdgeResolver, *, owner: str) -> Pose | None:
+def _fold_pose_path(path: FramePath, values: tuple[Rotation | Pose, ...], *, owner: str) -> Pose | None:
+    value_map = _path_value_map(path, values)
     result = fold_path(
         path,
-        edge_value_fn=lambda child, parent: _resolve_edge_value(
-            prepared,
-            child,
-            parent,
-            kind="pose",
-            owner=owner,
-        ),
+        edge_value_fn=lambda child, parent: value_map[(child.id, parent.id)],
         compose=lambda acc, value: _compose_pose_acc(acc, value, owner=owner),
         inverse=lambda value: _pose_inverse_with_owner(value, validate=False, owner=owner),
         identity=lambda: None,
@@ -298,6 +330,8 @@ def solve_pose_path_transform_impl(
     *,
     edge_pose_fn: object,
     configuration: PathConfiguration | SelectedPathConfiguration,
+    query: object | None = None,
+    caller: object | None = None,
     owner: str = "spatial.path_solve.pose",
     prepared_resolver: PreparedEdgeResolver | None = None,
 ) -> Pose:
@@ -315,7 +349,12 @@ def solve_pose_path_transform_impl(
         owner=owner,
         arg="edge_pose_fn",
     )
-    result = _fold_pose_path(_resolved_path(endpoints, owner=owner), prepared, owner=owner)
+    path = _resolved_path(endpoints, owner=owner)
+    temporal = require_path_temporal_options(endpoints.configuration.options.temporal, owner=owner)
+    _preflight_bound_path(path, prepared, owner=owner)
+    values = _acquire_path_values(path, prepared, kind="pose", owner=owner)
+    complete = complete_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    result = _fold_pose_path(path, complete.values, owner=owner)
     if result is None:
         return _associated_pose_identity(endpoints, owner=owner)
     return _finalize_pose_path(result, endpoints, owner=owner)
