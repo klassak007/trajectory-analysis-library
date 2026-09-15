@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..dataset_ownership import analysis_object_dataset
 from ..ao_internal import finalize_structural
+from ..dataset_ownership import analysis_object_dataset
 from ..ordered_dtypes import is_float64_exact_integer
 from ..param_engine import ParamMapOptions, build_param_map, normalize_query_grid
 from ..param_engine.map_apply import gather_along_sequence
@@ -40,7 +40,7 @@ def eval_options_from_sync(*, query_dim: str, how: Literal["interp", "nearest", 
     return ParamEvalOptions(method="nearest", query_dim=query_dim)
 
 
-def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: float | int) -> xr.DataArray:
+def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: float) -> xr.DataArray:
     """Build a shared synchronization target grid from join policy.
 
     Parameters
@@ -171,6 +171,15 @@ def _outer_batch_reindex_fill_values(context: ParamRuntimeContext) -> dict[str, 
     return fills
 
 
+def _retain_declared_parameter_coordinates(
+    value: xr.DataArray,
+    *,
+    reference: xr.DataArray,
+) -> xr.DataArray:
+    extra = tuple(name for name in value.coords if name not in reference.coords)
+    return value.drop_vars(extra) if extra else value
+
+
 def _align_batch_context(
     context: ParamRuntimeContext,
     *,
@@ -188,7 +197,10 @@ def _align_batch_context(
             ds = context.ds.sel({dim: labels})
         except KeyError as exc:
             raise _batch_selectability_error(dim=dim, mode=mode) from exc
-    spec_coord = ds.coords[context.spec.name]
+    spec_coord = _retain_declared_parameter_coordinates(
+        ds.coords[context.spec.name],
+        reference=context.spec.coord,
+    )
     valid = _align_valid_mask_for_batch(context, dim=dim, labels=labels, mode=mode)
     batch_coord = ds.coords[dim] if dim in ds.coords else xr.DataArray(labels, dims=[dim], name=dim)
     return replace(context, ds=ds, spec=replace(context.spec, coord=spec_coord), valid_mask=valid, batch_coords={dim: batch_coord})
@@ -250,7 +262,7 @@ def _nearest_tolerance_mask(
     *,
     grid: xr.DataArray,
     query_dim: str,
-    tol: float | int,
+    tol: float,
 ) -> xr.DataArray:
     assert_query_dim_safe(context.ds, sequence_dim=context.sequence_dim, query_dim=query_dim, owner="synchronize_param")
     q = normalize_query_grid(
@@ -290,7 +302,7 @@ def _within_tolerance(
     nearest: xr.DataArray,
     query: xr.DataArray,
     valid: xr.DataArray,
-    tol: float | int,
+    tol: float,
     param_kind: str,
 ) -> xr.DataArray:
     if param_kind == "datetime64":
@@ -316,7 +328,7 @@ def _numeric_within_tolerance_block(
     query: np.ndarray,
     valid: np.ndarray,
     *,
-    tol: float | int,
+    tol: float,
 ) -> np.ndarray:
     nearest_values, query_values, valid_values = np.broadcast_arrays(nearest, query, valid)
     nearest_integral = nearest_values.dtype.kind in {"i", "u"}
@@ -345,7 +357,7 @@ def _mask_numeric_sequence(
     *,
     sequence_dim: str,
     mask: xr.DataArray,
-    fill_value: float | int,
+    fill_value: float,
 ) -> xr.Dataset:
     out = ds.copy(deep=False)
     updates: dict[str, xr.DataArray] = {}
@@ -373,15 +385,15 @@ def _apply_fill_metadata(
 
 
 def apply_fill(
-    out: "AnalysisObject",
+    out: AnalysisObject,
     *,
     context: ParamRuntimeContext,
     grid: xr.DataArray,
-    tol: float | int,
-    fill_value: float | int,
+    tol: float,
+    fill_value: float,
     eval_opts: ParamEvalOptions,
     validate: bool,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Apply tolerance-masked nearest fill and finalize structural metadata.
 
     Parameters
@@ -424,8 +436,8 @@ def apply_fill(
 __all__ = [
     "align_contexts_batch",
     "apply_fill",
-    "ensure_shared_topology",
     "ensure_shared_param_kind",
+    "ensure_shared_topology",
     "eval_options_from_sync",
     "grid_from_join",
 ]

@@ -3,11 +3,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import xarray as xr
+from scipy.spatial.transform import Rotation as SciRotation
+from scipy.spatial.transform import Slerp
 
+import tal.spatial.kernels.fixed_size_backends as fixed_backends
+import tal.spatial.kernels.rotation_interp_backends as interp_backends
 from tal import AnalysisObject
 from tal.core.param_ops.types import ParamEvalOptions
 from tal.core.schema_errors import SchemaError
 from tal.core.schema_read import read_param_coord_name, read_roles
+from tal.frames import FrameGraph
 from tal.linalg import Array
 from tal.spatial import Rotation
 from tal.spatial.metadata import get_rotation_rep
@@ -216,8 +221,8 @@ def test_spatial_core_016_rotation_canonical_operation_representation_architectu
     assert Rotation.CANONICAL_REP == "quat"
     assert Rotation.QUAT_LABELS == ("x", "y", "z", "w")
     assert Rotation.MATRIX_LABELS == ("x", "y", "z")
-    assert callable(getattr(Rotation, "compose"))
-    assert callable(getattr(Rotation, "inverse"))
+    assert callable(Rotation.compose)
+    assert callable(Rotation.inverse)
     assert not hasattr(Rotation, "rotate")
 
 
@@ -393,6 +398,51 @@ def test_spatial_core_036_rotation_to_rep_matrix_to_quat_deterministic() -> None
 
     expected = _rotation_dataset_quat()["rotation"].values
     _assert_quat_equivalent(out.as_dataset(copy="none")["rotation"].values, expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("dtype", (np.dtype("float32"), np.dtype("float64")))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("numba_available", (False, True))
+def test_spatial_core_fixed_quat_sign_001_public_auto_matches_scipy_raw_sign(
+    dtype: np.dtype,
+    lazy: bool,
+    numba_available: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_CORE_FIXED_QUAT_SIGN_001_public_auto_matches_scipy_raw_sign."""
+    if numba_available:
+        pytest.importorskip("numba")
+    rng = np.random.default_rng(129_130)
+    random = SciRotation.random(256, random_state=rng).as_matrix()
+    axes = np.asarray([[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0]])
+    axes /= np.linalg.norm(axes, axis=1, keepdims=True)
+    angles = np.asarray([np.pi, np.pi - 1.0e-12, np.pi - 1.0e-7])
+    boundary = SciRotation.from_rotvec(angles[:, None] * axes).as_matrix()
+    approximate = SciRotation.from_rotvec([0.7, -0.3, 0.8]).as_matrix()
+    approximate[0, 1] += 1.0e-7
+    matrices = np.concatenate((random, boundary, approximate[None])).astype(dtype)
+    array = xr.DataArray(
+        matrices,
+        dims=("sample", "row", "col"),
+        coords={"sample": np.arange(len(matrices)), "row": ["x", "y", "z"], "col": ["x", "y", "z"]},
+        name="rotation",
+    )
+    dataset = AnalysisObject.from_data(
+        array,
+        sequence_dim="sample",
+        core_dims=("row", "col"),
+    ).as_dataset(copy="none")
+    dataset = _set_rep(dataset, "matrix")
+    source = Rotation(dataset.chunk({"sample": 37}) if lazy else dataset)
+    expected = SciRotation.from_matrix(matrices.astype(np.float64)).as_quat()
+    monkeypatch.setattr(fixed_backends, "_numba_available", lambda: numba_available)
+
+    actual = source.as_quat().as_dataset(copy="none")["rotation"]
+    if lazy:
+        assert actual.chunks is not None
+        actual = actual.compute(scheduler="synchronous")
+    tolerance = 1e-6 if dtype.itemsize == 4 else 1e-12
+    np.testing.assert_allclose(actual.data, expected, rtol=tolerance, atol=tolerance)
 
 
 def test_spatial_core_037_rotation_conversion_roundtrip_quat_matrix_within_tolerance() -> None:
@@ -833,6 +883,115 @@ def test_spatial_core_112_rotation_slerp_and_nearest_linear_boundaries_determini
         atol=1e-5,
         rtol=0.0,
     )
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+@pytest.mark.parametrize("method", ("nearest", "linear", "slerp"))
+@pytest.mark.parametrize("query", ([], [0.5]))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_spatial_core_empty_rotation_eval_001_preserves_typed_topology(
+    rep: str,
+    method: str,
+    query: list[float],
+    lazy: bool,
+) -> None:
+    """ID: SPATIAL_CORE_EMPTY_ROTATION_EVAL_001."""
+    data: object = np.empty((2, 0, 4), dtype=np.float64)
+    if lazy:
+        da = pytest.importorskip("dask.array")
+        data = da.from_array(data, chunks=(1, 0, 4))
+    array = xr.DataArray(
+        data,
+        dims=("trial", "sample", "quat"),
+        coords={
+            "trial": ["a", "b"],
+            "sample": np.asarray([], dtype=np.int64),
+            "quat": ["x", "y", "z", "w"],
+            "time": ("sample", np.asarray([], dtype=np.float64)),
+            "batch_note": ("trial", [3, 4]),
+        },
+        name="rotation",
+    )
+    source = Rotation.from_data(
+        array,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("quat",),
+        param_coord="time",
+    )
+    if rep == "matrix":
+        source = source.as_matrix()
+    graph = FrameGraph()
+    source = source.with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    if lazy:
+        from dask.callbacks import Callback
+
+        with Callback(pretask=lambda key, *_: tasks.append(key)):
+            result = source.param.at(query, opts=RotationTemporalOptions(method=method))
+    else:
+        result = source.param.at(query, opts=RotationTemporalOptions(method=method))
+    dataset = result.as_dataset(copy="none")
+
+    assert isinstance(result, Rotation)
+    assert result.graph is graph
+    assert get_rotation_rep(dataset, owner="test") == rep
+    assert dataset.sizes == {"trial": 2, "sample": len(query), **({"quat": 4} if rep == "quat" else {"row": 3, "col": 3})}
+    xr.testing.assert_identical(dataset.coords["batch_note"], before.coords["batch_note"])
+    assert (dataset["rotation"].chunks is not None) == lazy
+    assert tasks == []
+    assert bool(np.isnan(dataset.compute()["rotation"]).all())
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("dtype", (np.dtype("float32"), np.dtype("float64")))
+@pytest.mark.parametrize("numba_available", (False, True))
+@pytest.mark.parametrize(
+    ("left_values", "right_values"),
+    (
+        ((1.0, 1.0, 1.0, 3.0), (-1.0, 1.0, -3.0, 1.0)),
+        ((1.0, 2.0, 1.0, 1.0), (-2.0, 1.0, -1.0, 1.0)),
+    ),
+)
+def test_spatial_hard_slerp_reference_parity_001_public_auto_route_matches_scipy(
+    dtype: np.dtype,
+    numba_available: bool,
+    left_values: tuple[float, ...],
+    right_values: tuple[float, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_HARD_SLERP_REFERENCE_PARITY_001_public_auto_route_matches_scipy."""
+    if numba_available:
+        pytest.importorskip("numba")
+    left = np.asarray(left_values, dtype=dtype)
+    right = -np.asarray(right_values, dtype=dtype)
+    values = np.stack((left / np.linalg.norm(left), right / np.linalg.norm(right)))
+    array = xr.DataArray(
+        values,
+        dims=("sample", "quat"),
+        coords={
+            "sample": [0, 1],
+            "quat": ["x", "y", "z", "w"],
+            "time": ("sample", [0.0, 1.0]),
+        },
+        name="rotation",
+    )
+    source = Rotation.from_data(
+        array,
+        sequence_dim="sample",
+        core_dims=("quat",),
+        param_coord="time",
+    )
+    before = source.as_dataset(copy="deep")
+    monkeypatch.setattr(interp_backends, "_numba_available", lambda: numba_available)
+    fractions = np.asarray((0.0, 0.25, 0.5, 0.75, 1.0), dtype=dtype)
+    actual = source.param.at(fractions, opts=RotationTemporalOptions(method="slerp"))
+    expected = Slerp(np.asarray((0.0, 1.0)), SciRotation.from_quat(values))(fractions)
+    matrices = actual.as_quat().as_dataset(copy="none")["rotation"].data
+    tolerance = 2.0e-6 if dtype == np.dtype("float32") else 1.0e-12
+    np.testing.assert_allclose(SciRotation.from_quat(matrices).as_matrix(), expected.as_matrix(), atol=tolerance, rtol=tolerance)
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
 
 
 def test_spatial_core_130_rotation_pose_interp_uses_specified_param_coord_as_primary_domain_key() -> None:

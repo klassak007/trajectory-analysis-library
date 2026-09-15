@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tal.core import AnalysisObject, SchemaError, merge_schema, set_param_coord, set_roles, set_validity
+from tal.core import (
+    AnalysisObject,
+    SchemaError,
+    merge_schema,
+    set_param_coord,
+    set_roles,
+    set_validity,
+)
 from tal.core.param_engine import (
     ParamCoordSpec,
     ParamMapOptions,
@@ -15,11 +22,11 @@ from tal.core.param_engine import (
     resolve_param_coord_name,
     resolve_param_valid_mask,
     resolve_role_dims,
+    schema_resolve,
 )
-import tal.core.param_engine.schema_resolve as schema_resolve
-import tal.core.param_engine.map_apply as map_apply_mod
-import tal.core.param_engine.map_build as map_build_mod
-import tal.core.param_engine.query_grid as query_grid_mod
+from tal.core.param_engine import map_apply as map_apply_mod
+from tal.core.param_engine import map_build as map_build_mod
+from tal.core.param_engine import query_grid as query_grid_mod
 from tal.core.param_ops.guards import mark_reserved_coord
 from tal.core.schema_read import read_roles
 from tal.utils.xarray_namespace import unique_temp_dim as shared_unique_temp_dim
@@ -669,6 +676,127 @@ def test_param_engine_028_build_param_map_keeps_dask_lazy() -> None:
     )
     assert hasattr(pmap.i0.data, "chunks")
     assert hasattr(pmap.valid.data, "chunks")
+
+
+@pytest.mark.parametrize(
+    ("param_kind", "values", "query_dtype"),
+    (
+        ("numeric", np.asarray([0.0, 2.0, 1.0]), np.dtype("float64")),
+        (
+            "datetime64",
+            np.asarray(["2026-01-01T00:00:00", "2026-01-03T00:00:00", "2026-01-02T00:00:00"], dtype="datetime64[ns]"),
+            np.dtype("datetime64[ns]"),
+        ),
+    ),
+)
+def test_param_hard_empty_query_001_validates_eager_domains(
+    param_kind: str,
+    values: np.ndarray,
+    query_dtype: np.dtype,
+) -> None:
+    """ID: PARAM_HARD_EMPTY_QUERY_001_validates_eager_domains."""
+    param = xr.DataArray(values, dims=("sample",))
+    query = xr.DataArray(np.empty(0, dtype=query_dtype), dims=("query",))
+    with pytest.raises(ValueError, match="monotonic non-decreasing"):
+        build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+            param_kind=param_kind,
+        )
+
+
+def test_param_hard_empty_query_001_lazy_validation_is_deferred_and_preserved() -> None:
+    """Lazy empty maps validate their source domain only when computed."""
+    da = pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    param = xr.DataArray(da.from_array(np.asarray([0.0, 2.0, 1.0]), chunks=3), dims=("sample",))
+    query = xr.DataArray(np.empty(0, dtype=np.float64), dims=("query",))
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+        )
+    assert tasks == []
+    assert mapping.valid.chunks is not None
+    with pytest.raises(ValueError, match="monotonic non-decreasing"):
+        mapping.valid.compute()
+
+
+def test_param_hard_empty_query_001_preserves_topology_without_duplicate_failure() -> None:
+    """Empty maps preserve topology without inventing duplicate failures."""
+    param = xr.DataArray(
+        [[0.0, 1.0, 1.0], [10.0, 11.0, 12.0]],
+        dims=("trial", "sample"),
+        coords={"trial": ["a", "b"]},
+    )
+    query = xr.DataArray(
+        np.empty((2, 0), dtype=np.float64),
+        dims=("trial", "query"),
+        coords={"trial": ["a", "b"]},
+    )
+    mapping = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+        options=ParamMapOptions(method="linear", duplicate_policy="raise"),
+    )
+    assert mapping.valid.dims == ("trial", "query")
+    assert mapping.valid.shape == (2, 0)
+    assert list(mapping.valid.coords["trial"].data) == ["a", "b"]
+
+
+@pytest.mark.parametrize("param_kind", ("numeric", "datetime64"))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("size", (65_535, 65_536, 65_537))
+def test_param_hard_block_map_001_preserves_public_failure_precedence(
+    param_kind: str,
+    lazy: bool,
+    size: int,
+) -> None:
+    """ID: PARAM_HARD_BLOCK_MAP_001_preserves_public_failure_precedence."""
+    values = np.asarray([[0, 1, 1], [0, 2, 1]])
+    query = np.full((2, size), 0, dtype="int64")
+    query[0, -1] = 1
+    if param_kind == "datetime64":
+        values = np.datetime64("2025-01-01") + values.astype("timedelta64[D]")
+        query = np.datetime64("2025-01-01") + query.astype("timedelta64[D]")
+    param = xr.DataArray(values, dims=("trial", "sample"), coords={"trial": ["a", "b"]})
+    target = xr.DataArray(query, dims=("trial", "query"), coords={"trial": ["a", "b"]})
+    if lazy:
+        pytest.importorskip("dask.array")
+        param = param.chunk({"trial": 2, "sample": 3})
+        target = target.chunk({"trial": 2, "query": size})
+    options = ParamMapOptions(method="linear", duplicate_policy="raise")
+
+    if not lazy:
+        with pytest.raises(ValueError, match="duplicate parameter bracket"):
+            build_param_map(
+                param=param,
+                query=target,
+                sequence_dim="sample",
+                query_dim="query",
+                options=options,
+                param_kind=param_kind,
+            )
+        return
+
+    mapping = build_param_map(
+        param=param,
+        query=target,
+        sequence_dim="sample",
+        query_dim="query",
+        options=options,
+        param_kind=param_kind,
+    )
+    with pytest.raises(ValueError, match="duplicate parameter bracket"):
+        mapping.valid.compute(scheduler="synchronous")
 
 
 def test_param_hard_029_materialize_indexer_not_used_in_select_chunked_paths() -> None:

@@ -11,6 +11,9 @@ from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import read_components
 from tal.core.component_ops.runtime_checks import select_component_var
 from tal.core.dataset_ownership import analysis_object_dataset
+from tal.core.orchestration.resolve import resolve_param_runtime_context
+from tal.core.param_engine.prepared import PreparedParamEvaluation
+from tal.core.param_ops.evaluate import evaluate_param
 from tal.core.schema_read import read_roles
 
 from ..metadata import get_pose_rep
@@ -38,6 +41,15 @@ class PoseTemporalRequest:
     sequence_size_coord: str | None
     owner: str
     mode: Literal["at", "resample_to"]
+    prepared: PreparedPoseEvaluation | None = None
+
+
+@dataclass(frozen=True)
+class PreparedPoseEvaluation:
+    """Prepared linear and rotation maps for one Pose request."""
+
+    position: PreparedParamEvaluation
+    rotation: PreparedParamEvaluation
 
 
 def _effective_param_key(request: PoseTemporalRequest) -> str | None:
@@ -58,6 +70,21 @@ def _eval_position(
     on: str | None,
 ) -> Position:
     source = position if on is None else position.set_param_coord(name=on, validate=False)
+    if request.prepared is not None:
+        context = resolve_param_runtime_context(
+            source,
+            on=on,
+            sequence_dim=request.sequence_dim,
+            batch_dims=request.batch_dims,
+            sequence_size_coord=request.sequence_size_coord,
+        )
+        return evaluate_param(
+            context,
+            query=request.query,
+            opts=request.opts.position_opts,
+            validate=False,
+            prepared=request.prepared.position,
+        )
     kwargs = {
         "on": on,
         "opts": request.opts.position_opts,
@@ -79,6 +106,21 @@ def _eval_rotation(
 ) -> Rotation:
     source = rotation if on is None else rotation.set_param_coord(name=on, validate=False)
     resolved = as_rotation_method(request.opts.rotation_opts, method=resolve_rotation_method(request.opts.rotation_opts))
+    if request.prepared is not None:
+        from .rotation_temporal_ops import rotation_param_at
+
+        return rotation_param_at(
+            source,
+            query=request.query,
+            on=on,
+            opts=resolved,
+            validate=False,
+            sequence_dim=request.sequence_dim,
+            batch_dims=request.batch_dims,
+            sequence_size_coord=request.sequence_size_coord,
+            owner=request.owner,
+            prepared=request.prepared.rotation,
+        )
     kwargs = {
         "on": on,
         "opts": resolved,
@@ -101,6 +143,22 @@ def _eval_payload_carrier(
     carrier = AnalysisObject._from_unvalidated(analysis_object_dataset(source))
     if on is not None:
         carrier = carrier.set_param_coord(name=on, validate=False)
+    if request.prepared is not None:
+        context = resolve_param_runtime_context(
+            carrier,
+            on=on,
+            sequence_dim=request.sequence_dim,
+            batch_dims=request.batch_dims,
+            sequence_size_coord=request.sequence_size_coord,
+        )
+        evaluated = evaluate_param(
+            context,
+            query=request.query,
+            opts=request.opts.position_opts,
+            validate=False,
+            prepared=request.prepared.position,
+        )
+        return analysis_object_dataset(evaluated)
     kwargs = {
         "on": on,
         "opts": request.opts.position_opts,
@@ -371,6 +429,7 @@ def pose_param_at(
     batch_dims: Sequence[str] | None,
     sequence_size_coord: str | None,
     owner: str,
+    prepared: PreparedPoseEvaluation | None = None,
 ) -> Pose:
     request = PoseTemporalRequest(
         pose=pose,
@@ -383,6 +442,7 @@ def pose_param_at(
         sequence_size_coord=sequence_size_coord,
         owner=owner,
         mode="at",
+        prepared=prepared,
     )
     try:
         return _run_pose_temporal_request(request)
@@ -426,4 +486,4 @@ def pose_param_resample_to(
         raise type(exc)(f"{owner}: {text}") from exc
 
 
-__all__ = ["pose_param_at", "pose_param_resample_to"]
+__all__ = ["PreparedPoseEvaluation", "pose_param_at", "pose_param_resample_to"]

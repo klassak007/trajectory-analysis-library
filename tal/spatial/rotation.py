@@ -46,8 +46,6 @@ from .conversion.finalize import (
     dataset_dim_names,
     finalize_conversion_dataset,
 )
-from .kernels.rotation_compose_kernels import compose_quat_kernel, inverse_quat_kernel
-from .kernels.rotation_kernels import matrix_to_quat_kernel, quat_to_matrix_kernel
 from .metadata import (
     get_rotation_rep,
     normalize_configuration_relation_semantics,
@@ -62,6 +60,12 @@ from .ops.quat_role_dim_ops import (
     resolve_rotation_component_dims_for_reduce,
 )
 from .ops.rotation_apply_ops import rotation_apply
+from .ops.rotation_kernel_adapters import (
+    wrap_compose_quat_kernel,
+    wrap_inverse_quat_kernel,
+    wrap_matrix_to_quat_backend,
+    wrap_quat_to_matrix_backend,
+)
 from .ops.rotation_layout_ops import (
     enforce_rotation_dataset_invariants,
     require_matrix_labels,
@@ -145,7 +149,7 @@ def _convert_quat_to_matrix(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         owner=owner,
     )
     matrix = xr.apply_ufunc(
-        quat_to_matrix_kernel,
+        wrap_quat_to_matrix_backend,
         candidate[var_name],
         input_core_dims=[[quat_dim]],
         output_core_dims=[[row_dim, col_dim]],
@@ -179,7 +183,7 @@ def _convert_matrix_to_quat(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         what="rotation quaternion dim",
     )
     quat = xr.apply_ufunc(
-        matrix_to_quat_kernel,
+        wrap_matrix_to_quat_backend,
         candidate[var_name],
         input_core_dims=[[row_dim, col_dim]],
         output_core_dims=[[quat_dim]],
@@ -270,7 +274,7 @@ def _compose_quat_datasets(
         policy=policy,
     )
     out = xr.apply_ufunc(
-        partial(_wrap_compose_quat_kernel, owner=owner),
+        partial(wrap_compose_quat_kernel, owner=owner),
         aligned_left,
         aligned_right,
         input_core_dims=[[left_quat_dim], [right_quat_dim]],
@@ -290,7 +294,7 @@ def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, st
     candidate = validate_schema_if_needed(ds)
     var_name, quat_dim = require_quat_var_and_dim(candidate, owner=owner)
     quat = xr.apply_ufunc(
-        partial(_wrap_inverse_quat_kernel, owner=owner),
+        partial(wrap_inverse_quat_kernel, owner=owner),
         candidate[var_name],
         input_core_dims=[[quat_dim]],
         output_core_dims=[[quat_dim]],
@@ -303,24 +307,6 @@ def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, st
     out_ds = quat.to_dataset(name=var_name)
     out_ds = transfer_dataset_attrs(candidate, out_ds, validate=False)
     return _finalize_rotation_conversion(out_ds, core_dims=(quat_dim,), rep="quat", owner=owner), quat_dim
-
-
-def _wrap_compose_quat_kernel(left: np.ndarray, right: np.ndarray, *, owner: str) -> np.ndarray:
-    try:
-        return compose_quat_kernel(left, right)
-    except ValueError as exc:
-        if owner.startswith("spatial.path_solve."):
-            raise ValueError(f"{owner}: compose kernel failed after alignment.") from exc
-        raise ValueError(f"{owner}: compose kernel failed after alignment: {exc}") from exc
-
-
-def _wrap_inverse_quat_kernel(values: np.ndarray, *, owner: str) -> np.ndarray:
-    try:
-        return inverse_quat_kernel(values)
-    except ValueError as exc:
-        if owner.startswith("spatial.path_solve."):
-            raise ValueError(f"{owner}: inverse kernel failed.") from exc
-        raise ValueError(f"{owner}: inverse kernel failed: {exc}") from exc
 
 
 def _convert_quat_result_to_rep(

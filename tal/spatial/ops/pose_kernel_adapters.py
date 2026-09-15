@@ -5,10 +5,10 @@ from functools import partial
 import numpy as np
 import xarray as xr
 
-from ..kernels.pose_kernels import (
-    components_to_matrix_kernel,
-    compose_translation_kernel,
-    inverse_translation_kernel,
+from ..kernels.fixed_size_backends import (
+    pose_components_to_matrix_block_backend,
+    pose_compose_translation_block_backend,
+    pose_inverse_translation_block_backend,
 )
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
@@ -22,7 +22,7 @@ def _wrap_components_to_matrix_kernel(
     owner: str,
 ) -> np.ndarray:
     try:
-        return components_to_matrix_kernel(translation, quat)
+        return pose_components_to_matrix_block_backend(translation, quat)
     except ValueError as exc:
         raise ValueError(f"{owner}: pose components->matrix conversion kernel failed.") from exc
 
@@ -35,7 +35,7 @@ def _wrap_compose_translation_kernel(
     owner: str,
 ) -> np.ndarray:
     try:
-        return compose_translation_kernel(left_t, right_t, right_quat)
+        return pose_compose_translation_block_backend(left_t, right_t, right_quat)
     except ValueError as exc:
         raise ValueError(f"{owner}: pose compose translation kernel failed.") from exc
 
@@ -47,7 +47,7 @@ def _wrap_inverse_translation_kernel(
     owner: str,
 ) -> np.ndarray:
     try:
-        return inverse_translation_kernel(translation, quat)
+        return pose_inverse_translation_block_backend(translation, quat)
     except ValueError as exc:
         raise ValueError(f"{owner}: pose inverse translation failed.") from exc
 

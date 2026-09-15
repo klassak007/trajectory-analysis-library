@@ -1,8 +1,9 @@
 import importlib
+import warnings
 from pathlib import Path
+
 import numpy as np
 import pytest
-import warnings
 import xarray as xr
 
 from tal.core import AnalysisObject, ParamEvalOptions, ParamSelectOptions
@@ -1287,14 +1288,6 @@ def test_param_ops_062_param_ops_do_not_mutate_source_reserved_coord_attrs() -> 
 def test_orch_parity_002_param_interp_like_behavior_parity_after_migration() -> None:
     """ID: ORCH_PARITY_002_param_interp_like_behavior_parity_after_migration."""
     test_orch_topo_parity_002_interp_like_multi_batch_behavior_parity()
-
-
-def test_spatial_core_133_temporal_vector_like_method_execution_paths_use_blockwise_vectorize_false() -> None:
-    """ID: SPATIAL_CORE_133_temporal_vector_like_method_execution_paths_use_blockwise_vectorize_false."""
-    text = Path("tal/core/param_engine/map_apply.py").read_text(encoding="utf-8")
-    gather_body = text.split("def gather_along_sequence(", 1)[1].split("\ndef ", 1)[0]
-    assert "vectorize=False" in gather_body
-    assert "vectorize=True" not in gather_body
 
 
 def test_spatial_hard_154_temporal_vector_like_rejects_hidden_or_explicit_python_row_loop_execution_paths() -> None:

@@ -5,16 +5,19 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation as SciRotation
 
-from tal.spatial.kernels.rotation_interp_backends import (
-    ROTATION_INTERP_BACKEND_NUMBA,
-    ROTATION_INTERP_BACKEND_SCIPY,
-    slerp_quat_backend,
-)
-from tal.spatial.kernels.rotation_mean_backends import (
-    ROTATION_MEAN_BACKEND_NUMBA,
-    ROTATION_MEAN_BACKEND_NUMPY,
-    quat_mean_block_backend,
+from tal.spatial.kernels.fixed_size_backends import (
+    SPATIAL_FIXED_BACKEND_NUMBA,
+    SPATIAL_FIXED_BACKEND_SCIPY,
+    matrix_to_quat_block_backend,
+    pose_components_to_matrix_block_backend,
+    pose_compose_translation_block_backend,
+    pose_inverse_translation_block_backend,
+    quat_compose_block_backend,
+    quat_inverse_block_backend,
+    quat_to_matrix_block_backend,
+    rotate_vec3_block_backend,
 )
 from tal.spatial.kernels.higher_order_interp_backends import (
     POSE_HIGHER_ORDER_BACKEND_NUMBA,
@@ -26,17 +29,17 @@ from tal.spatial.kernels.higher_order_interp_backends import (
     pose_cubic_squad_block_backend,
     squad_quat_block_backend,
 )
-from tal.spatial.kernels.kinematics_smoothing_backends import (
-    KINEMATICS_SMOOTHING_BACKEND_NUMBA,
-    KINEMATICS_SMOOTHING_BACKEND_NUMPY,
-    gaussian_smoothing_block_backend,
-    moving_average_smoothing_block_backend,
-)
 from tal.spatial.kernels.kinematics_local_poly_backends import (
     KINEMATICS_LOCAL_POLY_BACKEND_NUMBA,
     KINEMATICS_LOCAL_POLY_BACKEND_NUMPY,
     local_poly_derivative_block_backend,
     local_poly_smoothing_block_backend,
+)
+from tal.spatial.kernels.kinematics_smoothing_backends import (
+    KINEMATICS_SMOOTHING_BACKEND_NUMBA,
+    KINEMATICS_SMOOTHING_BACKEND_NUMPY,
+    gaussian_smoothing_block_backend,
+    moving_average_smoothing_block_backend,
 )
 from tal.spatial.kernels.kinematics_temporal_backends import (
     KINEMATICS_TEMPORAL_BACKEND_NUMBA,
@@ -44,17 +47,15 @@ from tal.spatial.kernels.kinematics_temporal_backends import (
     cumulative_simpson_block_backend,
     cumulative_trapezoid_block_backend,
 )
-from tal.spatial.kernels.fixed_size_backends import (
-    SPATIAL_FIXED_BACKEND_NUMBA,
-    SPATIAL_FIXED_BACKEND_SCIPY,
-    matrix_to_quat_block_backend,
-    pose_compose_translation_block_backend,
-    pose_components_to_matrix_block_backend,
-    pose_inverse_translation_block_backend,
-    quat_compose_block_backend,
-    quat_inverse_block_backend,
-    quat_to_matrix_block_backend,
-    rotate_vec3_block_backend,
+from tal.spatial.kernels.rotation_interp_backends import (
+    ROTATION_INTERP_BACKEND_NUMBA,
+    ROTATION_INTERP_BACKEND_SCIPY,
+    slerp_quat_backend,
+)
+from tal.spatial.kernels.rotation_mean_backends import (
+    ROTATION_MEAN_BACKEND_NUMBA,
+    ROTATION_MEAN_BACKEND_NUMPY,
+    quat_mean_block_backend,
 )
 from tal.spatial.kernels.topology_scan_backends import (
     SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA,
@@ -691,7 +692,9 @@ def test_spatial_numba_016_simpson_scan_backend_decision_is_explicit() -> None:
 def test_spatial_numba_017_simpson_backend_parity_if_retained() -> None:
     """ID: SPATIAL_NUMBA_017_simpson_backend_parity_if_retained."""
     _require_numba()
-    from tal.spatial.kernels.kinematics_temporal_numba_backends import _compiled_simpson_block
+    from tal.spatial.kernels.kinematics_temporal_numba_backends import (
+        _compiled_simpson_block,
+    )
 
     param = np.asarray(
         [
@@ -969,6 +972,33 @@ def test_spatial_numba_033_matrix_to_quat_backend_parity() -> None:
         matrix_to_quat_block_backend(bad, backend=SPATIAL_FIXED_BACKEND_NUMBA)
 
 
+def test_spatial_core_matrix_conversion_reference_001_auto_keeps_scipy_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_CORE_MATRIX_CONVERSION_REFERENCE_001."""
+    import tal.spatial.kernels.fixed_size_backends as owner
+    import tal.spatial.kernels.fixed_size_numba_backends as compiled
+
+    matrix = SciRotation.from_rotvec([0.7, -0.3, 0.8]).as_matrix()
+    matrix[0, 1] += 1.0e-7
+    expected = matrix_to_quat_block_backend(matrix, backend=SPATIAL_FIXED_BACKEND_SCIPY)
+    monkeypatch.setattr(owner, "_numba_available", lambda: True)
+    monkeypatch.setattr(
+        compiled,
+        "matrix_to_quat_block_numba",
+        lambda *args, **kwargs: pytest.fail("automatic conversion entered Numba"),
+    )
+
+    actual = matrix_to_quat_block_backend(matrix)
+
+    np.testing.assert_allclose(
+        SciRotation.from_quat(actual).as_matrix(),
+        SciRotation.from_quat(expected).as_matrix(),
+        atol=1.0e-12,
+        rtol=1.0e-12,
+    )
+
+
 def test_spatial_numba_034_rotate_vec3_backend_parity() -> None:
     """ID: SPATIAL_NUMBA_034_rotate_vec3_backend_parity."""
     _require_numba()
@@ -1167,7 +1197,9 @@ def test_spatial_numba_062_quaternion_squad_backend_parity_if_retained() -> None
     expected = squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMPY)
     actual = squad_quat_block_backend(quat_window, alpha, valid, backend=ROTATION_HIGHER_ORDER_BACKEND_NUMBA)
     _assert_quat_equivalent(actual, expected, atol=1e-10)
-    from tal.spatial.kernels.higher_order_interp_numba_backends import squad_quat_block_numba
+    from tal.spatial.kernels.higher_order_interp_numba_backends import (
+        squad_quat_block_numba,
+    )
 
     bad_quat = np.asarray(quat_window.q0).copy()
     bad_quat[1, 0, :] = 0.0
@@ -1198,7 +1230,9 @@ def test_spatial_numba_063_pose_cubic_squad_backend_parity_if_retained() -> None
     )
     np.testing.assert_allclose(actual_t, expected_t, equal_nan=True, rtol=1e-10, atol=1e-10)
     _assert_quat_equivalent(actual_q, expected_q, atol=1e-10)
-    from tal.spatial.kernels.higher_order_interp_numba_backends import pose_cubic_squad_block_numba
+    from tal.spatial.kernels.higher_order_interp_numba_backends import (
+        pose_cubic_squad_block_numba,
+    )
 
     bad_alpha = alpha.copy()
     bad_alpha[1, 1] = -0.1
@@ -1343,7 +1377,7 @@ def test_spatial_topo_numba_004_nested_time_chain_scan_decision_is_explicit() ->
 
 def test_numba_opt_006_spatial_backends_skip_cleanly_without_numba(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: NUMBA_OPT_006_spatial_backends_skip_cleanly_without_numba."""
-    import tal.utils.numba_support as numba_support
+    from tal.utils import numba_support
 
     def _raise_import_error():
         raise ImportError("missing numba")
@@ -1422,7 +1456,7 @@ def test_numba_opt_007_spatial_backends_fail_closed_when_numba_requested_without
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ID: NUMBA_OPT_007_spatial_backends_fail_closed_when_numba_requested_without_numba."""
-    import tal.utils.numba_support as numba_support
+    from tal.utils import numba_support
 
     def _raise_import_error():
         raise ImportError("missing numba")

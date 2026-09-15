@@ -4,6 +4,13 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from tal.utils.numba_support import _numba_available
+
+from ..orchestration.indexing import (
+    capture_result_coordinates,
+    restore_result_coordinates,
+    without_index_topology,
+)
 from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from .backends import (
     PARAM_BOUNDS_BACKEND_NUMBA,
@@ -11,13 +18,15 @@ from .backends import (
     PARAM_MAP_BACKEND_NUMBA,
     PARAM_MAP_BACKEND_NUMPY_BLOCK,
     bounds_block_backend,
-    map_block_backend,
 )
+from .backends import map_block_status_backend as map_block_backend
+from .blocking import prepare_logical_row_blocks, select_logical_block
 from .datetime_rows import DATETIME_OPEN_START, DATETIME_OPEN_STOP
+from .map_assembly import assemble_param_map_blocks
 from .types import ParamBoundsMap, ParamMap, ParamMapOptions
-from tal.utils.numba_support import _numba_available
 
 _DUPLICATE_CODES = {"invalid": 0, "left": 1, "right": 2, "raise": 3}
+
 
 def _validate_numeric_param_dtype(*, param: xr.DataArray, owner: str) -> None:
     if is_ordered_real_numeric_dtype(param.dtype):
@@ -162,6 +171,32 @@ def _select_bounds_normal_backend(
     return PARAM_BOUNDS_BACKEND_NUMPY_BLOCK
 
 
+def _without_kernel_coordinates(value: xr.DataArray) -> xr.DataArray:
+    """Project one mapped block to its schema-free numerical payload."""
+    return value.drop_vars(tuple(value.coords))
+
+
+def _apply_status_ufunc(
+    function,
+    arrays: tuple[xr.DataArray, xr.DataArray, xr.DataArray],
+    *,
+    sequence_dim: str,
+    query_dim: str,
+    kwargs: dict[str, object],
+) -> tuple[xr.DataArray, ...]:
+    return xr.apply_ufunc(
+        function,
+        *arrays,
+        kwargs=kwargs,
+        input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
+        output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim], [], [], []],
+        vectorize=False,
+        dask="parallelized",
+        dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[np.int64, np.int64, np.float64, bool, np.int8, np.int64, object],
+    )
+
+
 def _apply_param_map_block(
     *,
     param_da: xr.DataArray,
@@ -171,43 +206,142 @@ def _apply_param_map_block(
     query_dim: str,
     opts: ParamMapOptions,
     param_kind: str,
-) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
-    if param_kind == "datetime64":
-        from .numpy_backends import datetime_map_block_numpy
-
-        return xr.apply_ufunc(
-            datetime_map_block_numpy,
-            param_da,
-            mask_da,
-            query_da,
-            kwargs={
-                "method": opts.method,
-                "dup_code": _DUPLICATE_CODES[opts.duplicate_policy],
-            },
-            input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
-            output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim]],
-            vectorize=False,
-            dask="parallelized",
-            dask_gufunc_kwargs={"allow_rechunk": True},
-            output_dtypes=[np.int64, np.int64, np.float64, bool],
-        )
+) -> tuple[xr.DataArray, ...]:
     backend = _select_map_normal_backend(param=param_da, query=query_da)
-    return xr.apply_ufunc(
+    arrays = tuple(
+        _without_kernel_coordinates(value)
+        for value in (param_da, mask_da, query_da)
+    )
+    if param_kind == "datetime64":
+        from .numpy_backends import datetime_map_block_numpy_status
+
+        return _apply_status_ufunc(
+            datetime_map_block_numpy_status,
+            arrays,
+            sequence_dim=sequence_dim,
+            query_dim=query_dim,
+            kwargs={"method": opts.method, "dup_code": _DUPLICATE_CODES[opts.duplicate_policy]},
+        )
+    return _apply_status_ufunc(
         map_block_backend,
-        param_da,
-        mask_da,
-        query_da,
+        arrays,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
         kwargs={
             "method": opts.method,
             "dup_code": _DUPLICATE_CODES[opts.duplicate_policy],
             "backend": backend,
         },
-        input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
-        output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim]],
+    )
+
+
+def _empty_domain_validation(
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    *,
+    sequence_dim: str,
+    param_kind: str,
+) -> xr.DataArray:
+    from .numpy_backends import validate_map_domain_block_numpy
+
+    return xr.apply_ufunc(
+        validate_map_domain_block_numpy,
+        param_da,
+        mask_da,
+        kwargs={"param_kind": param_kind},
+        input_core_dims=[[sequence_dim], [sequence_dim]],
+        output_core_dims=[[]],
         vectorize=False,
         dask="parallelized",
         dask_gufunc_kwargs={"allow_rechunk": True},
-        output_dtypes=[np.int64, np.int64, np.float64, bool],
+        output_dtypes=[np.int8],
+    )
+
+
+def _empty_param_map(
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    query_da: xr.DataArray,
+    *,
+    sequence_dim: str,
+    param_kind: str,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    checked = _empty_domain_validation(
+        param_da,
+        mask_da,
+        sequence_dim=sequence_dim,
+        param_kind=param_kind,
+    )
+    logical_dims = tuple(dim for dim in checked.dims)
+    logical_dims += tuple(dim for dim in query_da.dims if dim not in logical_dims)
+    snapshot = capture_result_coordinates(
+        checked,
+        query_da,
+        output_dims=logical_dims,
+        owner="build_param_map",
+    )
+    checked = without_index_topology(checked, dims=logical_dims)
+    query_da = without_index_topology(query_da, dims=logical_dims)
+    template = xr.broadcast(checked, query_da)[0]
+    zero = template * np.int8(0)
+    columns = (
+        zero.astype(np.int64).rename(None),
+        zero.astype(np.int64).rename(None),
+        zero.astype(np.float64).rename(None),
+        zero.astype(bool).rename(None),
+    )
+    return tuple(
+        restore_result_coordinates(column, snapshot)
+        for column in columns
+    )  # type: ignore[return-value]
+
+
+def _apply_param_map_blocks(
+    *,
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    query_da: xr.DataArray,
+    sequence_dim: str,
+    query_dim: str,
+    opts: ParamMapOptions,
+    param_kind: str,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    query_size = int(query_da.sizes[query_dim])
+    if query_size == 0:
+        return _empty_param_map(
+            param_da,
+            mask_da,
+            query_da,
+            sequence_dim=sequence_dim,
+            param_kind=param_kind,
+        )
+    plan = prepare_logical_row_blocks(
+        param_da,
+        mask_da,
+        query_da,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=query_dim,
+    )
+    blocks = (
+        _apply_param_map_block(
+            param_da=select_logical_block(param_da, block),
+            mask_da=select_logical_block(mask_da, block),
+            query_da=select_logical_block(query_da, block),
+            sequence_dim=sequence_dim,
+            query_dim=query_dim,
+            opts=opts,
+            param_kind=param_kind,
+        )
+        for block in plan.blocks
+    )
+    return assemble_param_map_blocks(
+        blocks,
+        plan=plan,
+        param=param_da,
+        mask=mask_da,
+        query=query_da,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
     )
 
 
@@ -258,7 +392,7 @@ def build_param_map(
         options=options,
         param_kind=param_kind,
     )
-    i0, i1, alpha, valid = _apply_param_map_block(
+    i0, i1, alpha, valid = _apply_param_map_blocks(
         param_da=param_da,
         mask_da=mask_da,
         query_da=query_da,
@@ -439,4 +573,4 @@ def build_param_bounds_map(
     return ParamBoundsMap(i0=i0, i1=i1)
 
 
-__all__ = ["build_param_map", "build_param_bounds_map"]
+__all__ = ["build_param_bounds_map", "build_param_map"]

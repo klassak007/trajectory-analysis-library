@@ -28,6 +28,26 @@ def map_block_backend(
     raise ValueError(f"build_param_map: unsupported backend {backend!r}.")
 
 
+def map_block_status_backend(
+    param_block: np.ndarray,
+    valid_block: np.ndarray,
+    query_block: np.ndarray,
+    *,
+    method: str,
+    dup_code: int,
+    backend: str,
+) -> tuple[np.ndarray, ...]:
+    if backend == PARAM_MAP_BACKEND_NUMPY_BLOCK:
+        from .numpy_backends import map_block_numpy_status
+
+        return map_block_numpy_status(param_block, valid_block, query_block, method=method, dup_code=dup_code)
+    if backend == PARAM_MAP_BACKEND_NUMBA:
+        from .numba_backends import map_block_numba_status
+
+        return map_block_numba_status(param_block, valid_block, query_block, method=method, dup_code=dup_code)
+    raise ValueError(f"build_param_map: unsupported backend {backend!r}.")
+
+
 def bounds_block_backend(
     param_block: np.ndarray,
     valid_block: np.ndarray,
@@ -54,4 +74,5 @@ __all__ = [
     "PARAM_MAP_BACKEND_NUMPY_BLOCK",
     "bounds_block_backend",
     "map_block_backend",
+    "map_block_status_backend",
 ]

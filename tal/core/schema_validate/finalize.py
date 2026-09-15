@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import xarray as xr
 
@@ -45,14 +45,14 @@ def _attrs_without_tal(attrs: Mapping[Any, Any]) -> dict[Any, Any]:
 
 
 def _replace_dataset_attrs_with_tal(
-    ds: xr.Dataset,
+    ds: xr.Dataset | xr.DataArray,
     *,
     ordinary_attrs: Mapping[Any, Any],
     tal: Mapping[str, Any] | None,
     canonicalize: bool = False,
     isolate_tal: bool = True,
     variable_without_tal: str | None = None,
-) -> xr.Dataset:
+) -> xr.Dataset | xr.DataArray:
     """Replace dataset attrs through the single TAL-attribute write owner."""
     attrs = _attrs_without_tal(ordinary_attrs)
     if tal is not None:
@@ -62,10 +62,28 @@ def _replace_dataset_attrs_with_tal(
         attrs["tal"] = tal_value
     out = ds.copy(deep=False)
     out.attrs = attrs
-    if variable_without_tal is not None:
+    if variable_without_tal is not None and isinstance(out, xr.Dataset):
         out[variable_without_tal].attrs = _attrs_without_tal(
             out[variable_without_tal].attrs
         )
+    return out
+
+
+def transfer_dataarray_metadata(
+    source: xr.DataArray,
+    target: xr.DataArray,
+) -> xr.DataArray:
+    """Copy DataArray metadata through the canonical TAL-attribute owner."""
+    tal = source.attrs.get("tal")
+    out = cast(
+        xr.DataArray,
+        _replace_dataset_attrs_with_tal(
+            target,
+            ordinary_attrs=source.attrs,
+            tal=tal if isinstance(tal, Mapping) else None,
+        ),
+    )
+    out.encoding = deepcopy(source.encoding)
     return out
 
 

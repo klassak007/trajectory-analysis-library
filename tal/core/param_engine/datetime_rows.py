@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 
-_DUPLICATE_BRACKET_ERROR = (
-    "build_param_map: duplicate parameter bracket encountered for linear interpolation."
+from .map_failures import (
+    datetime_span_map_failure,
+    duplicate_map_failure,
+    monotonic_map_failure,
 )
+
 NAT_INT = np.datetime64("NaT", "ns").view("int64")
 DATETIME_OPEN_START = np.datetime64("1677-09-21T00:12:43.145224193", "ns")
 DATETIME_OPEN_STOP = np.datetime64("2262-04-11T23:47:16.854775807", "ns")
@@ -24,14 +27,27 @@ def _datetime_ns(values: np.ndarray) -> np.ndarray:
     return np.asarray(values, dtype="datetime64[ns]").view("int64")
 
 
-def _local_ns(values: np.ndarray, *, anchor: int, owner: str) -> np.ndarray:
+def _raise_datetime_span(*, owner: str, position: int) -> None:
+    if owner == "build_param_map":
+        raise datetime_span_map_failure(owner=owner, position=position)
+    raise ValueError(f"{owner}: datetime64 values span more than int64 nanoseconds from row anchor.")
+
+
+def _local_ns(
+    values: np.ndarray,
+    *,
+    anchor: int,
+    owner: str,
+    positions: np.ndarray | None = None,
+) -> np.ndarray:
     out = np.empty(values.size, dtype=np.int64)
     lo = int(np.iinfo(np.int64).min)
     hi = int(np.iinfo(np.int64).max)
     for idx, value in enumerate(values):
         delta = int(value) - anchor
         if delta < lo or delta > hi:
-            raise ValueError(f"{owner}: datetime64 values span more than int64 nanoseconds from row anchor.")
+            position = -1 if positions is None else int(positions[idx])
+            _raise_datetime_span(owner=owner, position=position)
         out[idx] = delta
     return out
 
@@ -41,8 +57,11 @@ def _datetime_source_row(param_row: np.ndarray, valid_row: np.ndarray, *, owner:
     valid = np.asarray(valid_row, dtype=bool) & (src_abs != NAT_INT)
     src_idx = np.flatnonzero(valid).astype("int64", copy=False)
     src_vals_abs = src_abs[src_idx]
-    if src_vals_abs.size >= 2 and np.any(np.diff(src_vals_abs) < 0):
-        raise ValueError(f"{owner}: parameter coordinate must be monotonic non-decreasing on valid domain.")
+    if any(
+        int(src_vals_abs[index]) < int(src_vals_abs[index - 1])
+        for index in range(1, int(src_vals_abs.size))
+    ):
+        raise monotonic_map_failure(owner=owner)
     anchor = int(src_vals_abs[0]) if src_vals_abs.size else 0
     return src_idx, _local_ns(src_vals_abs, anchor=anchor, owner=owner), anchor
 
@@ -52,7 +71,13 @@ def _datetime_query_row(query_row: np.ndarray, *, anchor: int) -> tuple[np.ndarr
     valid = query_abs != NAT_INT
     query_local = np.zeros(query_abs.shape, dtype=np.int64)
     if np.any(valid):
-        query_local[valid] = _local_ns(query_abs[valid], anchor=anchor, owner="build_param_map")
+        positions = np.flatnonzero(valid)
+        query_local[valid] = _local_ns(
+            query_abs[valid],
+            anchor=anchor,
+            owner="build_param_map",
+            positions=positions,
+        )
     return query_local, valid
 
 
@@ -111,7 +136,7 @@ def _try_duplicate(
     if hi - lo <= 1:
         return False
     if dup_code == 3:
-        raise ValueError(_DUPLICATE_BRACKET_ERROR)
+        raise duplicate_map_failure(position=out_idx)
     if dup_code == 0:
         return True
     _assign_constant(out_idx, lo if dup_code == 1 else hi - 1, src_idx, i0, i1, valid)

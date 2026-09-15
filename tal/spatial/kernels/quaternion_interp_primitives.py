@@ -6,9 +6,10 @@ from ._fixed_size_constants import STATUS_OK
 from .fixed_size_primitives import normalize_quat_tuple
 
 _NLERP_DOT_THRESHOLD = 1.0 - 1.0e-12
+_STATUS_AMBIGUOUS_HALF_TURN = 3
 
 
-def slerp_quat(q0, q1, alpha: float):
+def slerp_quat(q0, q1, alpha: float, half_turn_tolerance: float = -1.0, principal_arc: bool = False):
     """Return status and exact shortest-arc SLERP for two quaternions."""
     status, x0, y0, z0, w0 = normalize_quat_tuple(q0)
     if status != STATUS_OK:
@@ -19,7 +20,9 @@ def slerp_quat(q0, q1, alpha: float):
     left = (x0, y0, z0, w0)
     right = (x1, y1, z1, w1)
     dot = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1
-    if dot < 0.0:
+    if not principal_arc and half_turn_tolerance >= 0.0 and abs(dot) <= half_turn_tolerance:
+        return _STATUS_AMBIGUOUS_HALF_TURN, right
+    if not principal_arc and dot < 0.0:
         dot = -dot
         right = (-x1, -y1, -z1, -w1)
     if alpha == 0.0:

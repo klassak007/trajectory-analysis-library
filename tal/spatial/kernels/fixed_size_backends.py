@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from tal.utils.numba_support import _numba_available
+
 from ._fixed_size_common import (
     prepare_binary_quat_rows,
     prepare_pose_compose_rows,
@@ -12,12 +14,20 @@ from ._fixed_size_common import (
     prepare_vec_quat_rows,
     validate_quat_rows,
 )
-from .pose_kernels import components_to_matrix_kernel, compose_translation_kernel, inverse_translation_kernel
+from .pose_kernels import (
+    components_to_matrix_kernel,
+    compose_translation_kernel,
+    inverse_translation_kernel,
+)
+from .rigid_matrix_validation import (
+    require_real_matrix_dtype,
+    validate_rotation_matrix_rows,
+)
 from .rotation_apply_kernels import rotate_vec3_kernel
 from .rotation_compose_kernels import compose_quat_kernel, inverse_quat_kernel
 from .rotation_kernels import _matrix_to_quat_prevalidated_kernel, quat_to_matrix_kernel
-from .rigid_matrix_validation import require_real_matrix_dtype, validate_rotation_matrix_rows
 
+SPATIAL_FIXED_BACKEND_AUTO = "auto"
 SPATIAL_FIXED_BACKEND_NUMBA = "numba"
 SPATIAL_FIXED_BACKEND_SCIPY = "scipy"
 _OWNER = "spatial.fixed_size_backend"
@@ -30,7 +40,16 @@ def _run_scipy_kernel(func, *args: np.ndarray) -> np.ndarray:
         raise ValueError(f"{_OWNER}: baseline fixed-size scipy kernel failed: {exc}") from exc
 
 
-def quat_compose_block_backend(left: object, right: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:
+def _resolve_backend(backend: str, *values: object) -> str:
+    if backend != SPATIAL_FIXED_BACKEND_AUTO:
+        return backend
+    dtypes = tuple(np.asarray(value).dtype for value in values)
+    eligible = all(dtype.kind == "f" and dtype.itemsize in {4, 8} for dtype in dtypes)
+    return SPATIAL_FIXED_BACKEND_NUMBA if eligible and _numba_available() else SPATIAL_FIXED_BACKEND_SCIPY
+
+
+def quat_compose_block_backend(left: object, right: object, *, backend: str = SPATIAL_FIXED_BACKEND_AUTO) -> np.ndarray:
+    backend = _resolve_backend(backend, left, right)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_binary_quat_rows(left, right, owner=_OWNER)
         validate_quat_rows(*rows.row_arrays, owner=_OWNER)
@@ -46,7 +65,8 @@ def quat_compose_block_backend(left: object, right: object, *, backend: str = SP
     raise ValueError(f"{_OWNER}: unsupported fixed-size backend {backend!r}.")
 
 
-def quat_inverse_block_backend(values: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:
+def quat_inverse_block_backend(values: object, *, backend: str = SPATIAL_FIXED_BACKEND_AUTO) -> np.ndarray:
+    backend = _resolve_backend(backend, values)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_unary_quat_rows(values, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[0], owner=_OWNER)
@@ -58,7 +78,8 @@ def quat_inverse_block_backend(values: object, *, backend: str = SPATIAL_FIXED_B
     raise ValueError(f"{_OWNER}: unsupported fixed-size backend {backend!r}.")
 
 
-def quat_to_matrix_block_backend(values: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:
+def quat_to_matrix_block_backend(values: object, *, backend: str = SPATIAL_FIXED_BACKEND_AUTO) -> np.ndarray:
+    backend = _resolve_backend(backend, values)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_quat_to_matrix_rows(values, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[0], owner=_OWNER)
@@ -70,7 +91,9 @@ def quat_to_matrix_block_backend(values: object, *, backend: str = SPATIAL_FIXED
     raise ValueError(f"{_OWNER}: unsupported fixed-size backend {backend!r}.")
 
 
-def matrix_to_quat_block_backend(matrix: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:
+def matrix_to_quat_block_backend(matrix: object, *, backend: str = SPATIAL_FIXED_BACKEND_AUTO) -> np.ndarray:
+    if backend == SPATIAL_FIXED_BACKEND_AUTO:
+        backend = SPATIAL_FIXED_BACKEND_SCIPY
     if backend not in (SPATIAL_FIXED_BACKEND_SCIPY, SPATIAL_FIXED_BACKEND_NUMBA):
         raise ValueError(f"{_OWNER}: unsupported fixed-size backend {backend!r}.")
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
@@ -84,7 +107,8 @@ def matrix_to_quat_block_backend(matrix: object, *, backend: str = SPATIAL_FIXED
     return matrix_to_quat_block_numba(matrix, owner=_OWNER)
 
 
-def rotate_vec3_block_backend(values: object, quat: object, *, backend: str = SPATIAL_FIXED_BACKEND_SCIPY) -> np.ndarray:
+def rotate_vec3_block_backend(values: object, quat: object, *, backend: str = SPATIAL_FIXED_BACKEND_AUTO) -> np.ndarray:
+    backend = _resolve_backend(backend, values, quat)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_vec_quat_rows(values, quat, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[1], owner=_OWNER)
@@ -105,8 +129,9 @@ def pose_compose_translation_block_backend(
     right_t: object,
     right_q: object,
     *,
-    backend: str = SPATIAL_FIXED_BACKEND_SCIPY,
+    backend: str = SPATIAL_FIXED_BACKEND_AUTO,
 ) -> np.ndarray:
+    backend = _resolve_backend(backend, left_t, right_t, right_q)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_pose_compose_rows(left_t, right_t, right_q, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[2], owner=_OWNER)
@@ -127,8 +152,9 @@ def pose_inverse_translation_block_backend(
     translation: object,
     quat: object,
     *,
-    backend: str = SPATIAL_FIXED_BACKEND_SCIPY,
+    backend: str = SPATIAL_FIXED_BACKEND_AUTO,
 ) -> np.ndarray:
+    backend = _resolve_backend(backend, translation, quat)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_pose_inverse_rows(translation, quat, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[1], owner=_OWNER)
@@ -148,8 +174,9 @@ def pose_components_to_matrix_block_backend(
     translation: object,
     quat: object,
     *,
-    backend: str = SPATIAL_FIXED_BACKEND_SCIPY,
+    backend: str = SPATIAL_FIXED_BACKEND_AUTO,
 ) -> np.ndarray:
+    backend = _resolve_backend(backend, translation, quat)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_pose_matrix_rows(translation, quat, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[1], owner=_OWNER)
@@ -166,11 +193,12 @@ def pose_components_to_matrix_block_backend(
 
 
 __all__ = [
+    "SPATIAL_FIXED_BACKEND_AUTO",
     "SPATIAL_FIXED_BACKEND_NUMBA",
     "SPATIAL_FIXED_BACKEND_SCIPY",
     "matrix_to_quat_block_backend",
-    "pose_compose_translation_block_backend",
     "pose_components_to_matrix_block_backend",
+    "pose_compose_translation_block_backend",
     "pose_inverse_translation_block_backend",
     "quat_compose_block_backend",
     "quat_inverse_block_backend",

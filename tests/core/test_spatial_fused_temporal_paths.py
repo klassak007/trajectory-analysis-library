@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import gc
+import importlib.util
 import multiprocessing as mp
 import weakref
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,6 +13,10 @@ from scipy.spatial.transform import Slerp
 
 import benchmarks._spatial_path_benchmark_protocol as benchmark_protocol
 from benchmarks._spatial_path_benchmark_protocol import MeasuredRoute
+from benchmarks._spatial_path_execution_routes import (
+    materialize_route_result,
+    route_effective_backend,
+)
 from benchmarks.bench_spatial_fused_temporal_paths import (
     BenchmarkCaseConfig,
     frozen_fixture,
@@ -94,6 +100,69 @@ def test_spatial_hard_fused_path_001_slerp_threshold_endpoints_and_shortest_arc(
         _slerp_pair(q0, q1, np.asarray((1.1,)), ROTATION_INTERP_BACKEND_NUMBA)
     with pytest.raises(ValueError, match="quaternion norm must be finite and > 0"):
         _slerp_pair(np.zeros(4), q1, np.asarray((0.5,)), ROTATION_INTERP_BACKEND_NUMBA)
+
+
+@pytest.mark.parametrize("dtype", (np.dtype("float32"), np.dtype("float64")))
+@pytest.mark.parametrize("sign", (-1.0, 1.0))
+def test_spatial_core_slerp_half_turn_001_matches_scipy_convention(
+    dtype: np.dtype,
+    sign: float,
+) -> None:
+    """ID: SPATIAL_CORE_SLERP_HALF_TURN_001_matches_scipy_convention."""
+    pytest.importorskip("numba")
+    start = SciRotation.from_rotvec(np.asarray((0.21, -0.08, 0.14))).as_quat().astype(dtype)
+    axis = np.asarray((sign, -2.0 * sign, 0.5 * sign))
+    axis /= np.linalg.norm(axis)
+    target = (SciRotation.from_quat(start) * SciRotation.from_rotvec(np.pi * axis)).as_quat().astype(dtype)
+    alpha = np.asarray((0.0, 0.25, 0.75, 1.0), dtype=dtype)
+    expected = _slerp_pair(start, target, alpha, ROTATION_INTERP_BACKEND_SCIPY)
+    actual = _slerp_pair(start, target, alpha, ROTATION_INTERP_BACKEND_NUMBA)
+    tolerance = 2.0e-6 if dtype == np.dtype("float32") else 1.0e-12
+    np.testing.assert_allclose(
+        SciRotation.from_quat(actual).as_matrix(),
+        SciRotation.from_quat(expected).as_matrix(),
+        rtol=tolerance,
+        atol=tolerance,
+    )
+
+
+@pytest.mark.parametrize("dtype", (np.dtype("float32"), np.dtype("float64")))
+@pytest.mark.parametrize("backend", (ROTATION_INTERP_BACKEND_SCIPY, ROTATION_INTERP_BACKEND_NUMBA))
+@pytest.mark.parametrize(
+    ("left_values", "right_values"),
+    (
+        ((1.0, 1.0, 1.0, 3.0), (-1.0, 1.0, -3.0, 1.0)),
+        ((1.0, 2.0, 1.0, 1.0), (-2.0, 1.0, -1.0, 1.0)),
+    ),
+)
+def test_spatial_core_slerp_principal_arc_001_uses_independent_scipy_reference(
+    dtype: np.dtype,
+    backend: str,
+    left_values: tuple[float, ...],
+    right_values: tuple[float, ...],
+) -> None:
+    """ID: SPATIAL_CORE_SLERP_PRINCIPAL_ARC_001_uses_independent_scipy_reference."""
+    if backend == ROTATION_INTERP_BACKEND_NUMBA:
+        pytest.importorskip("numba")
+    left = np.asarray(left_values, dtype=dtype)
+    right = np.asarray(right_values, dtype=dtype)
+    left /= np.linalg.norm(left)
+    right /= np.linalg.norm(right)
+    fractions = np.asarray((0.0, 0.25, 0.5, 0.75, 1.0), dtype=dtype)
+    expected = Slerp(
+        np.asarray((0.0, 1.0)),
+        SciRotation.from_quat(np.stack((left, right))),
+    )(fractions).as_matrix()
+    tolerance = 2.0e-6 if dtype == np.dtype("float32") else 1.0e-12
+    for sign in (-1.0, 1.0):
+        signed = sign * right
+        actual = _slerp_pair(left, signed, fractions, backend)
+        np.testing.assert_allclose(
+            SciRotation.from_quat(actual).as_matrix(),
+            expected,
+            rtol=tolerance,
+            atol=tolerance,
+        )
 
 
 def test_spatial_core_fused_path_reconciled_slerp_preserves_squad_parity() -> None:
@@ -212,7 +281,7 @@ def test_spatial_bench_fused_path_004_measured_samples_validate_and_release_outp
         np.testing.assert_array_equal(result, np.asarray((1.0, 2.0, 3.0)))
         validations += 1
 
-    route = MeasuredRoute("probe", operation, lambda result: np.asarray(result).sum(), validate)
+    route = MeasuredRoute("probe", operation, lambda result: result, validate)
     timing = measure_route(route, warmups=2, repeats=3)
     gc.collect()
     assert len(timing.samples) == 3
@@ -222,7 +291,7 @@ def test_spatial_bench_fused_path_004_measured_samples_validate_and_release_outp
     invalid = MeasuredRoute(
         "invalid",
         lambda: np.asarray((1.0,)),
-        lambda result: np.asarray(result).sum(),
+        lambda result: result,
         lambda result: np.testing.assert_array_equal(result, np.asarray((2.0,))),
     )
     with pytest.raises(AssertionError):
@@ -241,7 +310,23 @@ def test_spatial_bench_fused_path_005_cold_subprocess_preserves_case_configurati
     assert cold.config == config
 
 
-@pytest.mark.parametrize("route", ("scipy-vectorized", "public", "direct-typed"))
+def test_spatial_bench_fused_cold_cache_001_reference_prepares_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_BENCH_FUSED_COLD_CACHE_001_reference_prepares_dependencies."""
+    pytest.importorskip("numba")
+    cache = tmp_path / "empty-numba-cache"
+    cache.mkdir()
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(cache))
+    cold = measure_cold_route(
+        "fused-reference",
+        config=BenchmarkCaseConfig("h1", 17, 1),
+    )
+    assert cold.effective_backend == "numba"
+
+
+@pytest.mark.parametrize("route", ("scipy-vectorized", "public", "direct-typed", "dask-auto-leaf"))
 @pytest.mark.parametrize("edges", (1, 4, 8))
 def test_spatial_bench_fused_path_007_rss_subprocess_preserves_case_configuration(
     edges: int,
@@ -252,6 +337,9 @@ def test_spatial_bench_fused_path_007_rss_subprocess_preserves_case_configuratio
     config = BenchmarkCaseConfig("h1", 17, edges)
     rss = measure_rss(route, config=config)
     assert rss.config == config
+    if route == "dask-auto-leaf":
+        expected = "numba" if importlib.util.find_spec("numba") is not None else "scipy"
+        assert rss.effective_backend == expected
 
 
 def test_spatial_bench_fused_path_008_scipy_main_does_not_require_numba(
@@ -302,3 +390,88 @@ def test_spatial_bench_fused_path_006_rss_worker_failure_is_bounded_and_owned() 
     with pytest.raises(RuntimeError, match=r"benchmarks\.spatial_paths\.rss: worker ValueError: unknown benchmark route"):
         measure_rss("unknown", config=config)
     assert {process.pid for process in mp.active_children()} <= before
+
+
+def test_spatial_bench_fused_path_009_materializes_shared_dask_graph_once() -> None:
+    """ID: SPATIAL_BENCH_FUSED_PATH_009_materializes_shared_dask_graph_once."""
+    da = pytest.importorskip("dask.array")
+    import xarray as xr
+    from dask import delayed
+    from dask.callbacks import Callback
+
+    calls: list[str] = []
+
+    @delayed
+    def shared_values() -> np.ndarray:
+        calls.append("load")
+        return np.arange(12, dtype=np.float64).reshape(3, 4)
+
+    shared = da.from_delayed(shared_values(), shape=(3, 4), dtype=np.float64)
+    dataset = xr.Dataset(
+        {
+            "position": (("query", "axis"), shared[:, :3]),
+            "rotation": (("query", "quat"), shared),
+        }
+    )
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        eager = materialize_route_result(dataset, synchronous=True)
+    task_count = len(tasks)
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        np.testing.assert_array_equal(eager["rotation"], np.arange(12).reshape(3, 4))
+    assert calls == ["load"]
+    assert task_count > 0
+    assert len(tasks) == task_count
+    assert all(value.chunks is None for value in eager.data_vars.values())
+
+
+def test_spatial_bench_fused_path_010_reports_automatic_leaf_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_BENCH_FUSED_PATH_010_reports_automatic_leaf_backend."""
+    import benchmarks._spatial_path_execution_routes as routes
+
+    monkeypatch.setattr(routes, "_numba_available", lambda: True)
+    assert route_effective_backend("dask-auto-leaf") == "numba"
+    monkeypatch.setattr(routes, "_numba_available", lambda: False)
+    assert route_effective_backend("dask-auto-leaf") == "scipy"
+
+
+def test_spatial_bench_fused_path_010_warm_and_cold_reports_confirmed_backend(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Automatic Dask timing and cold workers report their selected leaf."""
+    expected = "numba" if importlib.util.find_spec("numba") is not None else "scipy"
+    assert benchmark_main(
+        (
+            "--cases",
+            "h1",
+            "--sizes",
+            "17",
+            "--edges",
+            "1",
+            "--routes",
+            "dask-auto-leaf",
+            "--warmups",
+            "0",
+            "--repeats",
+            "1",
+        )
+    ) == 0
+    assert f"route=dask-auto-leaf; effective_backend={expected}" in capsys.readouterr().out
+    cold = measure_cold_route(
+        "dask-auto-leaf",
+        config=BenchmarkCaseConfig("h1", 17, 1),
+    )
+    assert cold.effective_backend == expected
+
+
+@pytest.mark.parametrize("case", ("h0", "h1"))
+def test_spatial_bench_fused_path_011_single_edge_named_component_order(case, capsys) -> None:
+    """ID: SPATIAL_BENCH_FUSED_PATH_011_single_edge_named_component_order."""
+    assert benchmark_main((
+        "--cases", case, "--sizes", "17", "--edges", "1",
+        "--routes", "public", "direct-typed", "dask-auto-leaf",
+        "--warmups", "0", "--repeats", "1",
+    )) == 0
+    assert f"parity=ok; case={case}; query=17; comparators=3" in capsys.readouterr().out

@@ -10,26 +10,30 @@ from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
+from tal.core.orchestration.finalize import transfer_dataset_attrs
+from tal.core.orchestration.runtime_checks import (
+    resolve_single_numeric_var_single_core_dim,
+)
 from tal.core.orchestration.topology import (
     SEMANTIC_NON_CORE_POLICY,
     STRICT_NON_CORE_POLICY,
-    TopologyPolicy,
     TopologyOperand,
+    TopologyPolicy,
     resolve_binary_topology,
 )
-from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
-from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
 from tal.utils.frame_schema import set_frames
-from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
+from tal.utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
+)
 
+from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
 from ..association import (
     SpatialAssociationPlan,
     attach_spatial_association,
     resolve_passive_association,
 )
-from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
-from ..policies.frame import resolve_apply_output_frames
+from ..kernels.fixed_size_backends import rotate_vec3_block_backend
 from ..kinematics.vector6_ops import (
     ACCELERATION_VECTOR6_OPTS,
     VELOCITY_VECTOR6_OPTS,
@@ -46,9 +50,9 @@ from ..metadata import (
     set_linear_velocity_rep,
     set_velocity_rep,
 )
-from ..position import Position
-from ..kernels.rotation_apply_kernels import rotate_vec3_kernel
+from ..policies.frame import resolve_apply_output_frames
 from ..policies.wrap import wrap_like
+from ..position import Position
 from ..velocity import AngularVelocity, LinearVelocity, Velocity
 
 if TYPE_CHECKING:
@@ -124,7 +128,7 @@ def _set_acceleration_vector6_rep(ds: xr.Dataset, validate: bool, owner: str) ->
 
 def _wrap_rotation_apply_kernel(values: np.ndarray, quat: np.ndarray, *, owner: str) -> np.ndarray:
     try:
-        return rotate_vec3_kernel(values, quat)
+        return rotate_vec3_block_backend(values, quat)
     except ValueError as exc:
         raise ValueError(f"{owner}: rotation apply vector kernel failed.") from exc
 
@@ -230,7 +234,7 @@ def _acceleration_output_for_rep(
 
 
 def _apply_to_vector_target(
-    rotation: "Rotation",
+    rotation: Rotation,
     target: object,
     *,
     validate: bool,
@@ -344,7 +348,7 @@ def _apply_vector_rotation_kernel(
 
 
 def _apply_to_spatial_target(
-    rotation: "Rotation",
+    rotation: Rotation,
     target: object,
     *,
     validate: bool,
@@ -370,7 +374,7 @@ def _apply_to_spatial_target(
 
 
 def _rotation_apply_with_owner(
-    rotation: "Rotation",
+    rotation: Rotation,
     target: object,
     *,
     validate: bool,
@@ -396,7 +400,7 @@ def _rotation_apply_with_owner(
     return attach_spatial_association(result, result_association)
 
 
-def rotation_apply(rotation: "Rotation", target: object, *, validate: bool) -> object:
+def rotation_apply(rotation: Rotation, target: object, *, validate: bool) -> object:
     return _rotation_apply_with_owner(
         rotation,
         target,

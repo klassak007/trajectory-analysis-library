@@ -29,13 +29,13 @@ from ._fixed_size_constants import (
     STATUS_NONORTHONORMAL_MATRIX,
     STATUS_OK,
 )
+from .fixed_size_primitives import inverse_pose as _inverse_pose
+from .fixed_size_primitives import normalize_quat_array as _normalize_quat_array
 from .fixed_size_primitives import (
-    inverse_pose as _inverse_pose,
-    normalize_quat_array as _normalize_quat_array,
     normalize_quat_components as _normalize_quat_components,
-    quat_multiply as _quat_multiply,
-    rotate_vec3 as _rotate_vec3,
 )
+from .fixed_size_primitives import quat_multiply as _quat_multiply
+from .fixed_size_primitives import rotate_vec3 as _rotate_vec3
 from .rigid_matrix_validation import require_real_matrix_dtype
 
 _HELPERS_JITTED = False
@@ -281,17 +281,22 @@ def _matrix_validation_status(matrix, row):
 def _quat_from_matrix(matrix, row):
     m = matrix[row]
     trace = m[0, 0] + m[1, 1] + m[2, 2]
-    if trace > 0.0:
-        scale = 2.0 * np.sqrt(trace + 1.0)
-        return (m[2, 1] - m[1, 2]) / scale, (m[0, 2] - m[2, 0]) / scale, (m[1, 0] - m[0, 1]) / scale, 0.25 * scale
-    if m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
-        scale = 2.0 * np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
-        return 0.25 * scale, (m[0, 1] + m[1, 0]) / scale, (m[0, 2] + m[2, 0]) / scale, (m[2, 1] - m[1, 2]) / scale
-    if m[1, 1] > m[2, 2]:
-        scale = 2.0 * np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
-        return (m[0, 1] + m[1, 0]) / scale, 0.25 * scale, (m[1, 2] + m[2, 1]) / scale, (m[0, 2] - m[2, 0]) / scale
-    scale = 2.0 * np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
-    return (m[0, 2] + m[2, 0]) / scale, (m[1, 2] + m[2, 1]) / scale, 0.25 * scale, (m[1, 0] - m[0, 1]) / scale
+    choice = 0
+    if m[1, 1] > m[choice, choice]:
+        choice = 1
+    if m[2, 2] > m[choice, choice]:
+        choice = 2
+    if trace > m[choice, choice]:
+        return m[2, 1] - m[1, 2], m[0, 2] - m[2, 0], m[1, 0] - m[0, 1], 1.0 + trace
+    i = choice
+    j = (i + 1) % 3
+    k = (j + 1) % 3
+    out = np.empty(4, dtype=np.float64)
+    out[i] = 1.0 - trace + 2.0 * m[i, i]
+    out[j] = m[j, i] + m[i, j]
+    out[k] = m[k, i] + m[i, k]
+    out[3] = m[k, j] - m[j, k]
+    return out[0], out[1], out[2], out[3]
 
 
 def _matrix_to_quat_impl(matrix):
@@ -365,8 +370,8 @@ def _pose_components_to_matrix_impl(translation, quat):
 
 __all__ = [
     "matrix_to_quat_block_numba",
-    "pose_compose_translation_block_numba",
     "pose_components_to_matrix_block_numba",
+    "pose_compose_translation_block_numba",
     "pose_inverse_translation_block_numba",
     "quat_compose_block_numba",
     "quat_inverse_block_numba",

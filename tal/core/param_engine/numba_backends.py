@@ -7,12 +7,18 @@ import numpy as np
 from tal.utils.numba_support import njit_kernel, require_numba
 
 from .block_prep import prepare_bounds_block_rows, prepare_map_block_rows
+from .map_failures import (
+    MAP_STATUS_DUPLICATE,
+    MAP_STATUS_MONOTONIC,
+    MAP_STATUS_OK,
+    raise_map_status,
+)
 
 _METHOD_NEAREST = 0
 _METHOD_LINEAR = 1
-_STATUS_OK = 0
-_STATUS_MONOTONIC = 1
-_STATUS_DUPLICATE = 2
+_STATUS_OK = MAP_STATUS_OK
+_STATUS_MONOTONIC = MAP_STATUS_MONOTONIC
+_STATUS_DUPLICATE = MAP_STATUS_DUPLICATE
 
 _MAP_MONOTONIC_ERROR = "build_param_map: parameter coordinate must be monotonic non-decreasing on valid domain."
 _BOUNDS_MONOTONIC_ERROR = (
@@ -72,10 +78,7 @@ def _method_code(method: str) -> int:
 
 
 def _raise_map_status(status: int) -> None:
-    if status == _STATUS_MONOTONIC:
-        raise ValueError(_MAP_MONOTONIC_ERROR)
-    if status == _STATUS_DUPLICATE:
-        raise ValueError(_DUPLICATE_BRACKET_ERROR)
+    raise_map_status(status)
 
 
 def _raise_bounds_status(status: int) -> None:
@@ -94,9 +97,38 @@ def map_block_numba(
     require_numba("build_param_map")
     method_code = _method_code(method)
     param_rows, valid_rows, query_rows, output_shape = prepare_map_block_rows(param_block, valid_block, query_block)
-    i0, i1, alpha, valid, status = _compiled_map_block()(param_rows, valid_rows, query_rows, method_code, int(dup_code))
-    _raise_map_status(int(status))
+    i0, i1, alpha, valid, status, _ = _compiled_map_block()(
+        param_rows, valid_rows, query_rows, method_code, int(dup_code)
+    )
+    for code in status:
+        _raise_map_status(int(code))
     return i0.reshape(output_shape), i1.reshape(output_shape), alpha.reshape(output_shape), valid.reshape(output_shape)
+
+
+def map_block_numba_status(
+    param_block: np.ndarray,
+    valid_block: np.ndarray,
+    query_block: np.ndarray,
+    *,
+    method: str,
+    dup_code: int,
+) -> tuple[np.ndarray, ...]:
+    require_numba("build_param_map")
+    method_code = _method_code(method)
+    prepared = prepare_map_block_rows(param_block, valid_block, query_block)
+    param_rows, valid_rows, query_rows, output_shape = prepared
+    result = _compiled_map_block()(param_rows, valid_rows, query_rows, method_code, int(dup_code))
+    i0, i1, alpha, valid, status, position = result
+    outer_shape = output_shape[:-1]
+    return (
+        i0.reshape(output_shape),
+        i1.reshape(output_shape),
+        alpha.reshape(output_shape),
+        valid.reshape(output_shape),
+        status.reshape(outer_shape),
+        position.reshape(outer_shape),
+        np.zeros(outer_shape, dtype=object),
+    )
 
 
 def bounds_block_numba(
@@ -234,16 +266,16 @@ def _map_linear_row(row, src_idx, src_vals, count, query_row, dup_code, outputs)
             continue
         status = _map_linear_query(row, col, query, src_idx, src_vals, count, dup_code, outputs)
         if status != _STATUS_OK:
-            return status
-    return _STATUS_OK
+            return status, col
+    return _STATUS_OK, -1
 
 
 def _map_row(row, method_code, dup_code, src_idx, src_vals, count, query_row, outputs):
     if count == 0:
-        return _STATUS_OK
+        return _STATUS_OK, -1
     if method_code == _METHOD_NEAREST:
         _map_nearest_row(row, src_idx, src_vals, count, query_row, outputs)
-        return _STATUS_OK
+        return _STATUS_OK, -1
     return _map_linear_row(row, src_idx, src_vals, count, query_row, dup_code, outputs)
 
 
@@ -255,17 +287,20 @@ def _map_block_impl(param, valid_in, query, method_code, dup_code):
     i1 = np.zeros((rows, query_size), dtype=np.int64)
     alpha = np.zeros((rows, query_size), dtype=np.float64)
     valid = np.zeros((rows, query_size), dtype=np.bool_)
+    statuses = np.zeros(rows, dtype=np.int8)
+    positions = np.full(rows, -1, dtype=np.int64)
     outputs = (i0, i1, alpha, valid)
     src_idx = np.empty(seq_size, dtype=np.int64)
     src_vals = np.empty(seq_size, dtype=np.float64)
     for row in range(rows):
         count, status = _fill_source(param[row], valid_in[row], src_idx, src_vals)
         if status != _STATUS_OK:
-            return i0, i1, alpha, valid, status
-        status = _map_row(row, method_code, dup_code, src_idx, src_vals, count, query[row], outputs)
-        if status != _STATUS_OK:
-            return i0, i1, alpha, valid, status
-    return i0, i1, alpha, valid, _STATUS_OK
+            statuses[row] = status
+            continue
+        status, position = _map_row(row, method_code, dup_code, src_idx, src_vals, count, query[row], outputs)
+        statuses[row] = status
+        positions[row] = position
+    return i0, i1, alpha, valid, statuses, positions
 
 
 def _write_bounds_empty(row, i0, i1):
@@ -277,10 +312,8 @@ def _write_bounds_edge(row, lo, count, row_len, src_idx, i0, i1):
     edge = row_len
     if lo < count:
         edge = src_idx[lo]
-    if edge < 0:
-        edge = 0
-    if edge > row_len:
-        edge = row_len
+    edge = max(edge, 0)
+    edge = min(edge, row_len)
     i0[row] = edge
     i1[row] = edge
 
@@ -294,8 +327,8 @@ def _write_bounds_span(row, lo, hi, count, row_len, src_idx, i0, i1):
         right = count - 1
     start = src_idx[left]
     stop = src_idx[right] + 1
-    i0[row] = start if start < row_len else row_len
-    i1[row] = stop if stop < row_len else row_len
+    i0[row] = min(row_len, start)
+    i1[row] = min(row_len, stop)
 
 
 def _bounds_block_impl(param, valid_in, start, stop):
@@ -321,4 +354,4 @@ def _bounds_block_impl(param, valid_in, start, stop):
     return i0, i1, _STATUS_OK
 
 
-__all__ = ["bounds_block_numba", "map_block_numba"]
+__all__ = ["bounds_block_numba", "map_block_numba", "map_block_numba_status"]

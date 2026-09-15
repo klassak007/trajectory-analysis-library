@@ -30,7 +30,12 @@ from .path_configuration import (
     require_strict_path_policy,
     resolve_path_endpoint_plan,
 )
-from .path_query_ops import complete_path_query, require_path_temporal_options
+from .path_execution import execute_pose_path, prepare_pose_path_execution
+from .path_query_ops import (
+    execute_path_query,
+    prepare_path_query,
+    require_path_temporal_options,
+)
 from .pose_ops import _pose_compose_with_owner, _pose_inverse_with_owner
 from .pose_provider_ops import (
     normalize_edge_provider_dataset,
@@ -265,7 +270,8 @@ def solve_rotation_path_transform_impl(
     temporal = require_path_temporal_options(endpoints.configuration.options.temporal, owner=owner)
     _preflight_bound_path(path, prepared, owner=owner)
     values = _acquire_path_values(path, prepared, kind="rotation", owner=owner)
-    complete = complete_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    query_plan = prepare_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    complete = execute_path_query(query_plan, owner=owner)
     result = _fold_rotation_path(path, complete.values, owner=owner)
     if result is None:
         return _associated_rotation_identity(endpoints, owner=owner)
@@ -353,7 +359,11 @@ def solve_pose_path_transform_impl(
     temporal = require_path_temporal_options(endpoints.configuration.options.temporal, owner=owner)
     _preflight_bound_path(path, prepared, owner=owner)
     values = _acquire_path_values(path, prepared, kind="pose", owner=owner)
-    complete = complete_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    query_plan = prepare_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    execution = prepare_pose_path_execution(path, query_plan)
+    complete = execute_pose_path(execution, owner=owner)
+    if isinstance(complete, Pose):
+        return _finalize_pose_path(complete, endpoints, owner=owner)
     result = _fold_pose_path(path, complete.values, owner=owner)
     if result is None:
         return _associated_pose_identity(endpoints, owner=owner)

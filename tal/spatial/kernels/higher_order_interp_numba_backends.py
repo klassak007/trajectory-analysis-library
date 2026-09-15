@@ -6,9 +6,7 @@ import numpy as np
 
 from tal.utils.numba_support import njit_kernel, require_numba
 
-from . import fixed_size_primitives as _fixed_primitives
 from . import higher_order_interp_primitives as _interp_primitives
-from . import quaternion_interp_primitives as _quat_interp_primitives
 from ._fixed_size_constants import STATUS_INVALID_QUAT, STATUS_OK
 from .higher_order_interp_backends import (
     PoseInterpWindow,
@@ -16,6 +14,7 @@ from .higher_order_interp_backends import (
     prepare_pose_cubic_rows,
     prepare_squad_rows,
 )
+from .rotation_interp_numba_backends import _compile_slerp_dependencies
 
 _STATUS_ALPHA_RANGE = 2
 _HELPERS_JITTED = False
@@ -47,16 +46,10 @@ def _jit_kernel_helpers(numba) -> None:
 
 
 def _jit_primitive_helpers(numba) -> None:
-    _quat_interp_primitives.normalize_quat_tuple = njit_kernel(
-        numba,
-        _fixed_primitives.normalize_quat_tuple,
-    )
-    _interp_primitives._shared_slerp_quat = njit_kernel(
-        numba,
-        _quat_interp_primitives.slerp_quat,
-    )
-    _interp_primitives.normalize_quat_tuple = njit_kernel(numba, _fixed_primitives.normalize_quat_tuple)
-    _interp_primitives.quat_multiply = njit_kernel(numba, _fixed_primitives.quat_multiply)
+    normalize, multiply, slerp = _compile_slerp_dependencies(numba)
+    _interp_primitives._shared_slerp_quat = slerp
+    _interp_primitives.normalize_quat_tuple = normalize
+    _interp_primitives.quat_multiply = multiply
     for name in (
         "_dot_quat",
         "_flip_quat",
@@ -71,7 +64,8 @@ def _jit_primitive_helpers(numba) -> None:
         "squad_quat",
         "catmull_rom_vec3",
     ):
-        setattr(_interp_primitives, name, njit_kernel(numba, getattr(_interp_primitives, name)))
+        helper = getattr(_interp_primitives, name)
+        setattr(_interp_primitives, name, njit_kernel(numba, getattr(helper, "py_func", helper)))
 
 
 def _raise_status(status: int, *, owner: str) -> None:
@@ -141,8 +135,9 @@ def _squad_block_impl(q_prev, q0, q1, q_next, alpha, valid):
     out = np.empty_like(q_prev)
     out.fill(np.nan)
     q_rows = (q_prev, q0, q1, q_next)
+    rows = q_prev.shape[0]
     query = q_prev.shape[1]
-    for flat_idx in range(q_prev.shape[0] * query):
+    for flat_idx in range(rows * query):
         row = flat_idx // query
         idx = flat_idx - row * query
         if not valid[row, idx]:
@@ -160,8 +155,9 @@ def _pose_block_impl(t_prev, t0, t1, t_next, q_prev, q0, q1, q_next, alpha, vali
     out_q.fill(np.nan)
     t_rows = (t_prev, t0, t1, t_next)
     q_rows = (q_prev, q0, q1, q_next)
+    rows = t_prev.shape[0]
     query = t_prev.shape[1]
-    for flat_idx in range(t_prev.shape[0] * query):
+    for flat_idx in range(rows * query):
         row = flat_idx // query
         idx = flat_idx - row * query
         if not valid[row, idx]:

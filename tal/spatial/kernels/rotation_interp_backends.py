@@ -1,62 +1,48 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.spatial.transform import Rotation as SciRotation
-from scipy.spatial.transform import Slerp
 
+from tal.utils.numba_support import _numba_available
+
+from .rotation_interp_blocks import SlerpBlock, iter_slerp_blocks, validate_slerp_shapes
+from .rotation_interp_reference import invalid_quaternion_rows, scipy_slerp_rows
+
+ROTATION_INTERP_BACKEND_AUTO = "auto"
 ROTATION_INTERP_BACKEND_SCIPY = "scipy"
 ROTATION_INTERP_BACKEND_NUMBA = "numba"
 
 
-def _normalize_quaternion(values: np.ndarray, *, owner: str) -> np.ndarray:
-    norm = float(np.linalg.norm(values))
-    if not np.isfinite(norm) or norm <= 0.0:
+def _slerp_valid_rows(block: SlerpBlock, *, owner: str) -> np.ndarray:
+    alpha = block.alpha.astype(np.float64, copy=False)
+    active = block.valid.astype(bool, copy=False) & np.isfinite(alpha)
+    alpha_error = active & ((alpha < 0.0) | (alpha > 1.0))
+    quat_error = active & (invalid_quaternion_rows(block.left) | invalid_quaternion_rows(block.right))
+    failures = np.flatnonzero(alpha_error | quat_error)
+    if failures.size and alpha_error[failures[0]]:
+        raise ValueError(f"{owner}: finite alpha values must be within [0, 1].")
+    if failures.size:
         raise ValueError(f"{owner}: quaternion norm must be finite and > 0.")
-    return np.asarray(values, dtype=np.float64) / norm
+    out = np.full(block.left.shape, np.nan, dtype=np.float64)
+    if np.any(active):
+        out[active] = scipy_slerp_rows(block.left[active], block.right[active], alpha[active], owner=owner)
+    return out
 
 
-def _slerp_pair_scipy(q0: np.ndarray, q1: np.ndarray, t: float, *, owner: str) -> np.ndarray:
-    qa = _normalize_quaternion(q0, owner=owner)
-    qb = _normalize_quaternion(q1, owner=owner)
-    if float(np.dot(qa, qb)) < 0.0:
-        qb = -qb
-    rots = SciRotation.from_quat(np.stack([qa, qb], axis=0))
-    interp = Slerp(np.array([0.0, 1.0], dtype=np.float64), rots)
-    return interp(np.array([t], dtype=np.float64)).as_quat()[0]
-
-
-def _slerp_quat_scipy_stopgap(
-    q0: np.ndarray,
-    q1: np.ndarray,
-    alpha: np.ndarray,
-    valid: np.ndarray,
-) -> np.ndarray:
-    """SciPy SLERP stopgap: row-local loops are isolated to backend owner only."""
+def _slerp_quat_scipy_block(q0: np.ndarray, q1: np.ndarray, alpha: np.ndarray, valid: np.ndarray) -> np.ndarray:
     owner = "spatial.rotation.interp_backend"
-    if q0.shape != q1.shape:
-        raise ValueError(f"{owner}: q0 and q1 must share shape.")
-    if q0.shape[-1] != 4:
-        raise ValueError(f"{owner}: expected trailing quaternion dim length 4.")
-    if alpha.shape != valid.shape:
-        raise ValueError(f"{owner}: alpha and valid must share shape.")
-    if q0.shape[:-1] != alpha.shape:
-        raise ValueError(f"{owner}: alpha/valid must match q0/q1 non-core shape.")
-    rows = int(np.prod(alpha.shape[:-1])) if alpha.ndim > 1 else 1
-    qsize = int(alpha.shape[-1])
-    flat_q0 = q0.reshape(rows, qsize, 4)
-    flat_q1 = q1.reshape(rows, qsize, 4)
-    flat_alpha = alpha.reshape(rows, qsize)
-    flat_valid = valid.reshape(rows, qsize)
-    out = np.full_like(flat_q0, np.nan, dtype=np.float64)
-    for row in range(rows):
-        for idx in range(qsize):
-            if not bool(flat_valid[row, idx]):
-                continue
-            t = float(flat_alpha[row, idx])
-            if not np.isfinite(t):
-                continue
-            out[row, idx] = _slerp_pair_scipy(flat_q0[row, idx], flat_q1[row, idx], t, owner=owner)
-    return out.reshape(q0.shape)
+    validate_slerp_shapes(q0, q1, alpha, valid, owner=owner)
+    out = np.empty(q0.shape, dtype=np.float64)
+    output_rows = out.reshape(-1, 4)
+    for block in iter_slerp_blocks(q0, q1, alpha, valid):
+        output_rows[block.start : block.start + block.alpha.size] = _slerp_valid_rows(block, owner=owner)
+        del block
+    return out
+
+
+def _select_rotation_interp_backend(q0: np.ndarray, q1: np.ndarray) -> str:
+    dtypes = (np.asarray(q0).dtype, np.asarray(q1).dtype)
+    eligible = all(dtype.kind == "f" and dtype.itemsize in {4, 8} for dtype in dtypes)
+    return ROTATION_INTERP_BACKEND_NUMBA if eligible and _numba_available() else ROTATION_INTERP_BACKEND_SCIPY
 
 
 def slerp_quat_backend(
@@ -65,11 +51,13 @@ def slerp_quat_backend(
     alpha: np.ndarray,
     valid: np.ndarray,
     *,
-    backend: str = ROTATION_INTERP_BACKEND_SCIPY,
+    backend: str = ROTATION_INTERP_BACKEND_AUTO,
 ) -> np.ndarray:
     owner = "spatial.rotation.interp_backend"
+    if backend == ROTATION_INTERP_BACKEND_AUTO:
+        backend = _select_rotation_interp_backend(q0, q1)
     if backend == ROTATION_INTERP_BACKEND_SCIPY:
-        return _slerp_quat_scipy_stopgap(q0, q1, alpha, valid)
+        return _slerp_quat_scipy_block(q0, q1, alpha, valid)
     if backend == ROTATION_INTERP_BACKEND_NUMBA:
         from .rotation_interp_numba_backends import slerp_quat_numba
 
@@ -77,4 +65,9 @@ def slerp_quat_backend(
     raise ValueError(f"{owner}: unsupported backend {backend!r}.")
 
 
-__all__ = ["ROTATION_INTERP_BACKEND_NUMBA", "ROTATION_INTERP_BACKEND_SCIPY", "slerp_quat_backend"]
+__all__ = [
+    "ROTATION_INTERP_BACKEND_AUTO",
+    "ROTATION_INTERP_BACKEND_NUMBA",
+    "ROTATION_INTERP_BACKEND_SCIPY",
+    "slerp_quat_backend",
+]

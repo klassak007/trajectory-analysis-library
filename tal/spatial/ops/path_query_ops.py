@@ -1,47 +1,31 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import numpy as np
 import xarray as xr
 
 from tal.core.dataset_ownership import analysis_object_dataset
-from tal.core.orchestration.resolve import resolve_param_runtime_context
-from tal.core.param_engine import ParamMapOptions, build_param_map, normalize_query_grid
-from tal.core.param_ops.types import ParamRuntimeContext
+from tal.core.param_ops.evaluate import evaluate_param
 from tal.core.schema import set_param_coord, set_roles, set_validity
 from tal.core.schema_read import read_roles, read_sequence_size_coord_name
-from tal.utils.xarray_namespace import (
-    dataset_namespace_names,
-    unique_temp_dim,
-)
 
 from ..pose import Pose
 from ..rotation import Rotation
 from ..temporal.options import (
     PoseTemporalOptions,
     _validate_pose_temporal_options,
-    resolve_rotation_method,
 )
-from .path_query_topology import (
-    OutputTopology,
-    _ProviderBatchProjection,
-    align_projected_provider_batches,
-    batch_coordinates,
-    build_direct_topology,
-    project_provider_batches,
-    without_batch_coordinates,
+from .path_query_plan import (
+    PreparedPathQuery,
+    PreparedProviderQuery,
+    RequiredProvider,
+    prepare_path_query,
 )
-from .provider_topology import ProviderTopology, classify_provider_topology
-
-
-@dataclass(frozen=True)
-class RequiredProvider:
-    """One acquired provider occurrence in path order."""
-
-    value: object
-    topology: ProviderTopology
+from .path_query_topology import OutputTopology
+from .pose_temporal_ops import PreparedPoseEvaluation, pose_param_at
+from .rotation_temporal_ops import rotation_param_at
 
 
 @dataclass(frozen=True)
@@ -62,127 +46,6 @@ def require_path_temporal_options(value: object, *, owner: str) -> PoseTemporalO
     return _validate_pose_temporal_options(value, owner=owner)
 
 
-def _provider_context(
-    value,
-    temporal: PoseTemporalOptions,
-    *,
-    owner: str,
-) -> ParamRuntimeContext:
-    try:
-        source = value if temporal.on is None else value.set_param_coord(name=temporal.on, validate=False)
-        return resolve_param_runtime_context(source, on=temporal.on)
-    except (TypeError, ValueError) as exc:
-        raise type(exc)(f"{owner}: could not resolve provider parameter coordinate; {exc}") from exc
-
-
-def _query_kind(query: object, *, owner: str) -> str:
-    dtype = getattr(query, "dtype", None)
-    if dtype is None:
-        try:
-            dtype = np.asarray(query).dtype
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{owner}: query values must be numeric or datetime-like.") from exc
-    return "datetime64" if np.issubdtype(np.dtype(dtype), np.datetime64) else "numeric"
-
-
-def _require_one_param_kind(contexts: Sequence[ParamRuntimeContext], *, owner: str) -> str:
-    kinds = {context.param_kind for context in contexts}
-    if len(kinds) == 1:
-        return next(iter(kinds))
-    raise ValueError(f"{owner}: dynamic providers use mixed numeric and datetime64 parameter domains.")
-
-
-def _topology_from_context(
-    context: ParamRuntimeContext,
-) -> xr.Coordinates:
-    return batch_coordinates(context.ds, batch_dims=context.batch_dims)
-
-
-def _object_topology(
-    caller,
-    temporal: PoseTemporalOptions,
-    contexts: Sequence[ParamRuntimeContext],
-    values: Sequence[object],
-    *,
-    owner: str,
-) -> OutputTopology:
-    try:
-        context = resolve_param_runtime_context(caller)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{owner}: a dynamic object request requires a caller param_coord; {exc}") from exc
-    if contexts and context.param_kind != _require_one_param_kind(contexts, owner=owner):
-        raise ValueError(f"{owner}: caller and providers use mixed parameter domains.")
-    names = dataset_namespace_names(analysis_object_dataset(caller))
-    query_dim = temporal.position_opts.query_dim
-    if query_dim in names:
-        query_dim = unique_temp_dim("__tal_path_query", taken_dims=names)
-    evaluation_query = without_batch_coordinates(
-        context.spec.coord,
-        batch_dims=context.batch_dims,
-    )
-    grid = normalize_query_grid(
-        evaluation_query,
-        query_dim=query_dim,
-        batch_dims=context.batch_dims,
-        param_kind=context.param_kind,
-    )
-    topology = OutputTopology(
-        grid.values,
-        grid.query_dim,
-        context.sequence_dim,
-        context.spec.name,
-        context.param_kind,
-        context.batch_dims,
-        _topology_from_context(context),
-        tuple((dim, context.ds) for dim in context.batch_dims),
-        context,
-    )
-    projected = project_provider_batches(
-        values,
-        context.ds,
-        batch_dims=context.batch_dims,
-        param_on=temporal.on,
-        owner=owner,
-    )
-    aligned = align_projected_provider_batches(projected, topology, owner=owner)
-    return replace(topology, provider_values=aligned)
-
-
-def _direct_topology(
-    query: object,
-    values: Sequence[object],
-    contexts: Sequence[ParamRuntimeContext],
-    temporal: PoseTemporalOptions,
-    *,
-    owner: str,
-) -> OutputTopology:
-    param_kind = _require_one_param_kind(contexts, owner=owner) if contexts else _query_kind(query, owner=owner)
-    return build_direct_topology(
-        query,
-        values,
-        param_kind=param_kind,
-        param_on=temporal.on,
-        public_query_dim=temporal.position_opts.query_dim,
-        owner=owner,
-    )
-
-
-def _map_options(value: object, temporal: PoseTemporalOptions) -> tuple[ParamMapOptions, ...]:
-    position = temporal.position_opts
-    rotation = temporal.rotation_opts
-    rotation_method = resolve_rotation_method(rotation)
-    rotation_map = ParamMapOptions(
-        method="nearest" if rotation_method == "nearest" else "linear",
-        duplicate_policy=rotation.duplicate_policy,
-    )
-    if isinstance(value, Rotation):
-        return (rotation_map,)
-    if not isinstance(value, Pose):
-        return (ParamMapOptions(method=position.method, duplicate_policy=position.duplicate_policy),)
-    position_map = ParamMapOptions(method=position.method, duplicate_policy=position.duplicate_policy)
-    return (position_map,) if position_map == rotation_map else (position_map, rotation_map)
-
-
 def _realize_coverage(valid: xr.DataArray, *, owner: str) -> None:
     """Realize only the combined coordinate/validity boolean for strict coverage."""
     try:
@@ -197,32 +60,16 @@ def _realize_coverage(valid: xr.DataArray, *, owner: str) -> None:
 
 
 def _require_provider_coverage(
-    value: object,
+    item: PreparedProviderQuery,
     topology: OutputTopology,
-    temporal: PoseTemporalOptions,
     *,
     owner: str,
 ) -> None:
-    context = _provider_context(value, temporal, owner=owner)
     caller_valid = topology.caller.valid_mask if topology.caller is not None else None
-    for options in _map_options(value, temporal):
-        pmap = build_param_map(
-            param=context.spec.coord,
-            query=topology.query,
-            sequence_dim=context.sequence_dim,
-            query_dim=topology.query_dim,
-            valid_mask=context.valid_mask,
-            options=options,
-            param_kind=context.param_kind,
-        )
+    for evaluation in item.evaluations:
+        pmap = evaluation.param_map
         valid = pmap.valid if caller_valid is None else (pmap.valid | ~caller_valid.rename({topology.sequence_dim: topology.query_dim}))
         _realize_coverage(valid, owner=owner)
-
-
-def _temporal_for_query_dim(temporal: PoseTemporalOptions, query_dim: str) -> PoseTemporalOptions:
-    position = replace(temporal.position_opts, query_dim=query_dim)
-    rotation = replace(temporal.rotation_opts, query_dim=query_dim)
-    return replace(temporal, position_opts=position, rotation_opts=rotation)
 
 
 def _drop_sequence_coords(ds: xr.Dataset, *, sequence_dim: str) -> xr.Dataset:
@@ -299,48 +146,103 @@ def _restore_output_topology(
         raise ValueError(f"{owner}: failed to restore query output topology; {text}") from exc
 
 
+def _raise_path_query_execution_error(exc: TypeError | ValueError, *, owner: str) -> None:
+    """Translate a provider execution failure through the public solver owner."""
+    if str(exc).startswith(f"{owner}:"):
+        raise exc
+    raise type(exc)(f"{owner}: {exc}") from exc
+
+
 def _evaluate_dynamic(
-    projection: _ProviderBatchProjection,
+    item: PreparedProviderQuery,
     topology: OutputTopology,
-    temporal: PoseTemporalOptions,
     *,
     owner: str,
 ) -> object:
+    projection = item.projection
+    context = item.context
+    if projection is None or context is None:
+        raise ValueError(f"{owner}: dynamic provider plan is incomplete.")
     aligned = projection.value
-    effective = replace(
-        _temporal_for_query_dim(temporal, topology.query_dim),
-        on=projection.param_on,
-    )
-    _require_provider_coverage(aligned, topology, effective, owner=owner)
+    effective = item.temporal
     try:
         if isinstance(aligned, Pose):
-            evaluated = aligned.param.at(topology.query, opts=effective, validate=False)
+            evaluated = pose_param_at(
+                aligned,
+                query=topology.query,
+                on=effective.on,
+                opts=effective,
+                validate=False,
+                sequence_dim=None,
+                batch_dims=None,
+                sequence_size_coord=None,
+                owner=owner,
+                prepared=PreparedPoseEvaluation(item.evaluations[0], item.evaluations[-1]),
+            )
         elif isinstance(aligned, Rotation):
-            evaluated = aligned.param.at(
-                topology.query,
+            evaluated = rotation_param_at(
+                aligned,
+                query=topology.query,
                 on=effective.on,
                 opts=effective.rotation_opts,
                 validate=False,
+                sequence_dim=None,
+                batch_dims=None,
+                sequence_size_coord=None,
+                owner=owner,
+                prepared=item.evaluations[0],
             )
         else:
-            evaluated = aligned.param.at(
-                topology.query,
-                on=effective.on,
+            evaluated = evaluate_param(
+                context,
+                query=topology.query,
                 opts=effective.position_opts,
                 validate=False,
+                prepared=item.evaluations[0],
             )
     except (TypeError, ValueError) as exc:
-        raise type(exc)(f"{owner}: {exc}") from exc
+        _raise_path_query_execution_error(exc, owner=owner)
     return _restore_output_topology(evaluated, topology, owner=owner)
 
 
 def _broadcast_static(
-    projection: _ProviderBatchProjection,
+    item: PreparedProviderQuery,
     topology: OutputTopology,
     *,
     owner: str,
 ) -> object:
-    return _restore_output_topology(projection.value, topology, owner=owner)
+    if item.projection is None:
+        raise ValueError(f"{owner}: static provider plan is incomplete.")
+    return _restore_output_topology(item.projection.value, topology, owner=owner)
+
+
+def require_path_query_coverage(plan: PreparedPathQuery, *, owner: str) -> None:
+    """Resolve strict coverage from the maps already owned by one plan."""
+    if plan.topology is None:
+        return
+    for item in plan.items:
+        if item.required.topology == "dynamic":
+            _require_provider_coverage(item, plan.topology, owner=owner)
+
+
+def execute_path_query(
+    plan: PreparedPathQuery,
+    *,
+    owner: str,
+    coverage_checked: bool = False,
+) -> CompletePathQuery:
+    """Execute the accepted generic provider pipeline from one frozen plan."""
+    if plan.topology is None:
+        return CompletePathQuery(plan.providers, tuple(item.required.value for item in plan.items), None)
+    if not coverage_checked:
+        require_path_query_coverage(plan, owner=owner)
+    evaluated = tuple(
+        _evaluate_dynamic(item, plan.topology, owner=owner)
+        if item.required.topology == "dynamic"
+        else _broadcast_static(item, plan.topology, owner=owner)
+        for item in plan.items
+    )
+    return CompletePathQuery(plan.providers, evaluated, plan.topology)
 
 
 def complete_path_query(
@@ -351,38 +253,15 @@ def complete_path_query(
     temporal: PoseTemporalOptions,
     owner: str,
 ) -> CompletePathQuery:
-    """Classify and evaluate one complete transform-provider set."""
-    providers = tuple(RequiredProvider(value, classify_provider_topology(value)) for value in values)
-    has_dynamic = any(item.topology == "dynamic" for item in providers)
-    has_exact = any(item.topology == "exact" for item in providers)
-    if has_exact and (has_dynamic or query is not None):
-        raise ValueError(f"{owner}: exact providers cannot be combined with dynamic providers or an explicit query.")
-    if has_dynamic and caller is None and query is None:
-        raise ValueError(f"{owner}: dynamic direct path solving requires explicit query=.")
-    temporal_mode = has_dynamic or (query is not None and not has_exact)
-    if not temporal_mode:
-        return CompletePathQuery(providers, tuple(values), None)
-    contexts = tuple(
-        _provider_context(item.value, temporal, owner=owner)
-        for item in providers
-        if item.topology == "dynamic"
+    """Prepare and execute one complete transform-provider set."""
+    plan = prepare_path_query(
+        values,
+        query=query,
+        caller=caller,
+        temporal=temporal,
+        owner=owner,
     )
-    topology = (
-        _object_topology(caller, temporal, contexts, values, owner=owner)
-        if caller is not None
-        else _direct_topology(query, values, contexts, temporal, owner=owner)
-    )
-    evaluated = tuple(
-        _evaluate_dynamic(projected, topology, temporal, owner=owner)
-        if item.topology == "dynamic"
-        else _broadcast_static(projected, topology, owner=owner)
-        for item, projected in zip(
-            providers,
-            topology.provider_values,
-            strict=True,
-        )
-    )
-    return CompletePathQuery(providers, evaluated, topology)
+    return execute_path_query(plan, owner=owner)
 
 
 __all__ = [
@@ -390,5 +269,8 @@ __all__ = [
     "OutputTopology",
     "RequiredProvider",
     "complete_path_query",
+    "execute_path_query",
+    "prepare_path_query",
+    "require_path_query_coverage",
     "require_path_temporal_options",
 ]

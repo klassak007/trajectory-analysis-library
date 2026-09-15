@@ -1,11 +1,12 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 import xarray as xr
-from pathlib import Path
 
+import tal.core.param_engine.prepared as prepared_mod
 from tal.core import AnalysisObject, ParamEvalOptions
 from tal.core.param_engine import ParamMapOptions, build_param_map
-import tal.core.param_ops.evaluate as eval_mod
 
 
 def _ao_two_vars() -> AnalysisObject:
@@ -23,13 +24,13 @@ def test_param_perf_015_map_reuse_across_multiple_vars(monkeypatch) -> None:
     """ID: PARAM_PERF_015_map_reuse_across_multiple_vars."""
     ao = _ao_two_vars()
     calls = {"n": 0}
-    original = eval_mod.build_param_map
+    original = prepared_mod.build_param_map
 
     def _count(*args, **kwargs):
         calls["n"] += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(eval_mod, "build_param_map", _count)
+    monkeypatch.setattr(prepared_mod, "build_param_map", _count)
     out = ao.param.at([0.25, 1.25], opts=ParamEvalOptions(method="linear"))
     assert calls["n"] == 1
     np.testing.assert_allclose(out.as_dataset()["v1"].values, [5.0, 25.0])

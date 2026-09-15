@@ -172,7 +172,16 @@ def _flatten_valid_mask(
     return out.assign_coords({plan.flat_dim: labels})
 
 
-def _flat_dim_for_contexts(contexts: list["ParamRuntimeContext"]) -> str:
+def _without_transient_batch_coordinates(
+    value: xr.DataArray,
+    *,
+    batch_dims: tuple[str, ...],
+) -> xr.DataArray:
+    names = tuple(name for name in batch_dims if name in value.coords)
+    return value.drop_vars(names) if names else value
+
+
+def _flat_dim_for_contexts(contexts: list[ParamRuntimeContext]) -> str:
     taken: set[str] = set()
     for context in contexts:
         taken.update(dataset_namespace_names(context.ds))
@@ -180,8 +189,8 @@ def _flat_dim_for_contexts(contexts: list["ParamRuntimeContext"]) -> str:
 
 
 def flatten_batch_contexts(
-    contexts: list["ParamRuntimeContext"],
-) -> tuple[list["ParamRuntimeContext"], BatchFlattenPlan]:
+    contexts: list[ParamRuntimeContext],
+) -> tuple[list[ParamRuntimeContext], BatchFlattenPlan]:
     if not contexts or len(contexts[0].batch_dims) <= 1:
         return contexts, BatchFlattenPlan(False, "", ())
     batch_dims = contexts[0].batch_dims
@@ -192,11 +201,11 @@ def flatten_batch_contexts(
 
 
 def flatten_runtime_context(
-    context: "ParamRuntimeContext",
+    context: ParamRuntimeContext,
     *,
     plan: BatchFlattenPlan,
     owner: str,
-) -> "ParamRuntimeContext":
+) -> ParamRuntimeContext:
     if not plan.enabled:
         return context
     stacked_coords = _stack_batch_coords(
@@ -209,8 +218,13 @@ def flatten_runtime_context(
     ds_flat = context.ds.stack({plan.flat_dim: list(plan.batch_dims)}, create_index=False)
     ds_flat = ds_flat.assign_coords(stacked_coords)
     valid = _flatten_valid_mask(context.valid_mask, plan=plan, labels=labels, owner=owner)
-    spec = replace(context.spec, coord=ds_flat.coords[context.spec.name], batch_dims=(plan.flat_dim,))
-    batch_coord = ds_flat.coords[plan.flat_dim] if plan.flat_dim in ds_flat.coords else labels
+    valid = _without_transient_batch_coordinates(valid, batch_dims=plan.batch_dims)
+    spec_coord = _without_transient_batch_coordinates(
+        ds_flat.coords[context.spec.name],
+        batch_dims=plan.batch_dims,
+    )
+    spec = replace(context.spec, coord=spec_coord, batch_dims=(plan.flat_dim,))
+    batch_coord = ds_flat.coords.get(plan.flat_dim, labels)
     return replace(
         context,
         ds=ds_flat,
@@ -222,7 +236,7 @@ def flatten_runtime_context(
 
 
 def flatten_query_for_plan(
-    query: xr.DataArray | np.ndarray | float | int | list[float] | tuple[float, ...],
+    query: xr.DataArray | np.ndarray | float | list[float] | tuple[float, ...],
     *,
     plan: BatchFlattenPlan,
     owner: str,
@@ -245,7 +259,8 @@ def flatten_query_for_plan(
         owner=owner,
     )
     out = query.stack({plan.flat_dim: list(plan.batch_dims)}, create_index=False)
-    return out.assign_coords(stacked_coords)
+    out = out.assign_coords(stacked_coords)
+    return _without_transient_batch_coordinates(out, batch_dims=plan.batch_dims)
 
 
 def restore_dataset_batch_dims(

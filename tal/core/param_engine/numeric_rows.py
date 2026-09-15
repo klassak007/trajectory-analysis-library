@@ -6,11 +6,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..ordered_dtypes import is_float64_exact_integer, is_integral_dtype, is_ordered_real_numeric_dtype
-
-_DUPLICATE_BRACKET_ERROR = (
-    "build_param_map: duplicate parameter bracket encountered for linear interpolation."
+from ..ordered_dtypes import (
+    is_float64_exact_integer,
+    is_integral_dtype,
+    is_ordered_real_numeric_dtype,
 )
+from .map_failures import (
+    duplicate_map_failure,
+    monotonic_map_failure,
+    unsafe_query_map_failure,
+    unsafe_source_map_failure,
+)
+
 _UNSAFE_MIXED_ERROR = (
     "cannot be represented exactly as float64; use matching integer parameter/query "
     "dtypes or rescale the parameter domain"
@@ -61,7 +68,7 @@ def _source_row(param_row: np.ndarray, valid_row: np.ndarray, *, owner: str) -> 
     integral = is_integral_dtype(param.dtype)
     values = tuple(int(param[index]) if integral else _scalar(param[index]) for index in indexes)
     if any(values[index] < values[index - 1] for index in range(1, len(values))):
-        raise ValueError(f"{owner}: parameter coordinate must be monotonic non-decreasing on valid domain.")
+        raise monotonic_map_failure(owner=owner)
     return _SourceRow(indexes=indexes, values=values, integral=integral, row_len=int(param.shape[0]))
 
 
@@ -69,9 +76,9 @@ def _require_float64_safe_integral_source(source: _SourceRow, *, owner: str) -> 
     for value in source.values:
         if is_float64_exact_integer(value):
             continue
-        raise ValueError(
-            f"{owner}: integer parameter value {int(value)!r} {_UNSAFE_MIXED_ERROR}."
-        )
+        if owner == "build_param_map":
+            raise unsafe_source_map_failure(int(value), owner=owner)
+        raise ValueError(f"{owner}: integer parameter value {int(value)!r} {_UNSAFE_MIXED_ERROR}.")
 
 
 def _operand_value(
@@ -80,6 +87,7 @@ def _operand_value(
     kind: str,
     source_integral: bool,
     owner: str,
+    position: int = -1,
     allow_infinite: bool = False,
 ) -> object | None:
     if kind == "f":
@@ -91,6 +99,8 @@ def _operand_value(
     if source_integral:
         return out
     if not is_float64_exact_integer(out):
+        if owner == "build_param_map":
+            raise unsafe_query_map_failure(out, owner=owner, position=position)
         raise ValueError(f"{owner}: integer operand {out!r} {_UNSAFE_MIXED_ERROR}.")
     return float(out)
 
@@ -152,7 +162,8 @@ def _apply_float_duplicate(
     if not np.any(mask):
         return
     if dup_code == 3:
-        raise ValueError(_DUPLICATE_BRACKET_ERROR)
+        first = int(row_indexes[np.flatnonzero(mask)[0]])
+        raise duplicate_map_failure(position=first)
     if dup_code in {1, 2}:
         picks = left if dup_code == 1 else right
         _assign_float_picks(buffers, row_indexes, mask, picks, source_indexes)
@@ -277,7 +288,7 @@ def _float_map_row(
     source_indexes = np.flatnonzero(valid).astype("int64", copy=False)
     source = source_values[source_indexes]
     if source.size >= 2 and np.any(np.diff(source) < 0):
-        raise ValueError("build_param_map: parameter coordinate must be monotonic non-decreasing on valid domain.")
+        raise monotonic_map_failure(owner="build_param_map")
     if method == "nearest":
         return _float_nearest_row(source_indexes, source, query)
     return _float_linear_row(source_indexes, source, query, dup_code=dup_code)
@@ -302,7 +313,7 @@ def _apply_duplicate(
     if high - low <= 1:
         return False
     if dup_code == 3:
-        raise ValueError(_DUPLICATE_BRACKET_ERROR)
+        raise duplicate_map_failure(position=out_index)
     if dup_code in {1, 2}:
         _assign_constant(buffers, out_index=out_index, source=source, pick=low if dup_code == 1 else high - 1)
     return True
@@ -371,7 +382,13 @@ def numeric_map_row(
         return buffers.i0, buffers.i1, buffers.alpha, buffers.valid
     float_source_checked = False
     for out_index, raw in enumerate(query):
-        value = _operand_value(raw, kind=query.dtype.kind, source_integral=source.integral, owner="build_param_map")
+        value = _operand_value(
+            raw,
+            kind=query.dtype.kind,
+            source_integral=source.integral,
+            owner="build_param_map",
+            position=out_index,
+        )
         if value is None:
             continue
         if source.integral and query.dtype.kind == "f" and not float_source_checked:
