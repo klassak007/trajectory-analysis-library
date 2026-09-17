@@ -90,6 +90,9 @@ rotation.slerp(query, ...)
 
 Typed rotation interpolation can use nearest, normalized linear blend, or SLERP
 semantics. `on=...` selects the parameter coordinate used for correspondence.
+Labeled multidimensional queries flatten query-only dimensions to a
+positional sequence while retaining their labels as sequence-dependent
+coordinates; shared source batch dimensions remain intact.
 
 ## Autosummary
 

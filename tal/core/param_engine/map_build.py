@@ -9,7 +9,6 @@ from tal.utils.numba_support import _numba_available
 from ..orchestration.indexing import (
     capture_result_coordinates,
     restore_result_coordinates,
-    without_index_topology,
 )
 from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from .backends import (
@@ -20,12 +19,27 @@ from .backends import (
     bounds_block_backend,
 )
 from .backends import map_block_status_backend as map_block_backend
-from .blocking import prepare_logical_row_blocks, select_logical_block
+from .blocking import (
+    LogicalRowBlockPlan,
+    logical_output_chunks,
+    prepare_logical_row_blocks,
+    select_logical_block,
+)
 from .datetime_rows import DATETIME_OPEN_START, DATETIME_OPEN_STOP
-from .map_assembly import assemble_param_map_blocks
+from .map_assembly import assemble_empty_param_map, assemble_param_map_blocks
 from .types import ParamBoundsMap, ParamMap, ParamMapOptions
 
 _DUPLICATE_CODES = {"invalid": 0, "left": 1, "right": 2, "raise": 3}
+
+
+def _align_map_inputs(
+    *values: xr.DataArray,
+    owner: str,
+    what: str,
+) -> tuple[xr.DataArray, ...]:
+    from ..orchestration.alignment import align_exact
+
+    return align_exact(*values, exclude=set(), owner=owner, what=what)
 
 
 def _validate_numeric_param_dtype(*, param: xr.DataArray, owner: str) -> None:
@@ -142,11 +156,19 @@ def _prepare_map_inputs(
         _validate_numeric_param_dtype(param=param, owner="build_param_map")
         _validate_numeric_operand_dtype(value=query, field="query", owner="build_param_map")
         mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
-        aligned = xr.align(param, mask.astype(bool), query, join="exact")
+        aligned = _align_map_inputs(
+            param, mask.astype(bool), query,
+            owner="build_param_map", what="parameter-map",
+        )
         return opts, aligned[0], aligned[1], aligned[2]
     _validate_datetime_param_dtype(param=param, owner="build_param_map")
     mask = valid_mask if valid_mask is not None else param.notnull()
-    aligned = xr.align(param.astype("datetime64[ns]"), mask.astype(bool), query.astype("datetime64[ns]"), join="exact")
+    aligned = _align_map_inputs(
+        param.astype("datetime64[ns]"),
+        mask.astype(bool),
+        query.astype("datetime64[ns]"),
+        owner="build_param_map", what="parameter-map",
+    )
     return opts, aligned[0], aligned[1], aligned[2]
 
 
@@ -241,20 +263,20 @@ def _empty_domain_validation(
     *,
     sequence_dim: str,
     param_kind: str,
-) -> xr.DataArray:
-    from .numpy_backends import validate_map_domain_block_numpy
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    from .numpy_backends import validate_map_domain_block_numpy_status
 
     return xr.apply_ufunc(
-        validate_map_domain_block_numpy,
+        validate_map_domain_block_numpy_status,
         param_da,
         mask_da,
         kwargs={"param_kind": param_kind},
         input_core_dims=[[sequence_dim], [sequence_dim]],
-        output_core_dims=[[]],
+        output_core_dims=[[], [], []],
         vectorize=False,
         dask="parallelized",
         dask_gufunc_kwargs={"allow_rechunk": True},
-        output_dtypes=[np.int8],
+        output_dtypes=[np.int8, np.int64, object],
     )
 
 
@@ -264,36 +286,35 @@ def _empty_param_map(
     query_da: xr.DataArray,
     *,
     sequence_dim: str,
+    query_dim: str,
     param_kind: str,
+    output_plan: LogicalRowBlockPlan,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
-    checked = _empty_domain_validation(
+    validation_plan = prepare_logical_row_blocks(
         param_da,
         mask_da,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=query_dim,
+    )
+    blocks = (
+        _empty_domain_validation(
+            select_logical_block(param_da, block),
+            select_logical_block(mask_da, block),
+            sequence_dim=sequence_dim,
+            param_kind=param_kind,
+        )
+        for block in validation_plan.blocks
+        if int(param_da.sizes[sequence_dim]) and not validation_plan.has_no_rows
+    )
+    return assemble_empty_param_map(
+        blocks,
+        output_plan=output_plan,
+        param=param_da,
+        mask=mask_da,
+        query=query_da,
         sequence_dim=sequence_dim,
-        param_kind=param_kind,
+        query_dim=query_dim,
     )
-    logical_dims = tuple(dim for dim in checked.dims)
-    logical_dims += tuple(dim for dim in query_da.dims if dim not in logical_dims)
-    snapshot = capture_result_coordinates(
-        checked,
-        query_da,
-        output_dims=logical_dims,
-        owner="build_param_map",
-    )
-    checked = without_index_topology(checked, dims=logical_dims)
-    query_da = without_index_topology(query_da, dims=logical_dims)
-    template = xr.broadcast(checked, query_da)[0]
-    zero = template * np.int8(0)
-    columns = (
-        zero.astype(np.int64).rename(None),
-        zero.astype(np.int64).rename(None),
-        zero.astype(np.float64).rename(None),
-        zero.astype(bool).rename(None),
-    )
-    return tuple(
-        restore_result_coordinates(column, snapshot)
-        for column in columns
-    )  # type: ignore[return-value]
 
 
 def _apply_param_map_blocks(
@@ -306,15 +327,6 @@ def _apply_param_map_blocks(
     opts: ParamMapOptions,
     param_kind: str,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
-    query_size = int(query_da.sizes[query_dim])
-    if query_size == 0:
-        return _empty_param_map(
-            param_da,
-            mask_da,
-            query_da,
-            sequence_dim=sequence_dim,
-            param_kind=param_kind,
-        )
     plan = prepare_logical_row_blocks(
         param_da,
         mask_da,
@@ -322,6 +334,17 @@ def _apply_param_map_blocks(
         excluded_dims=frozenset({sequence_dim}),
         fastest_dim=query_dim,
     )
+    source_size = int(param_da.sizes[sequence_dim])
+    if plan.has_no_rows or source_size == 0:
+        return _empty_param_map(
+            param_da,
+            mask_da,
+            query_da,
+            sequence_dim=sequence_dim,
+            query_dim=query_dim,
+            param_kind=param_kind,
+            output_plan=plan,
+        )
     blocks = (
         _apply_param_map_block(
             param_da=select_logical_block(param_da, block),
@@ -422,22 +445,22 @@ def _prepare_bounds_inputs(
         _validate_numeric_operand_dtype(value=start_da, field="slice.start", owner="build_param_bounds_map")
         _validate_numeric_operand_dtype(value=stop_da, field="slice.stop", owner="build_param_bounds_map")
         mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
-        aligned = xr.align(
+        aligned = _align_map_inputs(
             param,
             mask.astype(bool),
             start_da,
             stop_da,
-            join="exact",
+            owner="build_param_bounds_map", what="slice-bound",
         )
         return aligned[0], aligned[1], aligned[2], aligned[3]
     _validate_datetime_param_dtype(param=param, owner="build_param_bounds_map")
     mask = valid_mask if valid_mask is not None else param.notnull()
-    aligned = xr.align(
+    aligned = _align_map_inputs(
         param.astype("datetime64[ns]"),
         mask.astype(bool),
         start_da.astype("datetime64[ns]"),
         stop_da.astype("datetime64[ns]"),
-        join="exact",
+        owner="build_param_bounds_map", what="slice-bound",
     )
     return aligned[0], aligned[1], aligned[2], aligned[3]
 
@@ -519,6 +542,28 @@ def _apply_param_bounds_block(
     )
 
 
+def _empty_param_bounds(
+    values: tuple[xr.DataArray, ...],
+    *,
+    plan: LogicalRowBlockPlan,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    snapshot = capture_result_coordinates(
+        *values,
+        output_dims=plan.dims,
+        owner="build_param_bounds_map",
+    )
+    shape = plan.sizes
+    data: object = np.zeros(shape, dtype=np.int64)
+    if any(value.chunks is not None for value in values):
+        from dask.array import zeros
+
+        chunks = logical_output_chunks(values, dims=plan.dims, sizes=plan.sizes)
+        data = zeros(shape, chunks=chunks, dtype=np.int64)
+    out = xr.DataArray(data, dims=plan.dims)
+    restored = restore_result_coordinates(out, snapshot)
+    return restored, restored.copy(deep=False)  # type: ignore[return-value]
+
+
 def build_param_bounds_map(
     *,
     param: xr.DataArray,
@@ -562,14 +607,23 @@ def build_param_bounds_map(
         valid_mask=valid_mask,
         param_kind=param_kind,
     )
-    i0, i1 = _apply_param_bounds_block(
-        param_da=param_da,
-        mask_da=mask_da,
-        start_da=start_da,
-        stop_da=stop_da,
-        sequence_dim=sequence_dim,
-        param_kind=param_kind,
+    values = (param_da, mask_da, start_da, stop_da)
+    plan = prepare_logical_row_blocks(
+        *values,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=sequence_dim,
     )
+    if plan.has_no_rows:
+        i0, i1 = _empty_param_bounds(values, plan=plan)
+    else:
+        i0, i1 = _apply_param_bounds_block(
+            param_da=param_da,
+            mask_da=mask_da,
+            start_da=start_da,
+            stop_da=stop_da,
+            sequence_dim=sequence_dim,
+            param_kind=param_kind,
+        )
     return ParamBoundsMap(i0=i0, i1=i1)
 
 

@@ -20,6 +20,7 @@ from tal.core.orchestration.topology import (
     resolve_binary_topology,
     resolve_nary_topology,
 )
+from tal.core.param_ops.guards import mark_reserved_coord, reserved_coord_is_owned
 from tal.core.schema_errors import SchemaError
 from tal.core.schema_read import (
     read_param_coord_name,
@@ -49,6 +50,7 @@ from ..policies.frame import (
 from ..position import Position
 from ..rotation import Rotation
 from . import pose_context
+from .core_chunks import single_core_chunk
 from .frame_owner_common import (
     frame_inverse_component_datasets,
     require_parent_basis_for_inverse,
@@ -190,6 +192,7 @@ def _matrix_to_components_arrays(
     owner: str,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     matrix = prepare_pose_matrix_for_conversion(source, owner=owner)
+    matrix = single_core_chunk(single_core_chunk(matrix, dim=row_dim), dim=col_dim)
     try:
         position_da, rotation_da = xr.apply_ufunc(
             _matrix_to_components_prevalidated_kernel,
@@ -388,11 +391,22 @@ def _pose_to_rep_dataset(pose: "Pose", *, target_rep: str, owner: str) -> xr.Dat
     return _components_to_matrix_dataset(pose, owner=owner)
 
 
+def _retain_owned_runtime_coords(source: xr.Dataset, output: xr.Dataset) -> xr.Dataset:
+    """Preserve TAL coordinate provenance across representation-only rebuilds."""
+    owned = {
+        name: mark_reserved_coord(output.coords[name], name=name)
+        for name in source.coords
+        if name in output.coords and reserved_coord_is_owned(source, name=name)
+    }
+    return output.assign_coords(owned) if owned else output
+
+
 def pose_to_rep(pose: "Pose", rep: str, *, validate: bool) -> "Pose":
     owner = "spatial.pose.to_rep"
     target = _normalize_target_rep(rep, owner=owner)
     pose._enforce_invariants(owner=owner)
     output = _pose_to_rep_dataset(pose, target_rep=target, owner=owner)
+    output = _retain_owned_runtime_coords(analysis_object_dataset(pose), output)
     output = preserve_spatial_basis(pose, output, owner=owner)
     association = SpatialAssociationPlan(associated_graph(pose))
     return _wrap_pose_output(

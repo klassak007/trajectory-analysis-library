@@ -16,17 +16,22 @@ from .blocking import (
     LogicalRowBlock,
     LogicalRowBlockPlan,
     assemble_logical_blocks,
-    project_logical_row_plan,
     without_logical_scalar_collisions,
 )
 from .map_failures import (
     attach_map_failure_dependency,
     first_map_failure,
-    map_failure_dependency,
+    ordered_map_failure_dependency,
     raise_ordered_map_failures,
+    summarize_map_failure,
 )
 
 _COLUMN_DTYPES = (np.int64, np.int64, np.float64, bool)
+
+
+def _typed_template(template: xr.DataArray, dtype: object) -> xr.DataArray:
+    prototype = np.broadcast_to(np.empty((), dtype=dtype), template.shape)
+    return template.copy(data=prototype)
 
 
 def _map_outer_source(value: xr.DataArray, *, sequence_dim: str) -> xr.DataArray:
@@ -74,7 +79,7 @@ def _assemble_map_columns(
         assemble_logical_blocks(
             (block[index] for block in blocks),
             plan=plan,
-            template=template.astype(blocks[0][index].dtype),
+            template=_typed_template(template, blocks[0][index].dtype),
             index_sources=sources,
             owner="build_param_map",
         )
@@ -87,13 +92,13 @@ def _outer_failure_blocks(
     *,
     plan: LogicalRowBlockPlan,
     query_dim: str,
-) -> tuple[tuple[xr.DataArray, ...], ...]:
+) -> tuple[tuple[xr.DataArray, xr.DataArray, xr.DataArray], ...]:
     query_axis = plan.dims.index(query_dim)
     grouped: dict[tuple[int, ...], list[tuple[int, tuple[xr.DataArray, ...]]]] = {}
     for spec, result in zip(plan.blocks, blocks, strict=True):
         key = tuple(value for index, value in enumerate(spec.ordinal) if index != query_axis)
         grouped.setdefault(key, []).append((spec.selection_for_dim(query_dim).start or 0, result))
-    selected = tuple(
+    return tuple(
         first_map_failure(
             tuple(result[4] for _, result in grouped[key]),
             tuple(result[5] for _, result in grouped[key]),
@@ -102,35 +107,23 @@ def _outer_failure_blocks(
         )
         for key in sorted(grouped)
     )
-    return tuple(tuple(item[index] for item in selected) for index in range(3))
 
 
 def _map_failure_for_blocks(
     blocks: tuple[tuple[xr.DataArray, ...], ...],
     *,
     plan: LogicalRowBlockPlan,
-    template: xr.DataArray,
     query_dim: str,
-    sources: tuple[xr.DataArray, ...],
 ) -> xr.DataArray:
-    outer_plan = project_logical_row_plan(plan, drop_dims=frozenset({query_dim}))
-    status_blocks, position_blocks, detail_blocks = _outer_failure_blocks(blocks, plan=plan, query_dim=query_dim)
-    outer_template = template.isel({query_dim: 0}, drop=True)
-    assembled = tuple(
-        assemble_logical_blocks(
-            items,
-            plan=outer_plan,
-            template=outer_template.astype(dtype),
-            index_sources=sources,
-            owner="build_param_map",
-        )
-        for items, dtype in zip(
-            (status_blocks, position_blocks, detail_blocks),
-            (np.int8, np.int64, object),
-            strict=True,
+    summaries = tuple(
+        summarize_map_failure(*failure)
+        for failure in _outer_failure_blocks(
+            blocks,
+            plan=plan,
+            query_dim=query_dim,
         )
     )
-    return map_failure_dependency((assembled[0],), (assembled[1],), (assembled[2],), starts=(0,))
+    return ordered_map_failure_dependency(summaries)
 
 
 def _target_slices(template: xr.DataArray, block: LogicalRowBlock) -> tuple[slice, ...]:
@@ -170,9 +163,96 @@ def _restore_eager_columns(
     snapshot: ResultCoordinateSnapshot,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
     return tuple(
-        restore_result_coordinates(template.astype(dtype).copy(data=array), snapshot).rename(None)
-        for array, dtype in zip(arrays, _COLUMN_DTYPES, strict=True)
+        restore_result_coordinates(template.copy(data=array), snapshot).rename(None)
+        for array in arrays
     )  # type: ignore[return-value]
+
+
+def _output_chunks(
+    plan: LogicalRowBlockPlan,
+    template: xr.DataArray,
+) -> tuple[tuple[int, ...], ...]:
+    by_dim = dict(zip(plan.dims, plan.chunks, strict=True))
+    return tuple(
+        tuple((part.stop or 0) - (part.start or 0) for part in by_dim[dim])
+        if dim in by_dim
+        else (int(template.sizes[dim]),)
+        for dim in template.dims
+    )
+
+
+def _empty_map_columns(
+    template: xr.DataArray,
+    plan: LogicalRowBlockPlan,
+    snapshot: ResultCoordinateSnapshot,
+    *,
+    lazy: bool,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    if lazy:
+        from dask.array import zeros
+
+        chunks = _output_chunks(plan, template)
+        arrays = tuple(zeros(template.shape, chunks=chunks, dtype=dtype) for dtype in _COLUMN_DTYPES)
+    else:
+        arrays = tuple(np.zeros(template.shape, dtype=dtype) for dtype in _COLUMN_DTYPES)
+    return _restore_eager_columns(arrays, template, snapshot)
+
+
+def _lazy_empty_failure(
+    blocks: tuple[tuple[xr.DataArray, xr.DataArray, xr.DataArray], ...],
+) -> xr.DataArray:
+    summaries = tuple(
+        summarize_map_failure(*block)
+        for block in blocks
+    )
+    return ordered_map_failure_dependency(summaries)
+
+
+def _validate_eager_empty_blocks(
+    first: tuple[xr.DataArray, xr.DataArray, xr.DataArray],
+    remaining: Iterator[tuple[xr.DataArray, xr.DataArray, xr.DataArray]],
+) -> None:
+    for status, position, detail in chain((first,), remaining):
+        raise_ordered_map_failures(status.data, position.data, detail.data)
+
+
+def assemble_empty_param_map(
+    validation_blocks: Iterable[tuple[xr.DataArray, xr.DataArray, xr.DataArray]],
+    *,
+    output_plan: LogicalRowBlockPlan,
+    param: xr.DataArray,
+    mask: xr.DataArray,
+    query: xr.DataArray,
+    sequence_dim: str,
+    query_dim: str,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    """Assemble one empty map with bounded validation and truthful backend."""
+    template = _map_output_template(
+        param,
+        mask,
+        query,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
+        logical_dims=output_plan.dims,
+    )
+    sources = (param, mask, query)
+    snapshot = capture_result_coordinates(
+        *sources,
+        output_dims=tuple(template.dims),
+        owner="build_param_map",
+    )
+    lazy = any(value.chunks is not None for value in sources)
+    columns = _empty_map_columns(template, output_plan, snapshot, lazy=lazy)
+    iterator = iter(validation_blocks)
+    first = next(iterator, None)
+    if first is None:
+        return columns
+    if all(value.chunks is None for value in first):
+        _validate_eager_empty_blocks(first, iterator)
+        return columns
+    blocks = tuple(chain((first,), iterator))
+    dependency = _lazy_empty_failure(blocks)
+    return attach_map_failure_dependency(columns, dependency)
 
 
 def _assemble_eager_map(
@@ -241,11 +321,9 @@ def assemble_param_map_blocks(
     dependency = _map_failure_for_blocks(
         lazy_blocks,
         plan=plan,
-        template=template,
         query_dim=query_dim,
-        sources=sources,
     )
     return attach_map_failure_dependency(columns, dependency)
 
 
-__all__ = ["assemble_param_map_blocks"]
+__all__ = ["assemble_empty_param_map", "assemble_param_map_blocks"]

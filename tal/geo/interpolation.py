@@ -1,30 +1,50 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 import numpy as np
 import xarray as xr
 
 from tal.core import AnalysisObject
 from tal.core.dataset_ownership import analysis_object_dataset
-from tal.core.orchestration.context import DatasetContextOptions, resolve_dataset_context
+from tal.core.orchestration.context import (
+    DatasetContextOptions,
+    resolve_dataset_context,
+)
 from tal.core.orchestration.inputs import query_coord_from_other_input
 from tal.core.orchestration.resolve import resolve_param_runtime_context
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
-from tal.core.param_engine import ParamMapOptions, build_param_map, normalize_query_grid
-from tal.core.param_engine.map_apply import gather_along_sequence
+from tal.core.param_engine import ParamMapOptions, build_param_map
+from tal.core.param_engine.map_apply import empty_mapped_value, gather_along_sequence
+from tal.core.param_engine.query_grid import _normalize_query_grid_with_topology
+from tal.core.param_engine.query_topology import (
+    QueryOutputPlan,
+    generated_query_coordinate_names,
+    preflight_query_output_namespace,
+)
 from tal.core.param_ops import ParamEvalOptions
-from tal.core.param_ops.finalize import finalize_param_output
-from tal.core.param_ops.guards import assert_query_dim_safe, assert_reserved_metadata_safe
+from tal.core.param_ops.finalize import (
+    assign_sampled_query_coordinate,
+    finalize_param_output,
+)
+from tal.core.param_ops.guards import (
+    assert_query_dim_safe,
+    assert_reserved_metadata_safe,
+)
 from tal.core.param_ops.types import ParamRuntimeContext
 from tal.spatial import Position
 
 from .backends import geod_interpolate
-from .kernels import require_unambiguous_geodesic_interpolation
+from .interpolation_values import (
+    assemble_lla,
+    component,
+    geodesic_output_values,
+    order_query_then_core,
+)
 from .metadata import normalize_geodetic_metadata, options_from_geodetic_metadata
 from .options import GeodeticInterpolationOptions
 
-_LLA_LABELS = ("lat", "lon", "alt")
 _CTX_OPTIONS = DatasetContextOptions(
     require_roles=True,
     select_numeric_var=True,
@@ -39,20 +59,6 @@ def _wrap_error(exc: TypeError | ValueError, *, owner: str) -> TypeError | Value
     if text.startswith(f"{owner}:"):
         return exc
     return type(exc)(f"{owner}: {text}")
-
-
-def _component(data: xr.DataArray, *, dim: str, label: str) -> xr.DataArray:
-    return data.sel({dim: label}, drop=True)
-
-
-def _order_query_then_core(values: xr.DataArray, *, query_dim: str, core_dim: str) -> xr.DataArray:
-    outer = [dim for dim in values.dims if dim not in {query_dim, core_dim}]
-    return values.transpose(*(outer + [query_dim, core_dim]))
-
-
-def _broadcast_query_da(values: xr.DataArray, *, template: xr.DataArray, core_dim: str) -> xr.DataArray:
-    target = template.isel({core_dim: 0}, drop=True)
-    return values.broadcast_like(target)
 
 
 def _param_eval_options(opts: GeodeticInterpolationOptions, *, method: str) -> ParamEvalOptions:
@@ -123,8 +129,31 @@ def _build_map(
     query: xr.DataArray | np.ndarray | Sequence[float] | float,
     *,
     opts: GeodeticInterpolationOptions,
-) -> tuple[xr.DataArray, object, tuple[str, ...] | None]:
-    grid = normalize_query_grid(
+    owner: str,
+) -> tuple[xr.DataArray, object, QueryOutputPlan]:
+    trajectory = not isinstance(query, xr.DataArray) or (
+        len(set(query.dims) - set(context.batch_dims)) <= 1
+    )
+    output_plan = preflight_query_output_namespace(
+        context.ds,
+        query,
+        sequence_dim=context.sequence_dim,
+        batch_dims=context.batch_dims,
+        owner=owner,
+        intent=(
+            "trajectory" if trajectory and not (
+                isinstance(query, xr.DataArray) and context.sequence_dim in query.dims
+            ) else "grid"
+        ),
+        generated_names=generated_query_coordinate_names(
+            operation="evaluate",
+            param_name=context.spec.name,
+            size_name=context.sequence_size_coord,
+            trajectory=trajectory,
+            mapped_dataset=False,
+        ),
+    )
+    grid, query_topology = _normalize_query_grid_with_topology(
         query,
         query_dim=opts.query_dim,
         batch_dims=context.batch_dims,
@@ -138,7 +167,7 @@ def _build_map(
         valid_mask=context.valid_mask,
         options=ParamMapOptions(method="linear", duplicate_policy=opts.duplicate_policy),
     )
-    return grid.values, pmap, grid.stacked_dims
+    return grid.values, pmap, replace(output_plan, topology=query_topology)
 
 
 def _build_base_output_dataset(context: ParamRuntimeContext, *, var_name: str, values: xr.DataArray) -> xr.Dataset:
@@ -158,18 +187,6 @@ def _wrap_lon(lon: xr.DataArray, *, mode: str) -> xr.DataArray:
     return lon
 
 
-def _assemble_lla(
-    components: tuple[xr.DataArray, xr.DataArray, xr.DataArray],
-    *,
-    core_dim: str,
-    target_dims: tuple[str, ...],
-    var_name: str,
-) -> xr.DataArray:
-    dim = xr.IndexVariable(core_dim, list(_LLA_LABELS))
-    arr = xr.concat(list(components), dim=dim).transpose(*target_dims)
-    return arr.rename(var_name)
-
-
 def _wrap_and_restamp(source, candidate, *, opts: GeodeticInterpolationOptions, validate: bool, owner: str):
     geo_opts = options_from_geodetic_metadata(analysis_object_dataset(source), owner=owner)
     wrap_mode = geo_opts.longitude_wrap if opts.longitude_wrap == "shortest" else opts.longitude_wrap
@@ -178,12 +195,12 @@ def _wrap_and_restamp(source, candidate, *, opts: GeodeticInterpolationOptions, 
         ctx = resolve_dataset_context(candidate, owner=owner, options=_CTX_OPTIONS)
         assert ctx.data is not None and ctx.var_name is not None
         core_dim = ctx.core_dims[0]
-        lon = _wrap_lon(_component(ctx.data, dim=core_dim, label="lon"), mode=wrap_mode)
-        arr = _assemble_lla(
+        lon = _wrap_lon(component(ctx.data, dim=core_dim, label="lon"), mode=wrap_mode)
+        arr = assemble_lla(
             (
-                _component(ctx.data, dim=core_dim, label="lat"),
+                component(ctx.data, dim=core_dim, label="lat"),
                 lon,
-                _component(ctx.data, dim=core_dim, label="alt"),
+                component(ctx.data, dim=core_dim, label="alt"),
             ),
             core_dim=core_dim,
             target_dims=ctx.data.dims,
@@ -193,8 +210,6 @@ def _wrap_and_restamp(source, candidate, *, opts: GeodeticInterpolationOptions, 
     else:
         ds = candidate_ds
         wrap_mode = geo_opts.longitude_wrap
-    from dataclasses import replace
-
     ds = normalize_geodetic_metadata(
         ds,
         opts=replace(geo_opts, longitude_wrap=wrap_mode),
@@ -217,21 +232,31 @@ def _finalize_geodesic_output(
     values: xr.DataArray,
     query: xr.DataArray,
     valid_query: xr.DataArray,
-    query_dim: str,
-    stacked_dims: tuple[str, ...] | None,
+    output_plan: QueryOutputPlan,
     opts: GeodeticInterpolationOptions,
     validate: bool,
     owner: str,
 ):
     ds_out = _build_base_output_dataset(context, var_name=var_name, values=values)
+    query_topology = output_plan.topology
+    if query_topology is None:
+        raise ValueError(f"{owner}: query output topology is missing.")
+    if query_topology.stacked_dims is not None:
+        ds_out = assign_sampled_query_coordinate(
+            ds_out, query=query, query_dim=query_topology.query_dim,
+            name=context.spec.name,
+        )
     evaluated = finalize_param_output(
         context,
         ds_out,
         query=query,
-        query_dim=query_dim,
+        query_dim=query_topology.query_dim,
         valid_query=valid_query,
+        query_topology=query_topology,
         validate=False,
-        trajectory=(stacked_dims is None),
+        trajectory=(query_topology.stacked_dims is None),
+        owner=owner,
+        output_plan=output_plan,
     )
     from .geodetic import GeodeticPosition
 
@@ -239,53 +264,51 @@ def _finalize_geodesic_output(
     return _wrap_and_restamp(source, candidate, opts=opts, validate=validate, owner=owner)
 
 
-def _geodesic_output_values(
+def _mapped_geodesic_values(
     data: xr.DataArray,
-    left: xr.DataArray,
-    right: xr.DataArray,
+    context: ParamRuntimeContext,
     *,
     core_dim: str,
     pmap,
     crs: str,
     owner: str,
+    trajectory: bool,
 ) -> xr.DataArray:
-    alpha = _broadcast_query_da(pmap.alpha, template=left, core_dim=core_dim)
-    safe_alpha = xr.apply_ufunc(
-        require_unambiguous_geodesic_interpolation,
-        _component(left, dim=core_dim, label="lat"),
-        _component(left, dim=core_dim, label="lon"),
-        _component(right, dim=core_dim, label="lat"),
-        _component(right, dim=core_dim, label="lon"),
-        alpha,
-        input_core_dims=((), (), (), (), ()),
-        output_core_dims=((),),
-        output_dtypes=(np.float64,),
-        dask="parallelized",
+    if int(data.sizes[context.sequence_dim]) == 0 or int(pmap.valid.size) == 0:
+        empty = empty_mapped_value(
+            data,
+            param_map=pmap,
+            sequence_dim=context.sequence_dim,
+        )
+        if trajectory:
+            return order_query_then_core(empty, query_dim=pmap.query_dim, core_dim=core_dim)
+        return empty
+    left = gather_along_sequence(
+        data,
+        pmap.i0,
+        sequence_dim=context.sequence_dim,
+        query_dim=pmap.query_dim,
+        owner=owner,
     )
-    lat, lon = xr.apply_ufunc(
-        geod_interpolate,
-        _component(left, dim=core_dim, label="lat"),
-        _component(left, dim=core_dim, label="lon"),
-        _component(right, dim=core_dim, label="lat"),
-        _component(right, dim=core_dim, label="lon"),
-        safe_alpha,
-        input_core_dims=((), (), (), (), ()),
-        output_core_dims=((), ()),
-        output_dtypes=(np.float64, np.float64),
-        kwargs={"crs": crs, "owner": owner},
-        dask="parallelized",
+    right = gather_along_sequence(
+        data,
+        pmap.i1,
+        sequence_dim=context.sequence_dim,
+        query_dim=pmap.query_dim,
+        owner=owner,
     )
-    alt = (1.0 - safe_alpha) * _component(left, dim=core_dim, label="alt") + safe_alpha * _component(
-        right, dim=core_dim, label="alt"
-    )
-    out = _assemble_lla(
-        (lat.where(pmap.valid), lon.where(pmap.valid), alt.where(pmap.valid)),
+    left = order_query_then_core(left, query_dim=pmap.query_dim, core_dim=core_dim)
+    right = order_query_then_core(right, query_dim=pmap.query_dim, core_dim=core_dim)
+    return geodesic_output_values(
+        data,
+        left,
+        right,
         core_dim=core_dim,
-        target_dims=tuple(left.dims),
-        var_name=str(data.name),
+        pmap=pmap,
+        crs=crs,
+        owner=owner,
+        interpolate=geod_interpolate,
     )
-    out = out.assign_coords({core_dim: data.coords[core_dim]})
-    return _order_query_then_core(out, query_dim=pmap.query_dim, core_dim=core_dim)
 
 
 def _geodesic_linear(
@@ -311,14 +334,18 @@ def _geodesic_linear(
     )
     var_name = select_single_numeric_var(context.ds, owner=owner, what="GeodeticPosition")
     core_dim = context.core_dims[0]
-    query_values, pmap, stacked_dims = _build_map(context, query, opts=opts)
+    query_values, pmap, output_plan = _build_map(context, query, opts=opts, owner=owner)
     data = context.ds[var_name]
-    left = gather_along_sequence(data, pmap.i0, sequence_dim=context.sequence_dim, query_dim=pmap.query_dim, owner=owner)
-    right = gather_along_sequence(data, pmap.i1, sequence_dim=context.sequence_dim, query_dim=pmap.query_dim, owner=owner)
-    left = _order_query_then_core(left, query_dim=pmap.query_dim, core_dim=core_dim)
-    right = _order_query_then_core(right, query_dim=pmap.query_dim, core_dim=core_dim)
     geo_opts = options_from_geodetic_metadata(context.ds, owner=owner)
-    out = _geodesic_output_values(data, left, right, core_dim=core_dim, pmap=pmap, crs=geo_opts.crs, owner=owner)
+    out = _mapped_geodesic_values(
+        data,
+        context,
+        core_dim=core_dim,
+        pmap=pmap,
+        crs=geo_opts.crs,
+        owner=owner,
+        trajectory=output_plan.topology is not None and output_plan.topology.stacked_dims is None,
+    )
     return _finalize_geodesic_output(
         source,
         context,
@@ -326,8 +353,7 @@ def _geodesic_linear(
         values=out,
         query=query_values,
         valid_query=pmap.valid,
-        query_dim=pmap.query_dim,
-        stacked_dims=stacked_dims,
+        output_plan=output_plan,
         opts=opts,
         validate=validate,
         owner=owner,

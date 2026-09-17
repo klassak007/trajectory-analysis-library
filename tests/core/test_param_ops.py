@@ -121,6 +121,88 @@ def _ao_multi_batch(
     )
 
 
+def _forbidden_zero_selection_array(
+    label: str,
+    shape: tuple[int, ...],
+    dtype: np.dtype[object],
+) -> np.ndarray:
+    raise RuntimeError(f"forbidden zero-row source task: {label}")
+
+
+def _zero_batch_selection_coords(
+    *,
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    native_index: bool,
+) -> xr.Coordinates:
+    if not native_index:
+        return xr.Coordinates(
+            {dim: np.arange(size, dtype="int64") for dim, size in zip(batch_dims, batch_shape, strict=True)}
+        )
+    indexes = tuple(
+        xr.indexes.RangeIndex.arange(size, dim=dim)
+        for dim, size in zip(batch_dims, batch_shape, strict=True)
+    )
+    groups = tuple(xr.Coordinates.from_xindex(index) for index in indexes)
+    return xr.Coordinates(
+        {name: value.variable for group in groups for name, value in group.items()},
+        indexes={name: index for group in groups for name, index in group.xindexes.items()},
+    )
+
+
+def _zero_batch_selection_source(
+    *,
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+    native_index: bool,
+) -> AnalysisObject:
+    shape = (*batch_shape, 2)
+    dims = (*batch_dims, "sample")
+    param_dtype = np.dtype("float64" if param_kind == "numeric" else "datetime64[ns]")
+    param_base = np.asarray(
+        [0.0, 1.0]
+        if param_kind == "numeric"
+        else ["2020-01-01", "2020-01-02"],
+        dtype=param_dtype,
+    )
+    payload: object = np.zeros(shape, dtype="float64")
+    param: object = np.broadcast_to(param_base, shape).copy()
+    if lazy:
+        da = pytest.importorskip("dask.array")
+        from dask import delayed
+
+        payload = da.from_delayed(
+            delayed(_forbidden_zero_selection_array)("payload", shape, np.dtype("float64")),
+            shape=shape,
+            dtype="float64",
+        )
+        param = da.from_delayed(
+            delayed(_forbidden_zero_selection_array)("param", shape, param_dtype),
+            shape=shape,
+            dtype=param_dtype,
+        )
+    coords = _zero_batch_selection_coords(
+        batch_dims=batch_dims,
+        batch_shape=batch_shape,
+        native_index=native_index,
+    )
+    ds = xr.Dataset({"value": xr.DataArray(payload, dims=dims)}, coords=coords)
+    ds = ds.assign_coords(
+        time=xr.DataArray(param, dims=dims),
+        group_size=xr.DataArray(np.full(batch_shape, 2, dtype="int64"), dims=batch_dims),
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=batch_dims,
+        core_dims=(),
+        param_coord="time",
+        sequence_size_coord="group_size",
+    )
+
+
 def test_param_ops_001_index_scalar_and_vector_shapes() -> None:
     """ID: PARAM_OPS_001_index_scalar_and_vector_shapes."""
     ao = _ao_unbatched()
@@ -213,6 +295,248 @@ def test_param_ops_009_resample_to_stacked_query_drops_validity() -> None:
     )
     out = ao.param.resample_to(grid)
     assert "validity" not in out.as_dataset().attrs["tal"]["core"]
+
+
+@pytest.mark.parametrize("shape", ((2, 0), (0, 2), (2, 0, 3)))
+@pytest.mark.parametrize("operation", ("index", "sel", "at", "resample_to"))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_core_empty_stacked_query_001_preserves_declared_topology(
+    shape: tuple[int, ...],
+    operation: str,
+    lazy: bool,
+) -> None:
+    """ID: PARAM_CORE_EMPTY_STACKED_QUERY_001_preserves_declared_topology."""
+    dims = tuple(f"query_axis_{index}" for index in range(len(shape)))
+    coords = {dim: np.arange(size, dtype=np.int64) for dim, size in zip(dims, shape, strict=True)}
+    query = xr.DataArray(np.empty(shape), dims=dims, coords=coords)
+    if lazy:
+        pytest.importorskip("dask.array")
+        query = query.chunk({dim: max(size, 1) for dim, size in zip(dims, shape, strict=True)})
+    source = _ao_unbatched_valid()
+    before = source.as_dataset(copy="deep")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = source.param.index(query) if operation == "index" else getattr(source.param, operation)(query)
+
+    actual = result if operation == "index" else result.as_dataset(copy="none")
+    assert tuple(actual.dims)[: len(dims)] == dims
+    assert tuple(int(actual.sizes[dim]) for dim in dims) == shape
+    for dim in dims:
+        assert actual.xindexes[dim].equals(query.xindexes[dim])
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_param_core_zero_batch_eval_001_remains_lazy_without_kernel_dispatch() -> None:
+    """ID: PARAM_CORE_ZERO_BATCH_EVAL_001_remains_lazy_without_kernel_dispatch."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    dataset = xr.Dataset(
+        data_vars={
+            "value": xr.DataArray(
+                np.empty((0, 2)),
+                dims=("trial", "sample"),
+            ).chunk({"trial": 1, "sample": 2})
+        },
+        coords={
+            "trial": np.asarray([], dtype=np.int64),
+            "sample": [0, 1],
+            "time": xr.DataArray(
+                np.empty((0, 2)),
+                dims=("trial", "sample"),
+            ).chunk({"trial": 1, "sample": 2}),
+        },
+    )
+    source = AnalysisObject.from_data(
+        dataset,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+        param_coord="time",
+    )
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at([0.25, 0.75])
+
+    actual = result.as_dataset(copy="none")
+    assert tasks == []
+    assert actual.sizes == {"trial": 0, "sample": 2}
+    assert actual["value"].chunks is not None
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def _assert_zero_batch_selection(
+    *,
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+    layout: str | None,
+    native_index: bool,
+) -> None:
+    source = _zero_batch_selection_source(
+        batch_dims=batch_dims,
+        batch_shape=batch_shape,
+        param_kind=param_kind,
+        lazy=lazy,
+        native_index=native_index,
+    )
+    expected_source = _zero_batch_selection_source(
+        batch_dims=batch_dims,
+        batch_shape=batch_shape,
+        param_kind=param_kind,
+        lazy=False,
+        native_index=native_index,
+    )
+    before = source.as_dataset(copy="deep")
+    query = np.asarray(
+        [0.25, 0.75]
+        if param_kind == "numeric"
+        else ["2020-01-01", "2020-01-02"],
+        dtype="float64" if param_kind == "numeric" else "datetime64[ns]",
+    )
+    if layout is None:
+        actual = source.param.sel(query)
+        expected = expected_source.param.sel(query)
+    else:
+        options = ParamSelectOptions(layout=layout)
+        bounds = slice(query[0], query[-1])
+        actual = source.param.sel(bounds, opts=options)
+        expected = expected_source.param.sel(bounds, opts=options)
+    computed = actual.as_dataset(copy="none").compute(scheduler="synchronous")
+    xr.testing.assert_identical(computed, expected.as_dataset(copy="none"))
+    if computed.coords["valid"].size:
+        assert not bool(computed.coords["valid"].all())
+    if computed.coords["sample_index"].size:
+        assert bool((computed.coords["sample_index"] == -1).all())
+    for dim in batch_dims:
+        assert type(computed.xindexes[dim]) is type(before.xindexes[dim])
+        if native_index:
+            assert isinstance(computed.xindexes[dim], xr.indexes.RangeIndex)
+        assert computed.xindexes[dim].equals(before.xindexes[dim])
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize(
+    ("batch_dims", "batch_shape"),
+    ((("trial",), (0,)), (("trial", "sensor"), (2, 0))),
+)
+@pytest.mark.parametrize("param_kind", ("numeric", "datetime"))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_core_zero_row_point_selection_001_skips_source_execution(
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+) -> None:
+    """ID: PARAM_CORE_ZERO_ROW_POINT_SELECTION_001_skips_source_execution."""
+    for native_index in (False, True):
+        _assert_zero_batch_selection(
+            batch_dims=batch_dims,
+            batch_shape=batch_shape,
+            param_kind=param_kind,
+            lazy=lazy,
+            layout=None,
+            native_index=native_index,
+        )
+
+
+@pytest.mark.parametrize(
+    ("batch_dims", "batch_shape"),
+    ((("trial",), (0,)), (("trial", "sensor"), (2, 0))),
+)
+@pytest.mark.parametrize("param_kind", ("numeric", "datetime"))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("layout", ("packed", "padded"))
+def test_param_core_zero_row_slice_selection_001_skips_source_execution(
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+    layout: str,
+) -> None:
+    """ID: PARAM_CORE_ZERO_ROW_SLICE_SELECTION_001_skips_source_execution."""
+    for native_index in (False, True):
+        _assert_zero_batch_selection(
+            batch_dims=batch_dims,
+            batch_shape=batch_shape,
+            param_kind=param_kind,
+            lazy=lazy,
+            layout=layout,
+            native_index=native_index,
+        )
+
+
+def test_param_core_empty_stacked_query_002_restores_native_indexes_and_coordinates() -> None:
+    """ID: PARAM_CORE_EMPTY_STACKED_QUERY_002_restores_native_indexes_and_coordinates."""
+    indexes = (
+        xr.indexes.RangeIndex.arange(2, dim="outer"),
+        xr.indexes.RangeIndex.arange(0, dim="inner"),
+    )
+    groups = tuple(xr.Coordinates.from_xindex(index) for index in indexes)
+    variables = {
+        name: value.variable
+        for group in groups
+        for name, value in group.items()
+    }
+    xindexes = {
+        name: index
+        for group in groups
+        for name, index in group.xindexes.items()
+    }
+    coords = xr.Coordinates(variables, indexes=xindexes)
+    query = xr.DataArray(
+        np.empty((2, 0)),
+        dims=("outer", "inner"),
+        coords=coords,
+        attrs={"query_note": {"owner": "caller"}},
+    ).assign_coords(note=("outer", ["left", "right"]), scalar_note="kept")
+    query.coords["note"].encoding["source"] = "query"
+
+    actual = _ao_unbatched_valid().param.at(query).as_dataset(copy="none")
+
+    assert actual.sizes == {"outer": 2, "inner": 0}
+    for dim, expected in zip(("outer", "inner"), indexes, strict=True):
+        assert isinstance(actual.xindexes[dim], xr.indexes.RangeIndex)
+        assert actual.xindexes[dim].equals(expected)
+    assert actual.coords["note"].variable.identical(query.coords["note"].variable)
+    assert actual.coords["note"].encoding == query.coords["note"].encoding
+    assert actual.coords["scalar_note"].variable.identical(query.coords["scalar_note"].variable)
+
+
+def test_param_core_empty_stacked_query_003_restores_split_lazy_core_chunks() -> None:
+    """Empty topology restoration does not delegate a zero-product reshape to Dask."""
+    pytest.importorskip("dask.array")
+    source = AnalysisObject.from_data(
+        xr.DataArray(
+            np.arange(6, dtype=np.float64).reshape(2, 3),
+            dims=("sample", "axis"),
+            coords={
+                "sample": [0, 1],
+                "axis": ["x", "y", "z"],
+                "time": ("sample", [0.0, 1.0]),
+            },
+            name="value",
+        ).chunk({"sample": 2, "axis": 1}),
+        sequence_dim="sample",
+        core_dims=("axis",),
+        param_coord="time",
+    )
+    query = xr.DataArray(
+        np.empty((2, 0)),
+        dims=("outer", "inner"),
+        coords={"outer": [10, 20], "inner": np.asarray([], dtype=np.int64)},
+    ).chunk({"outer": 2, "inner": 1})
+
+    actual = source.param.at(query).as_dataset(copy="none")
+
+    assert actual["value"].dims == ("axis", "outer", "inner")
+    assert actual["value"].chunks is not None
+    computed = actual.compute(scheduler="synchronous")
+    assert computed.sizes == {"axis": 3, "outer": 2, "inner": 0}
 
 
 def test_param_ops_010_interp_like_inner_left_batch_join() -> None:

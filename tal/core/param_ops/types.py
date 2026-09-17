@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ..param_engine.query_topology import QueryOutputPlan, QueryTopologyPlan
 from ..param_engine.types import ParamCoordSpec, QueryGrid
 
 ParamKind = Literal["numeric", "datetime64"]
@@ -163,4 +164,6 @@ class ParamIndexResult:
     index: xr.DataArray
     valid: xr.DataArray
     grid: QueryGrid
+    query_topology: QueryTopologyPlan
+    output_plan: QueryOutputPlan
     scalar_query: bool

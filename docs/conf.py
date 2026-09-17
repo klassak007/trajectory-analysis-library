@@ -20,7 +20,7 @@ try:  # pragma: no cover (docs build only)
     import tal  # type: ignore
 
     release = getattr(tal, "__version__", "0.0.0")
-except Exception:  # pragma: no cover (docs build only)
+except ImportError:  # pragma: no cover (docs build only)
     release = "0.0.0"
 
 
@@ -112,6 +112,8 @@ nitpick_ignore_regex = [
     ("py:class", r"iterable"),
     ("py:class", r"np\..*"),
     ("py:class", r"optional"),
+    # pandas exposes Timedelta through a private runtime module name in type aliases.
+    ("py:class", r"pandas\._libs\.tslibs\.timedeltas\.Timedelta"),
     ("py:class", r"tal\.core\..*types\..*"),
     ("py:class", r"tal\.core\.schema\.UnsetType"),
     ("py:class", r"tal\.io\.options\..*"),

@@ -67,6 +67,29 @@ def lane_index_groups(
     )
 
 
+def index_group_for_coordinate(
+    value: XarrayObject,
+    name: Hashable,
+) -> tuple[tuple[Hashable, ...], xr.Index] | None:
+    """Resolve a coordinate's public xarray index group, if present."""
+    for index, coordinates in value.xindexes.group_by_index():
+        if name in coordinates:
+            return tuple(coordinates), index
+    return None
+
+
+def sequence_dependent_coordinate_names(
+    value: XarrayObject,
+    *,
+    sequence_dim: str,
+) -> tuple[str, ...]:
+    """Names of coordinates sampled when a sequence is gathered."""
+    return tuple(
+        str(name) for name, coord in value.coords.items()
+        if name != sequence_dim and sequence_dim in coord.dims
+    )
+
+
 def capture_index_topology(
     value: XarrayObject,
     *,
@@ -112,6 +135,18 @@ def without_index_topology(
     return value.drop_vars(names, errors="ignore") if names else value
 
 
+def without_dimension_coordinate(value: XarrayObject, *, dim: str) -> XarrayObject:
+    """Remove an axis coordinate while retaining its other labels as metadata.
+
+    All coordinates in its index group must first lose their index association;
+    unrelated indexes on the same dimension remain attached.
+    """
+    if dim not in value.coords:
+        return value
+    names = tuple(value.xindexes.get_all_coords(dim)) if dim in value.xindexes else ()
+    return value.drop_indexes(names).drop_vars(dim)
+
+
 def _result_coord_is_applicable(
     name: Hashable,
     variable: xr.Variable,
@@ -122,6 +157,47 @@ def _result_coord_is_applicable(
     if not dims.issubset(output_dims):
         return False
     return not (name in output_dims and name not in dims)
+
+
+def _metadata_value_equal(left: object, right: object) -> bool:
+    if left is right:
+        return True
+    try:
+        equal = left == right
+        return isinstance(equal, (bool, np.bool_)) and bool(equal)
+    except Exception:  # noqa: BLE001 - uncertainty never authorizes metadata replacement.
+        return False
+
+
+def _coordinate_metadata_equal(left: Mapping[object, object], right: Mapping[object, object]) -> bool:
+    if left.keys() != right.keys():
+        return False
+    return all(_metadata_value_equal(value, right[name]) for name, value in left.items())
+
+
+def coordinate_variables_compatible(
+    left: xr.Variable,
+    right: xr.Variable,
+    *,
+    indexed: bool = False,
+) -> bool:
+    """Compare output coordinates without realizing lazy values or indexes."""
+    if left.dims != right.dims or left.shape != right.shape or left.dtype != right.dtype:
+        return False
+    if not _coordinate_metadata_equal(left.attrs, right.attrs):
+        return False
+    if not _coordinate_metadata_equal(left.encoding, right.encoding):
+        return False
+    if indexed:
+        return True  # The caller compares the public index group instead.
+    if left.data is right.data:
+        return True
+    if left.chunks is not None or right.chunks is not None:
+        return False
+    try:
+        return bool(left.equals(right))
+    except Exception:  # noqa: BLE001 - uncertain equality cannot authorize replacement.
+        return False
 
 
 def _merge_result_coord(
@@ -135,12 +211,8 @@ def _merge_result_coord(
     if current is None:
         variables[name] = variable.copy(deep=False)
         return
-    try:
-        identical = current.identical(variable)
-    except Exception as exc:
-        raise ValueError(f"{owner}: coordinate {name!r} cannot be compared safely.") from exc
-    if not identical:
-        raise ValueError(f"{owner}: coordinate {name!r} has conflicting output values.")
+    if not coordinate_variables_compatible(current, variable):
+        raise ValueError(f"{owner}: coordinate {name!r} has conflicting output metadata or values.")
 
 
 def _capture_nonindex_coordinates(
@@ -205,6 +277,57 @@ def _groups_by_coordinate_names(
         group.coordinate_names: group.index
         for group in lane_index_groups(value, lane_dim=lane_dim)
     }
+
+
+def require_compatible_lane_index_types(
+    source: XarrayObject,
+    target: XarrayObject,
+    *,
+    lane_dim: str,
+    owner: str,
+) -> None:
+    """Reject index groups that cannot be safely aligned by public labels."""
+    source_groups = _groups_by_coordinate_names(source, lane_dim=lane_dim)
+    target_groups = _groups_by_coordinate_names(target, lane_dim=lane_dim)
+    if not source_groups or not target_groups:
+        return
+    compatible = source_groups.keys() == target_groups.keys()
+    if not compatible:
+        raise ValueError(
+            f"{owner}: shared batch index along {lane_dim!r} has incompatible xarray index "
+            "topology; use matching index groups before querying."
+        )
+    for names, index in source_groups.items():
+        other = target_groups.get(names)
+        if other is None or type(index) is not type(other):
+            compatible = False
+            break
+        if isinstance(index, (xr.indexes.PandasIndex, xr.indexes.RangeIndex)):
+            continue
+        try:
+            compatible = bool(index.equals(other))
+        except Exception:  # noqa: BLE001 - uncertain native equality cannot authorize reindexing.
+            compatible = False
+        if not compatible:
+            break
+    if not compatible:
+        raise ValueError(
+            f"{owner}: shared batch index along {lane_dim!r} has incompatible xarray index "
+            "topology; use matching index groups before querying."
+        )
+
+
+def require_compatible_shared_batch_index_types(
+    source: XarrayObject,
+    target: XarrayObject,
+    *,
+    batch_dims: tuple[str, ...],
+    owner: str,
+) -> None:
+    """Check each shared batch lane before numerical or positional work."""
+    for dim in batch_dims:
+        if dim in source.dims and dim in target.dims:
+            require_compatible_lane_index_types(source, target, lane_dim=dim, owner=owner)
 
 
 def require_exact_lane_indexes(
@@ -297,11 +420,16 @@ __all__ = [
     "ResultCoordinateSnapshot",
     "capture_index_topology",
     "capture_result_coordinates",
+    "coordinate_variables_compatible",
+    "index_group_for_coordinate",
     "isel_rows",
     "lane_index_groups",
+    "require_compatible_lane_index_types",
+    "require_compatible_shared_batch_index_types",
     "require_exact_lane_indexes",
     "require_unique_lane_indexes",
     "restore_index_topology",
     "restore_result_coordinates",
+    "without_dimension_coordinate",
     "without_index_topology",
 ]

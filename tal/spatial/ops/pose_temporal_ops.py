@@ -13,7 +13,13 @@ from tal.core.component_ops.runtime_checks import select_component_var
 from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.resolve import resolve_param_runtime_context
 from tal.core.param_engine.prepared import PreparedParamEvaluation
+from tal.core.param_engine.query_topology import (
+    QueryOutputPlan,
+    generated_query_coordinate_names,
+    preflight_query_output_namespace,
+)
 from tal.core.param_ops.evaluate import evaluate_param
+from tal.core.param_ops.guards import reserved_coord_is_owned
 from tal.core.schema_read import read_roles
 
 from ..metadata import get_pose_rep
@@ -21,6 +27,10 @@ from ..temporal.options import (
     PoseTemporalOptions,
     as_rotation_method,
     resolve_rotation_method,
+)
+from .temporal_structural_validity import (
+    declare_no_usable_sequence_rows,
+    has_no_usable_sequence_rows,
 )
 
 if TYPE_CHECKING:
@@ -70,32 +80,21 @@ def _eval_position(
     on: str | None,
 ) -> Position:
     source = position if on is None else position.set_param_coord(name=on, validate=False)
-    if request.prepared is not None:
-        context = resolve_param_runtime_context(
-            source,
-            on=on,
-            sequence_dim=request.sequence_dim,
-            batch_dims=request.batch_dims,
-            sequence_size_coord=request.sequence_size_coord,
-        )
-        return evaluate_param(
-            context,
-            query=request.query,
-            opts=request.opts.position_opts,
-            validate=False,
-            prepared=request.prepared.position,
-        )
-    kwargs = {
-        "on": on,
-        "opts": request.opts.position_opts,
-        "validate": False,
-        "sequence_dim": request.sequence_dim,
-        "batch_dims": request.batch_dims,
-        "sequence_size_coord": request.sequence_size_coord,
-    }
-    if request.mode == "at":
-        return source.param.at(request.query, **kwargs)
-    return source.param.resample_to(request.query, **kwargs)
+    context = resolve_param_runtime_context(
+        source,
+        on=on,
+        sequence_dim=request.sequence_dim,
+        batch_dims=request.batch_dims,
+        sequence_size_coord=request.sequence_size_coord,
+    )
+    return evaluate_param(
+        context,
+        query=request.query,
+        opts=request.opts.position_opts,
+        validate=False,
+        prepared=None if request.prepared is None else request.prepared.position,
+        output_intent="trajectory",
+    )
 
 
 def _eval_rotation(
@@ -103,13 +102,14 @@ def _eval_rotation(
     request: PoseTemporalRequest,
     *,
     on: str | None,
-) -> Rotation:
+) -> tuple[Rotation, QueryOutputPlan]:
     source = rotation if on is None else rotation.set_param_coord(name=on, validate=False)
+    plan = _rotation_query_output_plan(source, request, on=on)
     resolved = as_rotation_method(request.opts.rotation_opts, method=resolve_rotation_method(request.opts.rotation_opts))
     if request.prepared is not None:
         from .rotation_temporal_ops import rotation_param_at
 
-        return rotation_param_at(
+        result = rotation_param_at(
             source,
             query=request.query,
             on=on,
@@ -121,6 +121,7 @@ def _eval_rotation(
             owner=request.owner,
             prepared=request.prepared.rotation,
         )
+        return result, plan
     kwargs = {
         "on": on,
         "opts": resolved,
@@ -130,8 +131,31 @@ def _eval_rotation(
         "sequence_size_coord": request.sequence_size_coord,
     }
     if request.mode == "at":
-        return source.param.at(request.query, **kwargs)
-    return source.param.resample_to(request.query, **kwargs)
+        return source.param.at(request.query, **kwargs), plan
+    return source.param.resample_to(request.query, **kwargs), plan
+
+
+def _rotation_query_output_plan(
+    source: Rotation,
+    request: PoseTemporalRequest,
+    *,
+    on: str | None,
+) -> QueryOutputPlan:
+    context = resolve_param_runtime_context(
+        source, on=on, sequence_dim=request.sequence_dim,
+        batch_dims=request.batch_dims,
+        sequence_size_coord=request.sequence_size_coord,
+    )
+    return preflight_query_output_namespace(
+        context.ds, request.query,
+        sequence_dim=context.sequence_dim, batch_dims=context.batch_dims,
+        owner=request.owner, intent="trajectory",
+        generated_names=generated_query_coordinate_names(
+            operation="evaluate", param_name=context.spec.name,
+            size_name=context.sequence_size_coord, trajectory=True,
+            mapped_dataset=False,
+        ),
+    )
 
 
 def _eval_payload_carrier(
@@ -143,33 +167,22 @@ def _eval_payload_carrier(
     carrier = AnalysisObject._from_unvalidated(analysis_object_dataset(source))
     if on is not None:
         carrier = carrier.set_param_coord(name=on, validate=False)
-    if request.prepared is not None:
-        context = resolve_param_runtime_context(
-            carrier,
-            on=on,
-            sequence_dim=request.sequence_dim,
-            batch_dims=request.batch_dims,
-            sequence_size_coord=request.sequence_size_coord,
-        )
-        evaluated = evaluate_param(
-            context,
-            query=request.query,
-            opts=request.opts.position_opts,
-            validate=False,
-            prepared=request.prepared.position,
-        )
-        return analysis_object_dataset(evaluated)
-    kwargs = {
-        "on": on,
-        "opts": request.opts.position_opts,
-        "validate": False,
-        "sequence_dim": request.sequence_dim,
-        "batch_dims": request.batch_dims,
-        "sequence_size_coord": request.sequence_size_coord,
-    }
-    if request.mode == "at":
-        return analysis_object_dataset(carrier.param.at(request.query, **kwargs))
-    return analysis_object_dataset(carrier.param.resample_to(request.query, **kwargs))
+    context = resolve_param_runtime_context(
+        carrier,
+        on=on,
+        sequence_dim=request.sequence_dim,
+        batch_dims=request.batch_dims,
+        sequence_size_coord=request.sequence_size_coord,
+    )
+    evaluated = evaluate_param(
+        context,
+        query=request.query,
+        opts=request.opts.position_opts,
+        validate=False,
+        prepared=None if request.prepared is None else request.prepared.position,
+        output_intent="trajectory",
+    )
+    return analysis_object_dataset(evaluated)
 
 
 def _overlay_components_payload(
@@ -200,6 +213,29 @@ def _overlay_components_payload(
         )
         merged[carrier_var] = typed_ds[typed_var]
     return merged
+
+
+def _without_redundant_rotation_query_coords(
+    rotation: Rotation,
+    *,
+    source: Pose,
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    plan: QueryOutputPlan,
+) -> Rotation:
+    """Let the position/carrier own caller-only labels during recomposition."""
+    if not isinstance(query, xr.DataArray):
+        return rotation
+    source_ds = analysis_object_dataset(source)
+    dataset = analysis_object_dataset(rotation)
+    remove = tuple(
+        name for name in query.coords
+        if name in dataset.coords and name not in plan.generated_names
+        and name != plan.sequence_dim
+        and (name not in source_ds.coords or reserved_coord_is_owned(source_ds, name=name))
+    )
+    if not remove:
+        return rotation
+    return rotation._rewrap_dataset(dataset.drop_vars(remove), validate=False)
 
 
 def _resolve_matrix_payload_var(
@@ -367,9 +403,66 @@ def _rewrap_pose_temporal_output(
     return source._rewrap_dataset(merged_ds, validate=validate)
 
 
+def _empty_matrix_temporal_output(
+    source: Pose,
+    carrier_ds: xr.Dataset,
+    *,
+    request: PoseTemporalRequest,
+) -> Pose:
+    """Keep unavailable matrix rows rigid while validity marks them missing."""
+    var_name = _resolve_matrix_payload_var(
+        carrier_ds, owner=request.owner, what="pose temporal empty matrix payload",
+    )
+    _, _, _, core_dims = read_roles(carrier_ds)
+    row_dim, col_dim = core_dims
+    matrix = carrier_ds[var_name]
+    identity = xr.DataArray(
+        np.eye(4, dtype=np.float64), dims=(row_dim, col_dim),
+        coords={dim: carrier_ds.coords[dim] for dim in core_dims if dim in carrier_ds.coords},
+    )
+    if "valid" not in carrier_ds.coords:
+        raise ValueError(f"{request.owner}: empty matrix result is missing generated validity.")
+    filled = xr.where(carrier_ds.coords["valid"], matrix, identity, keep_attrs=True)
+    filled = filled.transpose(*matrix.dims)
+    filled.encoding = matrix.encoding.copy()
+    output = declare_no_usable_sequence_rows(
+        carrier_ds.assign({var_name: filled}), owner=request.owner,
+    )
+    if not request.validate and len(output.data_vars) > 1:
+        return _rewrap_matrix_aux_unvalidated(
+            source, merged_ds=output, matrix_template_ds=output[[var_name]],
+            owner=request.owner,
+        )
+    return _rewrap_pose_temporal_output(source, merged_ds=output, validate=request.validate)
+
+
+def _assemble_pose_temporal_payload(
+    carrier_ds: xr.Dataset,
+    recomposed: Pose,
+    *,
+    source_rep: str,
+    source_matrix_var: str | None,
+    owner: str,
+) -> tuple[xr.Dataset, xr.Dataset | None]:
+    if source_rep != "matrix":
+        merged = _overlay_components_payload(
+            carrier_ds, analysis_object_dataset(recomposed), owner=owner
+        )
+        return merged, None
+    if source_matrix_var is None:
+        raise ValueError(f"{owner}: missing source matrix payload selection.")
+    template = analysis_object_dataset(recomposed.as_matrix(validate=False))
+    merged = _overlay_matrix_payload(
+        carrier_ds, template, source_matrix_var=source_matrix_var, owner=owner
+    )
+    return merged, template
+
+
 def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:
     source = request.pose
-    source_rep = get_pose_rep(analysis_object_dataset(source), owner=request.owner)
+    source_ds = analysis_object_dataset(source)
+    source_rep = get_pose_rep(source_ds, owner=request.owner)
+    empty_source = has_no_usable_sequence_rows(source_ds, owner=request.owner)
     on = _effective_param_key(request)
     carrier_ds = _eval_payload_carrier(source, request, on=on)
     matrix_source_var: str | None = None
@@ -378,26 +471,22 @@ def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:
         decompose_source, matrix_source_var = _matrix_only_pose_source(source, owner=request.owner)
     position, rotation = decompose_source.decompose(validate=False)
     position_out = _eval_position(position, request, on=on)
-    rotation_out = _eval_rotation(rotation, request, on=on)
+    rotation_out, rotation_plan = _eval_rotation(rotation, request, on=on)
+    rotation_out = _without_redundant_rotation_query_coords(
+        rotation_out, source=source, query=request.query, plan=rotation_plan,
+    )
     recomposed = source.__class__.from_components(rotation_out, position_out, validate=False)
-    matrix_template_ds: xr.Dataset | None = None
-    if source_rep == "matrix":
-        if matrix_source_var is None:
-            raise ValueError(f"{request.owner}: missing source matrix payload selection.")
-        typed_matrix = analysis_object_dataset(recomposed.as_matrix(validate=False))
-        matrix_template_ds = typed_matrix
-        merged_ds = _overlay_matrix_payload(
-            carrier_ds,
-            typed_matrix,
-            source_matrix_var=matrix_source_var,
-            owner=request.owner,
-        )
-    else:
-        merged_ds = _overlay_components_payload(
-            carrier_ds,
-            analysis_object_dataset(recomposed),
-            owner=request.owner,
-        )
+    if source_rep == "matrix" and empty_source:
+        return _empty_matrix_temporal_output(source, carrier_ds, request=request)
+    merged_ds, matrix_template_ds = _assemble_pose_temporal_payload(
+        carrier_ds,
+        recomposed,
+        source_rep=source_rep,
+        source_matrix_var=matrix_source_var,
+        owner=request.owner,
+    )
+    if empty_source:
+        merged_ds = declare_no_usable_sequence_rows(merged_ds, owner=request.owner)
     if _needs_matrix_aux_rebind(
         validate=request.validate,
         matrix_template_ds=matrix_template_ds,

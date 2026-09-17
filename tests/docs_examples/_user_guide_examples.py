@@ -8,7 +8,12 @@ import numpy as np
 import xarray as xr
 
 from tal import ufuncs
-from tal.astro import AstroIERSOptions, AstroOptions, AstroTimeOptions, TopocentricDirection
+from tal.astro import (
+    AstroIERSOptions,
+    AstroOptions,
+    AstroTimeOptions,
+    TopocentricDirection,
+)
 from tal.astro.sun import SunDirectionOptions, direction_to_sun
 from tal.core import AnalysisObject, ParamEvalOptions, ParamSyncOptions, synchronize
 from tal.core.event_ops import (
@@ -16,18 +21,40 @@ from tal.core.event_ops import (
     Condition,
     WhenOptions,
 )
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
-from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
+from tal.frames import (
+    FrameGraph,
+    find_path,
+    fold_path,
+    render_snapshot_ascii,
+    snapshot_from_seeds,
+)
 from tal.geo import (
     ENUOptions,
-    GeodeticInterpolationOptions,
     GeodesicOptions,
+    GeodeticInterpolationOptions,
     GeodeticPosition,
     LocalOrigin,
     ProjectedPosition,
     transform_crs,
 )
-from tal.linalg import Matrix, Vector, Vector3, add, dot, inv, matmul, norm, pinv, solve, sub
+from tal.linalg import (
+    Matrix,
+    Vector,
+    Vector3,
+    add,
+    dot,
+    inv,
+    matmul,
+    norm,
+    pinv,
+    solve,
+    sub,
+)
 from tal.spatial import Pose, Position, Rotation
 
 
@@ -451,6 +478,13 @@ def example_guide_spatial_pose() -> None:
     pose_m = pose.as_matrix()
     rot_at = rot.param.at([0.25], on="time_s")
     pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
+    labeled_query = xr.DataArray(
+        [[0.25, 0.75], [0.5, 0.9]],
+        dims=("row_query", "when"),
+        coords={"row_query": ["a", "b"], "when": ["early", "late"]},
+    )
+    pose_labeled = pose.param.at(labeled_query, on="time_s")
+    rot_labeled = rot.param.at(labeled_query, on="time_s")
     assert isinstance(out_pos, Position)
     assert associated_pos.graph is graph
     assert pos.graph is None
@@ -462,6 +496,9 @@ def example_guide_spatial_pose() -> None:
     assert pose_m.as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
     assert rot_at.as_dataset(copy="none").sizes["sample"] == 1
     assert pose_rs.as_dataset(copy="none").sizes["sample"] == 5
+    assert pose_labeled.as_dataset(copy="none").sizes["sample"] == 4
+    assert rot_labeled.as_dataset(copy="none").sizes["sample"] == 4
+    np.testing.assert_array_equal(pose_labeled.as_dataset(copy="none").coords["row_query"], ["a", "a", "b", "b"])
     assert pose.graph is graph
     assert detached.graph is None
     assert world_samples.graph is graph

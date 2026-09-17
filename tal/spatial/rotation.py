@@ -52,6 +52,7 @@ from .metadata import (
     set_expressed_in,
     set_rotation_rep,
 )
+from .ops.core_chunks import single_core_chunk
 from .ops.frame_api_ops import rotation_class_solve_path_transform
 from .ops.frame_owner_common import require_parent_basis_for_inverse
 from .ops.quat_role_dim_ops import (
@@ -150,7 +151,7 @@ def _convert_quat_to_matrix(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     )
     matrix = xr.apply_ufunc(
         wrap_quat_to_matrix_backend,
-        candidate[var_name],
+        single_core_chunk(candidate[var_name], dim=quat_dim),
         input_core_dims=[[quat_dim]],
         output_core_dims=[[row_dim, col_dim]],
         vectorize=False,
@@ -184,7 +185,7 @@ def _convert_matrix_to_quat(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     )
     quat = xr.apply_ufunc(
         wrap_matrix_to_quat_backend,
-        candidate[var_name],
+        single_core_chunk(single_core_chunk(candidate[var_name], dim=row_dim), dim=col_dim),
         input_core_dims=[[row_dim, col_dim]],
         output_core_dims=[[quat_dim]],
         vectorize=False,
@@ -275,8 +276,8 @@ def _compose_quat_datasets(
     )
     out = xr.apply_ufunc(
         partial(wrap_compose_quat_kernel, owner=owner),
-        aligned_left,
-        aligned_right,
+        single_core_chunk(aligned_left, dim=left_quat_dim),
+        single_core_chunk(aligned_right, dim=right_quat_dim),
         input_core_dims=[[left_quat_dim], [right_quat_dim]],
         output_core_dims=[[left_quat_dim]],
         vectorize=False,
@@ -295,7 +296,7 @@ def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, st
     var_name, quat_dim = require_quat_var_and_dim(candidate, owner=owner)
     quat = xr.apply_ufunc(
         partial(wrap_inverse_quat_kernel, owner=owner),
-        candidate[var_name],
+        single_core_chunk(candidate[var_name], dim=quat_dim),
         input_core_dims=[[quat_dim]],
         output_core_dims=[[quat_dim]],
         vectorize=False,

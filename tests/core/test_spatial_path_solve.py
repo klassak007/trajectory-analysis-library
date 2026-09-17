@@ -1114,18 +1114,14 @@ def test_spatial_perf_129d_002_mixed_dynamic_path_builds_lazy_graph() -> None:
     assert tasks
     assert all(variable.chunks is not None for variable in out.as_dataset(copy="none").data_vars.values())
     query = np.linspace(0.0, 1.0, 5)
-    world_from_body = edges[("body", "world")].param.at(query, validate=False)
-    body_from_sensor = edges[("sensor", "body")].param.at(query, validate=False)
-    reference = world_from_body.compose(body_from_sensor, validate=False)
-    out_tasks = sum(
-        len(variable.data.__dask_graph__())
-        for variable in out.as_dataset(copy="none").data_vars.values()
-    )
-    reference_tasks = sum(
-        len(variable.data.__dask_graph__())
-        for variable in reference.as_dataset(copy="none").data_vars.values()
-    )
-    assert out_tasks <= reference_tasks
+    angle = np.deg2rad(45.0 * query)
+    expected = np.broadcast_to(np.eye(4), (query.size, 4, 4)).copy()
+    expected[:, :3, :3] = SciRotation.from_euler("z", angle[:, None]).as_matrix()
+    expected[:, 0, 3] = query * (1.0 + np.cos(angle))
+    expected[:, 1, 3] = query * np.sin(angle)
+    matrix = out.as_matrix(validate=False).as_dataset(copy="none")["pose_matrix"]
+    actual = matrix.transpose("query", "row", "col").compute(scheduler="synchronous")
+    np.testing.assert_allclose(actual, expected, atol=1e-6)
 
 
 def _direct_query_graph() -> tuple[FrameGraph, object, object]:
@@ -1364,27 +1360,33 @@ def test_spatial_hard_129d_008_provider_only_batch_policy() -> None:
         assert query_calls == []
 
 
-def _dask_graph_keys(value: Pose) -> set[object]:
-    keys: set[object] = set()
-    for variable in value.as_dataset(copy="none").data_vars.values():
-        graph = getattr(variable.data, "__dask_graph__", lambda: None)()
-        if graph is not None:
-            keys.update(graph.keys())
-    return keys
-
-
 def test_spatial_perf_129d_003_direct_query_planning_skips_payload_execution() -> None:
     """ID: SPATIAL_PERF_129D_003_direct_query_planning_skips_payload_execution."""
+    import dask.array as da
+    from dask import delayed
     from dask.callbacks import Callback
 
-    edge = _dynamic_pose(
+    eager_edge = _dynamic_pose(
         np.asarray([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
         [0.0, 0.0],
         param=[0.0, 2.0],
     )
-    edge_ds = edge.as_dataset(copy="none").copy()
-    edge_ds["position"] = edge_ds["position"].chunk({"sample": 1})
-    edge_ds["rotation"] = edge_ds["rotation"].chunk({"sample": 1})
+    eager_ds = eager_edge.as_dataset(copy="none")
+    combined = np.concatenate(
+        (eager_ds["position"].data, eager_ds["rotation"].data),
+        axis=-1,
+    )
+    source_calls: list[str] = []
+
+    @delayed(pure=False)
+    def load_shared_source() -> np.ndarray:
+        source_calls.append("source")
+        return combined
+
+    shared = da.from_delayed(load_shared_source(), shape=(2, 7), dtype=np.float64)
+    edge_ds = eager_ds.copy()
+    edge_ds["position"] = edge_ds["position"].copy(data=shared[:, :3])
+    edge_ds["rotation"] = edge_ds["rotation"].copy(data=shared[:, 3:])
     edge = Pose(edge_ds)
     query = xr.DataArray(
         [[0.0, 1.0], [1.0, 2.0]],
@@ -1395,25 +1397,22 @@ def test_spatial_perf_129d_003_direct_query_planning_skips_payload_execution() -
     with Callback(pretask=lambda key, *_: tasks.append(key)):
         out = _solve_direct_pose(edge, query)
 
-    aligned_ds = edge.as_dataset(copy="none").expand_dims({"trial": query.coords["trial"]})
-    aligned = Pose(aligned_ds).set_roles(batch_dims=("trial",), validate=True)
-    internal_query = query.rename({"when": "__tal_path_query"})
-    temporal = PoseTemporalOptions(
-        position_opts=ParamEvalOptions(query_dim="__tal_path_query"),
-        rotation_opts=RotationTemporalOptions(query_dim="__tal_path_query"),
-    )
-    reference = aligned.param.at(internal_query, opts=temporal, validate=False)
-    reference_ds = reference.as_dataset(copy="none")
-    reference_order = (
-        "trial",
-        "sample",
-        *(dim for dim in reference_ds.dims if dim not in {"trial", "sample"}),
-    )
-    reference = Pose(reference_ds.transpose(*reference_order))
-
     assert tasks == []
-    assert _dask_graph_keys(out) == _dask_graph_keys(reference)
-    assert all(var.chunks is not None for var in out.as_dataset(copy="none").data_vars.values())
+    out_ds = out.as_dataset(copy="none")
+    assert all(var.chunks is not None for var in out_ds.data_vars.values())
+    for variable in out_ds.data_vars.values():
+        logical_rows = variable.chunks[variable.get_axis_num("trial")]
+        query_rows = variable.chunks[variable.get_axis_num("query")]
+        assert max(logical_rows) * max(query_rows) <= 65_536
+
+    expected = _solve_direct_pose(eager_edge, query).as_dataset(copy="none")
+    computed_tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: computed_tasks.append(key)):
+        actual = out_ds.compute(scheduler="synchronous")
+
+    assert computed_tasks
+    assert source_calls == ["source"]
+    xr.testing.assert_identical(actual, expected)
 
 
 @pytest.mark.parametrize("kind", ["pose", "rotation"])

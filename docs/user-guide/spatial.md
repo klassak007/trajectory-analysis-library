@@ -70,6 +70,13 @@ rot_q = rot_m.as_quat()
 pose_m = pose.as_matrix()
 rot_at = rot.param.at([0.25], on="time_s")
 pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
+labeled_query = xr.DataArray(
+    [[0.25, 0.75], [0.5, 0.9]],
+    dims=("row_query", "when"),
+    coords={"row_query": ["a", "b"], "when": ["early", "late"]},
+)
+pose_labeled = pose.param.at(labeled_query, on="time_s")
+rot_labeled = rot.param.at(labeled_query, on="time_s")
 ```
 
 This example builds position and rotation trajectories, composes them into a
@@ -129,6 +136,11 @@ Spatial objects inherit `param` accessors, but typed objects can choose geometry
 appropriate interpolation. `Rotation.param.at(...)` uses rotation-aware
 interpolation by default; `Pose.param.at(...)` uses linear position
 interpolation and rotation-aware interpolation for the rotational part.
+For a labeled multidimensional query, typed Pose and Rotation results flatten
+query-only axes into a positional `sample` axis in row-major order. The
+original query labels remain sample-dependent coordinates; shared source batch
+axes remain batch axes. Ordinary parameter evaluation instead restores the
+caller's labeled grid.
 
 Kinematic temporal methods are available on the relevant typed wrappers:
 

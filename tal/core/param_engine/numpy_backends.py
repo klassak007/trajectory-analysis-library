@@ -172,33 +172,31 @@ def datetime_map_block_numpy_status(
     return _map_rows_with_status(datetime_map_row, prepared, method=method, dup_code=dup_code)
 
 
-def validate_map_domain_block_numpy(
+def validate_map_domain_block_numpy_status(
     param_block: np.ndarray,
     valid_block: np.ndarray,
     *,
     param_kind: str,
-) -> np.ndarray:
-    """Validate source rows without inventing a query-dependent decision."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return compact source-domain validation state for each public row."""
     shape = np.shape(param_block)
     if param_kind == "datetime64":
+        from .datetime_rows import datetime_map_row
+
         query = np.empty(shape[:-1] + (0,), dtype="datetime64[ns]")
-        datetime_map_block_numpy(
-            param_block,
-            valid_block,
-            query,
-            method="nearest",
-            dup_code=0,
+        prepared = prepare_datetime_map_block_rows(param_block, valid_block, query)
+        result = _map_rows_with_status(
+            datetime_map_row, prepared, method="nearest", dup_code=0
         )
     else:
+        from .numeric_rows import numeric_map_row
+
         query = np.empty(shape[:-1] + (0,), dtype=np.asarray(param_block).dtype)
-        map_block_numpy(
-            param_block,
-            valid_block,
-            query,
-            method="nearest",
-            dup_code=0,
+        prepared = prepare_map_block_rows(param_block, valid_block, query)
+        result = _map_rows_with_status(
+            numeric_map_row, prepared, method="nearest", dup_code=0
         )
-    return np.ones(shape[:-1], dtype=np.int8)
+    return result[4], result[5], result[6]
 
 
 def datetime_bounds_block_numpy(
@@ -232,5 +230,5 @@ __all__ = [
     "datetime_map_block_numpy_status",
     "map_block_numpy",
     "map_block_numpy_status",
-    "validate_map_domain_block_numpy",
+    "validate_map_domain_block_numpy_status",
 ]

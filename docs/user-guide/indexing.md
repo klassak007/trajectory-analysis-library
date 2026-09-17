@@ -65,6 +65,9 @@ three ask TAL to interpret `time_s` as the query domain.
 - Shared dimensions align by labels, not by raw position.
 - `ao.param.sel(...)` selects recorded samples; use `ao.param.at(...)` when you
   need interpolation.
+- Point selection keeps coordinates sampled from the source. Rename a caller
+  query axis or index if it has the same name as one of those coordinates;
+  a same-named caller auxiliary coordinate cannot replace the sampled values.
 
 ## Quick Checks
 

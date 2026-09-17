@@ -917,3 +917,29 @@ def test_topo_hard_005_no_raw_runtime_exception_leakage_after_migration() -> Non
     bad_target = Position(target_ds)
     with pytest.raises(ValueError, match=r"^spatial\.rotation\.apply:"):
         rot.apply(bad_target, validate=True)
+
+
+@pytest.mark.parametrize("kind", ("rotation", "pose"))
+def test_spatial_apply_accepts_split_fixed_core_chunks(kind: str) -> None:
+    """ID: SPATIAL_CORE_FIXED_CORE_CHUNKS_004_apply_preserves_lazy_outer_rows."""
+    pytest.importorskip("dask.array")
+    rotation = _rotation_quat(np.asarray(
+        [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.70710678, 0.70710678]],
+        dtype=float,
+    ))
+    position = _position(np.asarray([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float))
+    eager = Pose.from_components(rotation, position) if kind == "pose" else rotation
+    chunks = {"sample": 1, "quat": (2, 2)}
+    if kind == "pose":
+        chunks["axis"] = (2, 1)
+    source = type(eager)(eager.as_dataset(copy="none").chunk(chunks))
+    target = Position(position.as_dataset(copy="none").chunk({"sample": 1, "axis": (1, 2)}))
+    before = source.as_dataset(copy="deep")
+    actual = source.apply(target)
+    expected = eager.apply(position)
+    assert all(var.chunks is not None for var in actual.as_dataset(copy="none").data_vars.values())
+    xr.testing.assert_identical(
+        actual.as_dataset(copy="none").compute(scheduler="synchronous"),
+        expected.as_dataset(copy="none"),
+    )
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)

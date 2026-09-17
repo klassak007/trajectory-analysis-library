@@ -2033,20 +2033,6 @@ def test_spatial_arch_172_topology_scan_backends_are_schema_free() -> None:
     assert "from scipy" not in numba_text
 
 
-def test_arch_spatial_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded() -> None:
-    """ID: ARCH_SPATIAL_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded."""
-    text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "def _eval_payload_carrier(" in text
-    assert "AnalysisObject._from_unvalidated(" in text
-    assert "carrier.param.at(" in text
-    assert "carrier.param.resample_to(" in text
-    assert "def _overlay_components_payload(" in text
-    assert "def _overlay_matrix_payload(" in text
-    assert "def _resolve_matrix_payload_var(" in text
-    assert "def _matrix_only_pose_source(" in text
-    assert "_matrix_only_pose_source(source, owner=request.owner)" in text
-
-
 def test_arch_spatial_147_pose_temporal_matrix_payload_resolution_uses_matrix_candidate_filter_not_global_single_var_selector() -> None:
     """ID: ARCH_SPATIAL_147_pose_temporal_matrix_payload_resolution_uses_matrix_candidate_filter_not_global_single_var_selector."""
     text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")

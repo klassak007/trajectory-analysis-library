@@ -107,6 +107,99 @@ def _registered_path(edges: int, *, lazy: bool = False) -> tuple[FrameGraph, tup
     return graph, tuple(values)
 
 
+@pytest.mark.parametrize("direct_path", (False, True))
+def test_pose_query_coordinate_cannot_replace_payload_before_lazy_work(direct_path: bool) -> None:
+    """ID: SPATIAL_HARD_QUERY_NAMESPACE_002_pose_and_path_payloads_are_protected."""
+    from dask.callbacks import Callback
+
+    graph, providers = _registered_path(1, lazy=True)
+    before = providers[0].as_dataset(copy="deep")
+    query = xr.DataArray([0.5], dims="when", coords={"position": ("when", [99.0])})
+    tasks: list[object] = []
+    owner = "spatial.path_solve.pose" if direct_path else "spatial.pose.param.at"
+    with Callback(pretask=lambda key, *_: tasks.append(key)), pytest.raises(
+        ValueError, match=rf"^{owner}: .*query name 'position' collides",
+    ):
+        if direct_path:
+            solve_pose_path_transform("f1", "f0", graph=graph, query=query)
+        else:
+            providers[0].param.at(query)
+    assert tasks == []
+    xr.testing.assert_identical(providers[0].as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("result_type", ("pose", "rotation"))
+@pytest.mark.parametrize("batched", (False, True))
+def test_spatial_core_empty_path_query_001_lazy_dynamic_path_uses_empty_owner(
+    result_type: str,
+    batched: bool,
+) -> None:
+    """ID: SPATIAL_CORE_EMPTY_PATH_QUERY_001_lazy_dynamic_path_uses_empty_owner."""
+    from dask.callbacks import Callback
+
+    query = (
+        xr.DataArray(
+            np.empty((2, 0)),
+            dims=("trial", "when"),
+            coords={"trial": ["a", "b"]},
+        )
+        if batched
+        else xr.DataArray(np.empty(0), dims="when")
+    )
+    lazy_graph, lazy_providers = _registered_path(1, lazy=True)
+    eager_graph, _ = _registered_path(1)
+    before = lazy_providers[0].as_dataset(copy="deep")
+    solve = solve_pose_path_transform if result_type == "pose" else solve_rotation_path_transform
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = solve("f1", "f0", graph=lazy_graph, query=query)
+
+    dataset = result.as_dataset(copy="none")
+    assert tasks == []
+    assert result.graph is lazy_graph
+    assert all(variable.chunks is not None for variable in dataset.data_vars.values())
+    expected = solve("f1", "f0", graph=eager_graph, query=query).as_dataset(copy="none")
+    xr.testing.assert_identical(dataset.compute(scheduler="synchronous"), expected)
+    xr.testing.assert_identical(lazy_providers[0].as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("result_type", ("pose", "rotation"))
+@pytest.mark.parametrize("shape", ((2, 0), (0, 2), (2, 0, 3)))
+def test_spatial_core_zero_batch_path_query_001_lazy_domain_skips_empty_kernels(
+    result_type: str,
+    shape: tuple[int, ...],
+) -> None:
+    """ID: SPATIAL_CORE_ZERO_BATCH_PATH_QUERY_001_lazy_domain_skips_empty_kernels."""
+    from dask.callbacks import Callback
+
+    graph = FrameGraph()
+    provider_ds = _edge_pose(0, lazy=True).as_dataset(copy="none").copy()
+    provider_ds = provider_ds.assign_coords(time=provider_ds.coords["time"].chunk({"sample": 5}))
+    provider = Pose(provider_ds, parent="f0", child="f1", graph=graph)
+    provider.register()
+    before = provider.as_dataset(copy="deep")
+    dims = (*tuple(f"query_batch_{index}" for index in range(len(shape) - 1)), "when")
+    coords = {dim: np.arange(size, dtype=np.int64) for dim, size in zip(dims, shape, strict=True)}
+    query = xr.DataArray(np.empty(shape), dims=dims, coords=coords)
+    solve = solve_pose_path_transform if result_type == "pose" else solve_rotation_path_transform
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = solve("f1", "f0", graph=graph, query=query)
+
+    dataset = result.as_dataset(copy="none")
+    assert tasks == []
+    expected_dims = (*dims[:-1], "query")
+    expected_sizes = (*shape[:-1], shape[-1])
+    assert tuple(dataset.sizes[dim] for dim in expected_dims) == expected_sizes
+    expected_query = query.rename({dims[-1]: "query"})
+    for output_dim in expected_dims:
+        assert dataset.xindexes[output_dim].equals(expected_query.xindexes[output_dim])
+    for variable in dataset.data_vars.values():
+        assert variable.dims[: len(expected_dims)] == expected_dims
+    dataset.compute(scheduler="synchronous")
+    xr.testing.assert_identical(provider.as_dataset(copy="none"), before)
+
+
 @pytest.mark.parametrize("kind", ("range", "transform"))
 @pytest.mark.parametrize("result_type", ("pose", "rotation"))
 def test_spatial_core_path_block_index_001_direct_queries_preserve_native_batch_indexes(

@@ -10,6 +10,7 @@ from ..kernels.fixed_size_backends import (
     pose_compose_translation_block_backend,
     pose_inverse_translation_block_backend,
 )
+from .core_chunks import single_core_chunk
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 _MATRIX_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
@@ -62,6 +63,8 @@ def apply_components_to_matrix_kernel(
     col_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    pos_da = single_core_chunk(pos_da, dim=pos_dim)
+    rot_da = single_core_chunk(rot_da, dim=quat_dim)
     matrix = xr.apply_ufunc(
         partial(_wrap_components_to_matrix_kernel, owner=owner),
         pos_da,
@@ -86,6 +89,9 @@ def apply_pose_compose_translation_kernel(
     right_quat_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    left_t = single_core_chunk(left_t, dim=left_dim)
+    right_t = single_core_chunk(right_t, dim=right_dim)
+    right_q = single_core_chunk(right_q, dim=right_quat_dim)
     out_t = xr.apply_ufunc(
         partial(_wrap_compose_translation_kernel, owner=owner),
         left_t,
@@ -98,7 +104,6 @@ def apply_pose_compose_translation_kernel(
         output_dtypes=[np.float64],
         dask_gufunc_kwargs={
             "output_sizes": {left_dim: 3},
-            "allow_rechunk": True,
         },
     )
     return out_t.assign_coords({left_dim: list(_XYZ_LABELS)})
@@ -112,6 +117,8 @@ def apply_pose_inverse_translation_kernel(
     quat_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    translation = single_core_chunk(translation, dim=pos_dim)
+    quat = single_core_chunk(quat, dim=quat_dim)
     out_t = xr.apply_ufunc(
         partial(_wrap_inverse_translation_kernel, owner=owner),
         translation,

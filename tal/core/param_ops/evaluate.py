@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from dataclasses import replace
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import xarray as xr
@@ -11,11 +12,15 @@ from ..param_engine import (
 )
 from ..param_engine.map_apply import apply_param_map_with_batch_dims
 from ..param_engine.prepared import PreparedParamEvaluation
-from .finalize import finalize_param_output
+from ..param_engine.query_topology import (
+    QueryOutputPlan,
+    generated_query_coordinate_names,
+    preflight_query_output_namespace,
+)
+from .finalize import assign_sampled_query_coordinate, finalize_param_output
 from .guards import (
     assert_query_dim_safe,
     assert_reserved_metadata_safe,
-    mark_reserved_coord,
 )
 from .runtime_prepare import prepare_runtime_param_evaluation
 from .types import ParamEvalOptions, ParamRuntimeContext
@@ -58,6 +63,44 @@ def _apply_map_dataset(
     return out.assign_coords(base.coords)
 
 
+def _preflight_evaluation_request(
+    context: ParamRuntimeContext,
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    opts: ParamEvalOptions,
+    output_intent: Literal["grid", "trajectory"],
+) -> QueryOutputPlan:
+    assert_query_dim_safe(
+        context.ds,
+        sequence_dim=context.sequence_dim,
+        query_dim=opts.query_dim,
+        owner="param at/resample",
+    )
+    assert_reserved_metadata_safe(
+        context.ds,
+        reserved=("valid", "sample_index"),
+        param_name=context.spec.name,
+        owner="param at/resample",
+    )
+    trajectory = output_intent == "trajectory" or not isinstance(query, xr.DataArray) or (
+        len(set(query.dims) - set(context.batch_dims)) <= 1
+    )
+    return preflight_query_output_namespace(
+        context.ds,
+        query,
+        sequence_dim=context.sequence_dim,
+        batch_dims=context.batch_dims,
+        owner="param at/resample",
+        intent=output_intent,
+        generated_names=generated_query_coordinate_names(
+            operation="evaluate",
+            param_name=context.spec.name,
+            size_name=context.sequence_size_coord,
+            trajectory=trajectory,
+            mapped_dataset=True,
+        ),
+    )
+
+
 def evaluate_param(
     context: ParamRuntimeContext,
     *,
@@ -65,6 +108,7 @@ def evaluate_param(
     opts: ParamEvalOptions,
     validate: bool,
     prepared: PreparedParamEvaluation | None = None,
+    output_intent: Literal["grid", "trajectory"] = "grid",
 ) -> AnalysisObject:
     """Evaluate AO data on a parameter query grid.
 
@@ -88,18 +132,7 @@ def evaluate_param(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    assert_query_dim_safe(
-        context.ds,
-        sequence_dim=context.sequence_dim,
-        query_dim=opts.query_dim,
-        owner="param at/resample",
-    )
-    assert_reserved_metadata_safe(
-        context.ds,
-        reserved=("valid", "sample_index"),
-        param_name=context.spec.name,
-        owner="param at/resample",
-    )
+    output_plan = _preflight_evaluation_request(context, query, opts, output_intent)
     evaluation = prepare_runtime_param_evaluation(
         context,
         query=query,
@@ -110,6 +143,7 @@ def evaluate_param(
     )
     grid = evaluation.grid
     pmap = evaluation.param_map
+    output_plan = replace(output_plan, topology=evaluation.query_topology)
     ds_out = _apply_map_dataset(
         context.ds,
         sequence_dim=context.sequence_dim,
@@ -117,15 +151,21 @@ def evaluate_param(
         sequence_size_coord=context.sequence_size_coord,
         param_map=pmap,
     )
-    ds_out = ds_out.assign_coords({"valid": mark_reserved_coord(pmap.valid, name="valid")})
+    if output_intent == "grid" and grid.stacked_dims is not None:
+        ds_out = assign_sampled_query_coordinate(
+            ds_out, query=grid.values, query_dim=grid.query_dim, name=context.spec.name,
+        )
     return finalize_param_output(
         context,
         ds_out,
         query=grid.values,
         query_dim=opts.query_dim,
         valid_query=pmap.valid,
+        query_topology=evaluation.query_topology,
         validate=validate,
-        trajectory=(grid.stacked_dims is None),
+        trajectory=(output_intent == "trajectory" or grid.stacked_dims is None),
+        owner="param at/resample",
+        output_plan=output_plan,
     )
 
 

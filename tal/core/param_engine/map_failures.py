@@ -7,6 +7,8 @@ import xarray as xr
 
 from tal.utils.xarray_namespace import unique_temp_dim
 
+from .blocking import PARAM_LOGICAL_ROW_LIMIT
+
 MAP_STATUS_OK = 0
 MAP_STATUS_MONOTONIC = 1
 MAP_STATUS_DUPLICATE = 2
@@ -187,29 +189,84 @@ def first_map_failure(
     )
 
 
-def map_failure_dependency(
-    statuses: Sequence[xr.DataArray],
-    positions: Sequence[xr.DataArray],
-    details: Sequence[xr.DataArray],
-    *,
-    starts: Sequence[int],
-) -> xr.DataArray:
-    taken = tuple(str(dim) for value in statuses for dim in value.dims)
-    block_dim = unique_temp_dim("__tal_map_block__", taken_dims=taken)
-    status = xr.concat(tuple(statuses), dim=block_dim)
-    position = xr.concat(_absolute_positions(positions, starts), dim=block_dim)
-    detail = xr.concat(tuple(details), dim=block_dim)
-    outer_dims = tuple(dim for dim in status.dims if dim != block_dim)
-    order = outer_dims + (block_dim,)
+def _first_ordered_failure(
+    status: np.ndarray,
+    position: np.ndarray,
+    detail: np.ndarray,
+) -> tuple[np.int8, np.int64, object]:
+    statuses = np.asarray(status).reshape(-1)
+    failed = np.flatnonzero(statuses != MAP_STATUS_OK)
+    if failed.size == 0:
+        return np.int8(0), np.int64(-1), 0
+    selected = int(failed[0])
+    positions = np.asarray(position).reshape(-1)
+    details = np.asarray(detail).reshape(-1)
+    return np.int8(statuses[selected]), np.int64(positions[selected]), details[selected]
+
+
+def summarize_map_failure(
+    status: xr.DataArray,
+    position: xr.DataArray,
+    detail: xr.DataArray,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    """Reduce one bounded public-row block to its earliest failure."""
+    dims = tuple(status.dims)
     return xr.apply_ufunc(
-        _ordered_failure,
-        status.transpose(*order),
-        position.transpose(*order),
-        detail.transpose(*order),
-        input_core_dims=[list(order), list(order), list(order)],
-        output_core_dims=[[]],
+        _first_ordered_failure,
+        status.transpose(*dims),
+        position.transpose(*dims),
+        detail.transpose(*dims),
+        input_core_dims=[list(dims), list(dims), list(dims)],
+        output_core_dims=[[], [], []],
         dask="parallelized",
         dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[np.int8, np.int64, object],
+    )
+
+
+def _summarize_failure_group(
+    summaries: Sequence[tuple[xr.DataArray, xr.DataArray, xr.DataArray]],
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    taken = tuple(str(dim) for summary in summaries for value in summary for dim in value.dims)
+    block_dim = unique_temp_dim("__tal_map_block__", taken_dims=taken)
+    columns = tuple(
+        xr.concat(tuple(summary[index] for summary in summaries), dim=block_dim)
+        for index in range(3)
+    )
+    return summarize_map_failure(*columns)
+
+
+def _bounded_failure_summary(
+    summaries: Sequence[tuple[xr.DataArray, xr.DataArray, xr.DataArray]],
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    current = tuple(summaries)
+    while len(current) > 1:
+        groups = (
+            current[start : start + PARAM_LOGICAL_ROW_LIMIT]
+            for start in range(0, len(current), PARAM_LOGICAL_ROW_LIMIT)
+        )
+        current = tuple(_summarize_failure_group(group) for group in groups)
+    return current[0]
+
+
+def _raise_failure_summary(status: np.ndarray, position: np.ndarray, detail: np.ndarray) -> np.int8:
+    raise_ordered_map_failures(np.asarray(status), np.asarray(position), np.asarray(detail))
+    return np.int8(0)
+
+
+def ordered_map_failure_dependency(
+    summaries: Sequence[tuple[xr.DataArray, xr.DataArray, xr.DataArray]],
+) -> xr.DataArray:
+    """Raise from bounded block summaries in public block order."""
+    status, position, detail = _bounded_failure_summary(summaries)
+    return xr.apply_ufunc(
+        _raise_failure_summary,
+        status,
+        position,
+        detail,
+        input_core_dims=[[], [], []],
+        output_core_dims=[[]],
+        dask="parallelized",
         output_dtypes=[np.int8],
     )
 
@@ -241,10 +298,11 @@ __all__ = [
     "datetime_span_map_failure",
     "duplicate_map_failure",
     "first_map_failure",
-    "map_failure_dependency",
     "monotonic_map_failure",
+    "ordered_map_failure_dependency",
     "raise_map_status",
     "raise_ordered_map_failures",
+    "summarize_map_failure",
     "unsafe_query_map_failure",
     "unsafe_source_map_failure",
 ]

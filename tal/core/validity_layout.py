@@ -20,6 +20,8 @@ def is_left_packed_mask(
     """
     if sequence_dim not in valid.dims:
         return True
+    if int(valid.size) == 0:
+        return True
     if _is_chunked(valid):
         return False
     v = valid.fillna(False).astype("int8")

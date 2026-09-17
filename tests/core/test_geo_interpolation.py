@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import warnings
+
 import dask.array as da
-from dask.base import is_dask_collection
 import numpy as np
 import pytest
 import xarray as xr
+from dask.base import is_dask_collection
+from dask.callbacks import Callback
 
 from tal.core import AnalysisObject
 from tal.geo import GeodeticInterpolationOptions, GeodeticPosition, LocalOrigin
@@ -24,7 +27,7 @@ def _lla(values: np.ndarray | None = None, *, times: list[float] | None = None) 
 
 
 def _stub_geod(monkeypatch: pytest.MonkeyPatch) -> None:
-    import tal.geo.interpolation as interpolation
+    from tal.geo import interpolation
 
     def interpolate(lat1, lon1, lat2, lon2, alpha, crs, owner):
         return lat1 + (lat2 - lat1) * alpha, lon1 + (lon2 - lon1) * alpha
@@ -33,9 +36,7 @@ def _stub_geod(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _stub_conversions(monkeypatch: pytest.MonkeyPatch) -> None:
-    import tal.geo.conversion as conversion
-    import tal.geo.local as local
-    import tal.geo.options as options
+    from tal.geo import conversion, local, options
 
     monkeypatch.setattr(options, "normalize_supported_crs", lambda value, expected, owner: expected)
     monkeypatch.setattr(conversion, "transform_lla_to_ecef", lambda lat, lon, alt, crs, ecef_crs, owner: (lat, lon, alt))
@@ -70,7 +71,7 @@ def test_geo_core_g3_007_geodetic_resample_to_preserves_lla_type(monkeypatch: py
 
 def test_geo_core_g3_008_geodetic_interp_like_uses_geodetic_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: GEO_CORE_G3_008_geodetic_interp_like_uses_geodetic_semantics."""
-    import tal.geo.interpolation as interpolation
+    from tal.geo import interpolation
 
     def interpolate(lat1, lon1, lat2, lon2, alpha, crs, owner):
         shape = np.broadcast_shapes(np.shape(alpha), np.shape(lat1), np.shape(lon1))
@@ -107,6 +108,38 @@ def test_geo_core_g3_010_interpolation_preserves_dask_laziness(monkeypatch: pyte
     assert is_dask_collection(out.as_dataset(copy="none")["position"].data)
 
 
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("query", ([0.5], []))
+def test_geodesic_empty_source_uses_all_invalid_output(
+    monkeypatch: pytest.MonkeyPatch, lazy: bool, query: list[float],
+) -> None:
+    """ID: GEO_CORE_QUERY_OUTPUT_001_zero_sample_geodesic_avoids_gather."""
+    _stub_geod(monkeypatch)
+    source = _lla(np.empty((0, 3), dtype=float), times=[])
+    if lazy:
+        ds = source.as_dataset(copy="none").chunk({"sample": 1})
+        source = GeodeticPosition(ds)
+    before = source.as_dataset(copy="none").copy(deep=True)
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = source.param.at(query, on="time_s", opts=GeodeticInterpolationOptions(method="geodesic_linear"))
+    assert tasks == []
+    dataset = actual.as_dataset(copy="none")
+    assert isinstance(actual, GeodeticPosition)
+    assert dataset.sizes["sample"] == len(query)
+    np.testing.assert_array_equal(dataset["position"].compute(scheduler="synchronous"), np.full((len(query), 3), np.nan))
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("name", ("time_s", "lla"))
+def test_geodesic_query_axis_cannot_replace_output_metadata(name: str) -> None:
+    """ID: GEO_HARD_QUERY_OUTPUT_001_geodesic_uses_core_name_preflight."""
+    source = _lla()
+    query = xr.DataArray([0.25, 0.75], dims=name)
+    with pytest.raises(ValueError, match=r"^geo\.GeodeticPosition\.param\.at: query"):
+        source.param.at(query, on="time_s")
+
+
 def test_geo_core_g3_011_ecef_linear_interpolation_roundtrips_type(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: GEO_CORE_G3_011_ecef_linear_interpolation_roundtrips_type."""
     _stub_conversions(monkeypatch)
@@ -115,6 +148,86 @@ def test_geo_core_g3_011_ecef_linear_interpolation_roundtrips_type(monkeypatch: 
 
     assert isinstance(out, GeodeticPosition)
     np.testing.assert_allclose(_position_values(out), [[0.0, -180.0, 5.0]])
+
+
+@pytest.mark.parametrize("shape", ((2, 0), (0, 2), (2, 0, 3)))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_geo_core_empty_query_topology_001_preserves_labeled_cartesian_shape(
+    shape: tuple[int, ...],
+    lazy: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: GEO_CORE_EMPTY_QUERY_TOPOLOGY_001_preserves_labeled_cartesian_shape."""
+    _stub_geod(monkeypatch)
+    dims = tuple(f"query_axis_{index}" for index in range(len(shape)))
+    coords = {dim: np.arange(size, dtype=np.int64) for dim, size in zip(dims, shape, strict=True)}
+    query = xr.DataArray(np.empty(shape), dims=dims, coords=coords)
+    if lazy:
+        query = query.chunk({dim: max(size, 1) for dim, size in zip(dims, shape, strict=True)})
+    source = _lla()
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with (
+        Callback(pretask=lambda key, *_: tasks.append(key)),
+        warnings.catch_warnings(),
+    ):
+        warnings.simplefilter("error")
+        result = source.param.at(query, on="time_s")
+
+    actual = result.as_dataset(copy="none")
+    assert tasks == []
+    assert tuple(actual.sizes[dim] for dim in dims) == shape
+    assert actual["position"].dims == ("lla", *dims)
+    for dim in dims:
+        assert actual.xindexes[dim].equals(query.xindexes[dim])
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_geo_core_query_topology_002_preserves_public_name_and_native_indexes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: GEO_CORE_QUERY_TOPOLOGY_002_preserves_public_name_and_native_indexes."""
+    _stub_geod(monkeypatch)
+    query = xr.DataArray(
+        [[0.0, 5.0], [5.0, 10.0]],
+        dims=("query", "col"),
+        coords=xr.Coordinates.from_xindex(
+            xr.indexes.RangeIndex.arange(2, dim="query")
+        ),
+    ).assign_coords(
+        xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(2, dim="col"))
+    )
+
+    actual = _lla().param.at(query, on="time_s").as_dataset(copy="none")
+
+    assert actual["position"].dims == ("query", "col", "lla")
+    np.testing.assert_array_equal(actual.coords["time_s"], query)
+    for dim in query.dims:
+        assert type(actual.xindexes[dim]) is type(query.xindexes[dim])
+        assert actual.xindexes[dim].equals(query.xindexes[dim])
+
+
+@pytest.mark.parametrize("shape", ((1,), (0,), (1, 2)))
+@pytest.mark.parametrize("validate", (False, True))
+def test_geo_query_coordinate_cannot_replace_position_payload(
+    monkeypatch: pytest.MonkeyPatch, shape: tuple[int, ...], validate: bool,
+) -> None:
+    """ID: GEO_HARD_QUERY_NAMESPACE_001_payload_name_is_preflighted."""
+    from tal.geo import interpolation
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("geodesic kernel must not run")
+
+    monkeypatch.setattr(interpolation, "geod_interpolate", unexpected)
+    source = _lla()
+    dims = ("when",) if len(shape) == 1 else ("row", "col")
+    query = xr.DataArray(
+        np.full(shape, 5.0), dims=dims,
+        coords={"position": (dims, np.full(shape, 99.0))},
+    )
+    with pytest.raises(ValueError, match="^geo.GeodeticPosition.param.at: query name 'position' collides"):
+        source.param.at(query, on="time_s", validate=validate)
 
 
 def test_geo_interpolation_local_enu_linear_uses_explicit_origin(monkeypatch: pytest.MonkeyPatch) -> None:

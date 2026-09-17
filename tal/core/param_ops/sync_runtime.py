@@ -26,7 +26,12 @@ from .batch_labels import (
     labels_selectable_from,
     missing_label_mask,
 )
-from .guards import assert_query_dim_safe, assert_unique_dim_labels, mark_reserved_coord
+from .guards import (
+    assert_query_dim_safe,
+    assert_unique_dim_labels,
+    mark_generated_size_coord,
+    mark_reserved_coord,
+)
 from .sync_autogrid import build_auto_grid_from_join
 from .types import ParamEvalOptions, ParamRuntimeContext
 
@@ -381,7 +386,7 @@ def _apply_fill_metadata(
         batch_dims=context.batch_dims,
         sequence_size_coord=context.sequence_size_coord,
     )
-    return out
+    return mark_generated_size_coord(out, name=context.sequence_size_coord)
 
 
 def apply_fill(

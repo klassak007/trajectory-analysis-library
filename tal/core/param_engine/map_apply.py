@@ -6,12 +6,15 @@ import xarray as xr
 from ..orchestration.indexing import (
     capture_result_coordinates,
     restore_result_coordinates,
+    sequence_dependent_coordinate_names,
     without_index_topology,
 )
 from ..schema_validate.finalize import transfer_dataarray_metadata
 from .blocking import (
     LogicalRowBlock,
+    LogicalRowBlockPlan,
     assemble_logical_blocks,
+    logical_output_chunks,
     prepare_logical_row_blocks,
     select_logical_block,
 )
@@ -136,26 +139,32 @@ def _empty_gather(
     *,
     sequence_dim: str,
     query_dim: str,
+    owner: str,
+    invalid: bool = False,
 ) -> xr.DataArray:
     logical_dims = tuple(dim for dim in values.dims if dim != sequence_dim)
     logical_dims += tuple(dim for dim in indexer.dims if dim not in logical_dims)
+    sizes = tuple(
+        int(values.sizes[dim]) if dim in values.dims else int(indexer.sizes[dim])
+        for dim in logical_dims
+    )
     snapshot = capture_result_coordinates(
         values,
         indexer,
         output_dims=logical_dims,
-        owner="gather_along_sequence",
+        owner=owner,
     )
-    values = without_index_topology(values, dims=logical_dims)
-    indexer = without_index_topology(indexer, dims=logical_dims)
-    dependent = [name for name, coord in values.coords.items() if sequence_dim in coord.dims]
-    empty = values.drop_vars(dependent).isel({sequence_dim: slice(0, 0)})
-    empty = empty.rename({sequence_dim: query_dim})
-    template = xr.broadcast(empty, indexer)[0].assign_coords(indexer.coords)
-    dims = [dim for dim in values.dims if dim != sequence_dim]
-    dims.extend(dim for dim in indexer.dims if dim != query_dim and dim not in dims)
-    dims.append(query_dim)
-    result = template.transpose(*dims)
-    return restore_result_coordinates(result, snapshot)  # type: ignore[return-value]
+    data: object = np.zeros(sizes, dtype=values.dtype) if invalid else np.empty(sizes, dtype=values.dtype)
+    sources = (values, indexer)
+    if any(source.chunks is not None for source in sources):
+        import dask.array as da
+
+        chunks = logical_output_chunks(sources, dims=logical_dims, sizes=sizes)
+        data = (da.zeros if invalid else da.empty)(sizes, chunks=chunks, dtype=values.dtype)
+    result = xr.DataArray(data, dims=logical_dims, name=values.name)
+    result = transfer_dataarray_metadata(values, result)
+    result = restore_result_coordinates(result, snapshot)  # type: ignore[assignment]
+    return result.where(False) if invalid else result  # type: ignore[return-value]
 
 
 def _prepare_gather_inputs(
@@ -187,13 +196,8 @@ def _gather_nonempty(
     sequence_dim: str,
     query_dim: str,
     owner: str,
+    plan: LogicalRowBlockPlan,
 ) -> xr.DataArray:
-    plan = prepare_logical_row_blocks(
-        values,
-        indexer,
-        excluded_dims=frozenset({sequence_dim}),
-        fastest_dim=query_dim,
-    )
     blocks = (
         gather_sequence_block(
             select_logical_block(values, block),
@@ -235,13 +239,23 @@ def gather_along_sequence(
         query_dim=query_dim,
         owner=owner,
     )
-    query_size = int(indexer.sizes[query_dim])
-    if query_size == 0:
+    if int(values.sizes[sequence_dim]) == 0:
+        return _empty_gather(
+            values, indexer, sequence_dim=sequence_dim, query_dim=query_dim, owner=owner, invalid=True,
+        )
+    plan = prepare_logical_row_blocks(
+        values,
+        indexer,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=query_dim,
+    )
+    if plan.has_no_rows:
         return _empty_gather(
             values,
             indexer,
             sequence_dim=sequence_dim,
             query_dim=query_dim,
+            owner=owner,
         )
     return _gather_nonempty(
         values,
@@ -249,6 +263,7 @@ def gather_along_sequence(
         sequence_dim=sequence_dim,
         query_dim=query_dim,
         owner=owner,
+        plan=plan,
     )
 
 
@@ -260,7 +275,19 @@ def gather_dataset_along_sequence(
     query_dim: str,
     owner: str,
 ) -> xr.Dataset:
+    sampled_names = set(sequence_dependent_coordinate_names(ds, sequence_dim=sequence_dim))
+    collisions = sampled_names & set(indexer.coords)
+    indexed = collisions & set(indexer.xindexes)
+    if indexed:
+        raise ValueError(
+            f"{owner}: indexer indexes {sorted(indexed)!r} conflict with sampled source coordinates."
+        )
+    if collisions:
+        indexer = indexer.drop_vars(tuple(sorted(collisions)))
     out = ds.copy(deep=False)
+    if int(ds.sizes.get(sequence_dim, 0)) == 0:
+        consumed = [name for name, var in ds.variables.items() if sequence_dim in var.dims]
+        out = out.drop_vars(consumed)
     var_updates: dict[str, xr.DataArray] = {}
     for name, var in ds.data_vars.items():
         if sequence_dim in var.dims:
@@ -333,15 +360,9 @@ def _apply_param_map_blocks(
     param_map: ParamMap,
     sequence_dim: str,
     logical_dims: tuple[str, ...] | None,
+    plan: LogicalRowBlockPlan,
 ) -> xr.DataArray:
     query_dim = param_map.query_dim
-    plan = prepare_logical_row_blocks(
-        values,
-        param_map.i0,
-        excluded_dims=frozenset({sequence_dim}),
-        fastest_dim=query_dim,
-        included_dims=logical_dims,
-    )
     blocks = (
         _interpolate_param_block(
             select_logical_block(values, block),
@@ -356,7 +377,7 @@ def _apply_param_map_blocks(
         sequence_dim=sequence_dim,
         query_dim=query_dim,
         logical_dims=plan.dims,
-        dtype=np.dtype(np.result_type(values.dtype, np.float64)),
+        dtype=_mapped_output_dtype(values),
     )
     return assemble_logical_blocks(
         blocks,
@@ -365,6 +386,10 @@ def _apply_param_map_blocks(
         index_sources=(values, param_map.i0),
         owner="apply_param_map",
     )
+
+
+def _mapped_output_dtype(values: xr.DataArray) -> np.dtype:
+    return np.dtype(np.result_type(values.dtype, np.float64))
 
 
 def empty_mapped_value(
@@ -386,7 +411,8 @@ def empty_mapped_value(
         owner="apply_param_map",
     )
     shape = tuple(sizes[dim] for dim in order)
-    data: object = np.full(shape, np.nan, dtype=np.float64)
+    dtype = _mapped_output_dtype(values)
+    data: object = np.full(shape, np.nan, dtype=dtype)
     if values.chunks is not None or param_map.valid.chunks is not None:
         import dask.array as da
 
@@ -398,7 +424,7 @@ def empty_mapped_value(
             )
             for dim in order
         )
-        data = da.full(shape, np.nan, chunks=chunks, dtype=np.float64)
+        data = da.full(shape, np.nan, chunks=chunks, dtype=dtype)
     out = xr.DataArray(
         data,
         dims=order,
@@ -426,15 +452,21 @@ def _apply_param_map_request(
         sequence_dim=sequence_dim,
         owner="apply_param_map",
     )
-    if int(values.sizes.get(sequence_dim, 0)) == 0:
-        return empty_mapped_value(values, param_map=param_map, sequence_dim=sequence_dim)
-    if int(param_map.i0.sizes[param_map.query_dim]) == 0:
+    plan = prepare_logical_row_blocks(
+        values,
+        param_map.i0,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=param_map.query_dim,
+        included_dims=logical_dims,
+    )
+    if int(values.sizes.get(sequence_dim, 0)) == 0 or plan.has_no_rows:
         return empty_mapped_value(values, param_map=param_map, sequence_dim=sequence_dim)
     return _apply_param_map_blocks(
         values,
         param_map=param_map,
         sequence_dim=sequence_dim,
         logical_dims=logical_dims,
+        plan=plan,
     )
 
 

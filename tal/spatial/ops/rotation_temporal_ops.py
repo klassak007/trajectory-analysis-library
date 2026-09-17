@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -12,8 +13,7 @@ from tal.core.orchestration.indexing import (
     restore_index_topology,
     without_index_topology,
 )
-from tal.core.orchestration.resolve import resolve_param_runtime_context
-from tal.core.param_engine import ParamMap, ParamMapOptions
+from tal.core.param_engine import ParamMap
 from tal.core.param_engine.blocking import (
     LogicalRowBlock,
     assemble_logical_blocks,
@@ -27,12 +27,11 @@ from tal.core.param_engine.map_apply import (
     gather_sequence_block,
 )
 from tal.core.param_engine.prepared import PreparedParamEvaluation
-from tal.core.param_ops.finalize import finalize_param_output
-from tal.core.param_ops.guards import (
-    assert_query_dim_safe,
-    assert_reserved_metadata_safe,
+from tal.core.param_engine.query_output_verify import verify_query_output_plan
+from tal.core.param_engine.query_topology import (
+    QueryOutputPlan,
 )
-from tal.core.param_ops.runtime_prepare import prepare_runtime_param_evaluation
+from tal.core.param_ops.finalize import finalize_param_output
 from tal.core.param_ops.types import ParamRuntimeContext
 
 from ..kernels.rotation_interp_backends import (
@@ -41,7 +40,16 @@ from ..kernels.rotation_interp_backends import (
 )
 from ..metadata import get_rotation_rep
 from ..temporal.options import RotationTemporalOptions, resolve_rotation_method
+from .rotation_temporal_plan import (
+    build_quat_param_map,
+    prepare_rotation_temporal_evaluation,
+    resolve_rotation_runtime,
+)
 from .rotation_temporal_types import RotationTemporalRequest
+from .temporal_structural_validity import (
+    declare_no_usable_sequence_rows,
+    has_no_usable_sequence_rows,
+)
 
 if TYPE_CHECKING:
     from ..rotation import Rotation
@@ -107,24 +115,6 @@ def _rotation_temporal_payload(
     return source
 
 
-def _build_quat_param_map(
-    context: ParamRuntimeContext,
-    *,
-    query: xr.DataArray | np.ndarray | Sequence[float] | float,
-    opts: RotationTemporalOptions,
-    method: Literal["nearest", "linear"],
-    prepared: PreparedParamEvaluation | None,
-) -> PreparedParamEvaluation:
-    return prepare_runtime_param_evaluation(
-        context,
-        query=query,
-        options=ParamMapOptions(method=method, duplicate_policy=opts.duplicate_policy),
-        param_kind=context.param_kind,
-        query_dim=opts.query_dim,
-        reuse=() if prepared is None else (prepared,),
-    )
-
-
 def _evaluate_quat_nearest_linear(
     context: ParamRuntimeContext,
     *,
@@ -135,7 +125,7 @@ def _evaluate_quat_nearest_linear(
     method: Literal["nearest", "linear"],
     prepared: PreparedParamEvaluation | None,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, str]:
-    evaluation = _build_quat_param_map(
+    evaluation = build_quat_param_map(
         context,
         query=query,
         opts=opts,
@@ -197,7 +187,7 @@ def _evaluate_quat_slerp(
     opts: RotationTemporalOptions,
     prepared: PreparedParamEvaluation | None,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, str]:
-    evaluation = _build_quat_param_map(
+    evaluation = build_quat_param_map(
         context,
         query=query,
         opts=opts,
@@ -352,30 +342,6 @@ def _slerp_one_block(
     )
 
 
-def _resolve_runtime(request: RotationTemporalRequest, *, source: Rotation) -> ParamRuntimeContext:
-    runtime_source = source if request.on is None else source.set_param_coord(name=request.on, validate=False)
-    context = resolve_param_runtime_context(
-        runtime_source,
-        on=request.on,
-        sequence_dim=request.sequence_dim,
-        batch_dims=request.batch_dims,
-        sequence_size_coord=request.sequence_size_coord,
-    )
-    assert_query_dim_safe(
-        context.ds,
-        sequence_dim=context.sequence_dim,
-        query_dim=request.opts.query_dim,
-        owner=request.owner,
-    )
-    assert_reserved_metadata_safe(
-        context.ds,
-        reserved=("valid", "sample_index"),
-        param_name=context.spec.name,
-        owner=request.owner,
-    )
-    return context
-
-
 def _finalize_rotation_temporal_output(
     source: Rotation,
     context: ParamRuntimeContext,
@@ -387,24 +353,36 @@ def _finalize_rotation_temporal_output(
     query_dim: str,
     source_rep: str,
     validate: bool,
+    output_plan: QueryOutputPlan,
 ) -> Rotation:
     ds_out = _build_base_output_dataset(context, var_name=var_name, values=values)
+    intermediate_plan = (
+        replace(output_plan, source_index_groups=()) if source_rep != "quat" else output_plan
+    )
     evaluated = finalize_param_output(
         context,
         ds_out,
         query=query,
         query_dim=query_dim,
         valid_query=valid_query,
+        query_topology=output_plan.topology,
         validate=False,
         trajectory=True,
+        owner=output_plan.owner,
+        output_plan=intermediate_plan,
     )
     result = evaluated if isinstance(evaluated, source.__class__) else source.__class__(analysis_object_dataset(evaluated))
     if source_rep != "quat":
         result = result.to_rep(source_rep, validate=False)
-    return source._rewrap_dataset(
+    final = source._rewrap_dataset(
         analysis_object_dataset(result),
         validate=validate,
     )
+    if output_plan.topology is not None:
+        verify_query_output_plan(
+            analysis_object_dataset(final), plan=output_plan, topology=output_plan.topology,
+        )
+    return final
 
 
 def _evaluate_empty_rotation(
@@ -413,18 +391,12 @@ def _evaluate_empty_rotation(
     source: Rotation,
     source_rep: str,
     context: ParamRuntimeContext,
+    evaluation: PreparedParamEvaluation,
+    output_plan: QueryOutputPlan,
 ) -> Rotation:
     var_name = _require_single_payload_var(
         context.ds,
         owner=request.owner,
-    )
-    method = resolve_rotation_method(request.opts)
-    evaluation = _build_quat_param_map(
-        context,
-        query=request.query,
-        opts=request.opts,
-        method="nearest" if method == "nearest" else "linear",
-        prepared=request.prepared,
     )
     values = empty_mapped_value(
         _rotation_temporal_payload(context, var_name=var_name),
@@ -441,7 +413,7 @@ def _evaluate_empty_rotation(
         evaluation.param_map.query_dim,
         *context.core_dims,
     )
-    return _finalize_rotation_temporal_output(
+    result = _finalize_rotation_temporal_output(
         source,
         context,
         var_name=var_name,
@@ -451,7 +423,12 @@ def _evaluate_empty_rotation(
         query_dim=evaluation.param_map.query_dim,
         source_rep=source_rep,
         validate=request.validate,
+        output_plan=output_plan,
     )
+    declared = declare_no_usable_sequence_rows(
+        analysis_object_dataset(result), owner=request.owner,
+    )
+    return source._rewrap_dataset(declared, validate=request.validate)
 
 
 def _evaluate_rotation_request(
@@ -459,6 +436,7 @@ def _evaluate_rotation_request(
     *,
     context: ParamRuntimeContext,
     var_name: str,
+    prepared: PreparedParamEvaluation,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, str]:
     quat_dim = context.core_dims[0]
     method = resolve_rotation_method(request.opts)
@@ -469,7 +447,7 @@ def _evaluate_rotation_request(
             quat_dim=quat_dim,
             query=request.query,
             opts=request.opts,
-            prepared=request.prepared,
+            prepared=prepared,
         )
     return _evaluate_quat_nearest_linear(
         context,
@@ -478,7 +456,7 @@ def _evaluate_rotation_request(
         query=request.query,
         opts=request.opts,
         method=method,
-        prepared=request.prepared,
+        prepared=prepared,
     )
 
 
@@ -487,23 +465,26 @@ def _run_rotation_temporal_request(request: RotationTemporalRequest) -> Rotation
     source_ds = analysis_object_dataset(source)
     _require_single_payload_var(source_ds, owner=request.owner)
     source_rep = get_rotation_rep(source_ds, owner=request.owner)
-    source_context = _resolve_runtime(request, source=source)
-    if int(source_context.ds.sizes[source_context.sequence_dim]) == 0:
+    source_context, evaluation, output_plan = prepare_rotation_temporal_evaluation(request)
+    if has_no_usable_sequence_rows(source_ds, owner=request.owner) or evaluation.has_no_rows:
         return _evaluate_empty_rotation(
             request,
             source=source,
             source_rep=source_rep,
             context=source_context,
+            evaluation=evaluation,
+            output_plan=output_plan,
         )
     context = source_context
     if source_rep != "quat":
         quat_source = source.as_quat(validate=False)
-        context = _resolve_runtime(request, source=quat_source)
+        context = resolve_rotation_runtime(request, source=quat_source)
     var_name = _require_single_payload_var(context.ds, owner=request.owner)
     out_values, query_values, valid_query, query_dim = _evaluate_rotation_request(
         request,
         context=context,
         var_name=var_name,
+        prepared=evaluation,
     )
     return _finalize_rotation_temporal_output(
         source,
@@ -515,6 +496,7 @@ def _run_rotation_temporal_request(request: RotationTemporalRequest) -> Rotation
         query_dim=query_dim,
         source_rep=source_rep,
         validate=request.validate,
+        output_plan=output_plan,
     )
 
 

@@ -81,6 +81,9 @@ is dynamic.
 `pose.param.at(...)` and `pose.param.resample_to(...)` use split typed
 interpolation: position is numeric, rotation is rotation-aware. `on=...`
 selects the parameter coordinate used for interpolation.
+Labeled multidimensional queries flatten query-only dimensions to a
+positional sequence while retaining their labels as sequence-dependent
+coordinates; shared source batch dimensions remain intact.
 
 ## Autosummary
 

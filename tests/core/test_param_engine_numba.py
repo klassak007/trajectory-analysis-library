@@ -1,9 +1,19 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
 
+import tal.core.param_engine.map_build as map_build_mod
+from tal.core.event_ops.backends import (
+    EVENT_BOUNDARY_BACKEND_NUMBA,
+    EVENT_INTERVALS_BACKEND_NUMBA,
+    boundary_bounded_block_backend,
+    intervals_bounded_block_backend,
+)
 from tal.core.param_engine.backends import (
     PARAM_BOUNDS_BACKEND_NUMBA,
     PARAM_BOUNDS_BACKEND_NUMPY_BLOCK,
@@ -12,24 +22,50 @@ from tal.core.param_engine.backends import (
     bounds_block_backend,
     map_block_backend,
 )
-from tal.core.event_ops.backends import (
-    EVENT_BOUNDARY_BACKEND_NUMBA,
-    EVENT_INTERVALS_BACKEND_NUMBA,
-    boundary_bounded_block_backend,
-    intervals_bounded_block_backend,
-)
-from tal.linalg.ops.solve_backends import LSTSQ_BACKEND_NUMBA, lstsq_block_backend
 from tal.core.param_engine.map_build import (
     _DUPLICATE_CODES,
     build_param_bounds_map,
     build_param_map,
 )
 from tal.core.param_engine.numeric_rows import numeric_bounds_row, numeric_map_row
-import tal.core.param_engine.map_build as map_build_mod
+from tal.linalg.ops.solve_backends import LSTSQ_BACKEND_NUMBA, lstsq_block_backend
 
 
 def _require_numba() -> None:
     pytest.importorskip("numba")
+
+
+def test_param_hard_numba_lazy_first_use_001_is_thread_safe(tmp_path: Path) -> None:
+    """ID: PARAM_HARD_NUMBA_LAZY_FIRST_USE_001_is_thread_safe."""
+    _require_numba()
+    pytest.importorskip("dask.array")
+    script = """
+import dask.array as da
+import numpy as np
+import xarray as xr
+from dask import compute
+from tal.core.param_engine import build_param_map
+
+results = []
+for row in range(8):
+    param = xr.DataArray(da.from_array([[0.0, 1.0]], chunks=(1, 2)), dims=("row", "sample"))
+    query = xr.DataArray(da.from_array([[0.5]], chunks=(1, 1)), dims=("row", "query"))
+    results.append(build_param_map(param=param, query=query, sequence_dim="sample", query_dim="query").valid)
+computed = compute(*results, scheduler="threads", num_workers=8)
+assert all(bool(value.data[0, 0]) for value in computed)
+"""
+    environment = os.environ.copy()
+    environment["NUMBA_CACHE_DIR"] = str(tmp_path)
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path.cwd(),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _baseline_map_block(
@@ -239,7 +275,7 @@ def test_numba_opt_011_param_explicit_numba_still_fails_closed_after_migration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ID: NUMBA_OPT_011_param_explicit_numba_still_fails_closed_after_migration."""
-    import tal.utils.numba_support as numba_support
+    from tal.utils import numba_support
 
     def _raise_import_error():
         raise ImportError("missing numba")
@@ -266,7 +302,7 @@ def test_numba_opt_011_param_explicit_numba_still_fails_closed_after_migration(
 
 def test_numba_opt_005_backends_fail_closed_when_numba_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: NUMBA_OPT_005_primary_backends_fail_closed_when_numba_requested_without_numba."""
-    import tal.utils.numba_support as numba_support
+    from tal.utils import numba_support
 
     def _raise_import_error():
         raise ImportError("missing numba")

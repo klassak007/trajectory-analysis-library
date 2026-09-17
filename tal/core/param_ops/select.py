@@ -1,28 +1,46 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import xarray as xr
 
-from ..dataset_ownership import analysis_object_dataset
 from ..ao_internal import finalize_structural
+from ..dataset_ownership import analysis_object_dataset
+from ..orchestration.indexing import (
+    ResultCoordinateSnapshot,
+    capture_result_coordinates,
+    restore_result_coordinates,
+    sequence_dependent_coordinate_names,
+)
 from ..param_engine import build_param_bounds_map
-from ..param_engine.map_apply import gather_along_sequence, gather_dataset_along_sequence
-from ..validity_layout import sequence_size_from_mask
-from ..validity_layout import scalar_int_boundary
+from ..param_engine.map_apply import (
+    gather_along_sequence,
+    gather_dataset_along_sequence,
+)
+from ..param_engine.query_topology import (
+    QueryOutputPlan,
+    generated_query_coordinate_names,
+    preflight_query_output_namespace,
+)
+from ..validity_layout import scalar_int_boundary, sequence_size_from_mask
 from .finalize import finalize_param_output
 from .guards import (
     assert_query_dim_safe,
     assert_reserved_metadata_safe,
     dataset_namespace_names,
+    mark_generated_size_coord,
     mark_reserved_coord,
     unique_temp_dim,
 )
 from .index import build_index_result
 from .options import validate_select_options
 from .types import ParamRuntimeContext, ParamSelectOptions
+
+if TYPE_CHECKING:
+    from ..analysis_object import AnalysisObject
 
 
 def _is_numeric_dtype(dtype: np.dtype[Any]) -> bool:
@@ -31,16 +49,6 @@ def _is_numeric_dtype(dtype: np.dtype[Any]) -> bool:
 
 def _sequence_var_names(ds: xr.Dataset, *, sequence_dim: str) -> tuple[str, ...]:
     return tuple(str(name) for name, var in ds.data_vars.items() if sequence_dim in var.dims)
-
-
-def _sequence_coord_names(ds: xr.Dataset, *, sequence_dim: str) -> tuple[str, ...]:
-    names: list[str] = []
-    for name, coord in ds.coords.items():
-        if name == sequence_dim:
-            continue
-        if sequence_dim in coord.dims:
-            names.append(str(name))
-    return tuple(names)
 
 
 def _validate_sequence_vars_numeric(
@@ -63,13 +71,20 @@ def _mask_selected_vars(
     variable_names: Sequence[str],
 ) -> xr.Dataset:
     out = ds.copy(deep=False)
-    updates: dict[str, xr.DataArray] = {}
+    updates: dict[str, xr.Variable] = {}
     for name in variable_names:
         if name in out.data_vars:
-            updates[str(name)] = out[name].where(mask)
+            updates[str(name)] = _mask_aligned_value(out[name], mask).variable
     if updates:
         out = out.assign(updates)
     return out
+
+
+def _mask_aligned_value(value: xr.DataArray, mask: xr.DataArray) -> xr.DataArray:
+    """Mask already-aligned values without merging incidental coordinates."""
+    target = xr.DataArray(value.variable, name=value.name)
+    condition = xr.DataArray(mask.variable)
+    return target.where(condition)
 
 
 def _mask_sequence_coords(
@@ -86,7 +101,7 @@ def _mask_sequence_coords(
         cname = str(name)
         if cname in protected or cname not in out.coords:
             continue
-        updates[cname] = out.coords[cname].where(mask)
+        updates[cname] = _mask_aligned_value(out.coords[cname], mask)
     if updates:
         out = out.assign_coords(updates)
     return out
@@ -127,11 +142,11 @@ def _promote_dim_dataset(
 
 
 def _collapse_scalar_point(
-    out: "AnalysisObject",
+    out: AnalysisObject,
     *,
     sequence_dim: str,
     validate: bool,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     if sequence_dim in analysis_object_dataset(out).dims:
         return out.isel({sequence_dim: 0}, drop=True, validate=validate)
     return out
@@ -228,7 +243,83 @@ def _slice_output_dataset(
                 )
             }
         )
+        ds = mark_generated_size_coord(ds, name=context.sequence_size_coord)
     return ds
+
+
+def _prepare_slice_bound(
+    context: ParamRuntimeContext,
+    bound: object,
+    *,
+    generated_names: tuple[str, ...],
+) -> tuple[object, xr.DataArray | None]:
+    if not isinstance(bound, xr.DataArray):
+        return bound, None
+    plan = preflight_query_output_namespace(
+        context.ds, bound,
+        sequence_dim=context.sequence_dim,
+        batch_dims=context.batch_dims,
+        owner="param sel", intent="trajectory",
+        generated_names=generated_names,
+        retain_sequence_coords=True,
+    )
+    excluded = plan.generated_names | plan.source_coord_names | plan.consumed_names
+    caller_only = bound.drop_vars(tuple(name for name in bound.coords if name in excluded))
+    numerical = bound.drop_vars(tuple(name for name in bound.coords if name not in bound.xindexes))
+    return numerical, caller_only
+
+
+def _prepare_slice_bound_metadata(
+    context: ParamRuntimeContext,
+    query: slice,
+) -> tuple[slice, ResultCoordinateSnapshot]:
+    bounds = (query.start, query.stop)
+    if any(isinstance(bound, xr.DataArray) and tuple(bound.dims) not in ((), context.batch_dims) for bound in bounds):
+        return query, capture_result_coordinates(output_dims=context.batch_dims, owner="param sel")
+    generated = generated_query_coordinate_names(
+        operation="select", param_name=context.spec.name,
+        size_name=context.sequence_size_coord, trajectory=True, mapped_dataset=True,
+    )
+    prepared = tuple(_prepare_slice_bound(context, bound, generated_names=generated) for bound in bounds)
+    snapshot = capture_result_coordinates(
+        *(caller for _, caller in prepared if caller is not None),
+        output_dims=context.batch_dims, owner="param sel",
+    )
+    return slice(*(value for value, _ in prepared)), snapshot
+
+
+def _point_selection_metadata(
+    context: ParamRuntimeContext,
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+) -> tuple[tuple[str, ...], tuple[str, ...], QueryOutputPlan]:
+    trajectory = not isinstance(query, xr.DataArray) or (
+        len(set(query.dims) - set(context.batch_dims)) <= 1
+    )
+    output_plan = preflight_query_output_namespace(
+        context.ds,
+        query,
+        sequence_dim=context.sequence_dim,
+        batch_dims=context.batch_dims,
+        owner="param sel",
+        intent="trajectory" if trajectory else "grid",
+        retain_sequence_coords=True,
+        generated_names=generated_query_coordinate_names(
+            operation="select",
+            param_name=context.spec.name,
+            size_name=context.sequence_size_coord,
+            trajectory=trajectory,
+            mapped_dataset=True,
+        ),
+    )
+    return (
+        _validate_sequence_vars_numeric(
+            context.ds,
+            sequence_dim=context.sequence_dim,
+            op="param selection",
+        ),
+        sequence_dependent_coordinate_names(context.ds, sequence_dim=context.sequence_dim),
+        output_plan,
+    )
 
 
 def _point_select(
@@ -237,20 +328,16 @@ def _point_select(
     query: xr.DataArray | np.ndarray | Sequence[float] | float,
     opts: ParamSelectOptions,
     validate: bool,
-) -> "AnalysisObject":
-    seq_vars = _validate_sequence_vars_numeric(
-        context.ds,
-        sequence_dim=context.sequence_dim,
-        op="param selection",
-    )
-    seq_coords = _sequence_coord_names(context.ds, sequence_dim=context.sequence_dim)
-    result = build_index_result(context, query=query, opts=opts)
-    index = result.index.astype("int64")
-    valid = result.valid.astype(bool)
+) -> AnalysisObject:
+    seq_vars, seq_coords, output_plan = _point_selection_metadata(context, query)
+    result = build_index_result(context, query=query, opts=opts, namespace_preflight=False)
+    caller_names = tuple(sorted(output_plan.sampled_source_coord_names & set(result.index.coords)))
+    index = result.index.drop_vars(caller_names).astype("int64")
+    valid = result.valid.drop_vars(caller_names).astype(bool)
     idx = index.where(valid, other=np.int64(0)).astype("int64")
     source_ds = context.ds
-    if int(source_ds.sizes.get(context.sequence_dim, 0)) == 0:
-        source_ds = source_ds.reindex({context.sequence_dim: [0]}, fill_value=np.nan)
+    if context.sequence_size_coord is not None:
+        source_ds = source_ds.drop_vars(context.sequence_size_coord, errors="ignore")
     ds = gather_dataset_along_sequence(
         source_ds,
         idx,
@@ -274,8 +361,11 @@ def _point_select(
         query=result.grid.values,
         query_dim=opts.query_dim,
         valid_query=valid,
+        query_topology=result.query_topology,
         validate=validate,
         trajectory=trajectory,
+        owner="param sel",
+        output_plan=replace(output_plan, topology=result.query_topology),
     )
     if result.scalar_query:
         return _collapse_scalar_point(out, sequence_dim=context.sequence_dim, validate=validate)
@@ -288,17 +378,18 @@ def _slice_select(
     query: slice,
     opts: ParamSelectOptions,
     validate: bool,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     seq_vars = _validate_sequence_vars_numeric(
         context.ds,
         sequence_dim=context.sequence_dim,
         op="param selection",
     )
-    seq_coords = _sequence_coord_names(context.ds, sequence_dim=context.sequence_dim)
+    seq_coords = sequence_dependent_coordinate_names(context.ds, sequence_dim=context.sequence_dim)
+    prepared_query, caller_snapshot = _prepare_slice_bound_metadata(context, query)
     bounds = build_param_bounds_map(
         param=context.spec.coord,
-        start=query.start,
-        stop=query.stop,
+        start=prepared_query.start,
+        stop=prepared_query.stop,
         sequence_dim=context.sequence_dim,
         valid_mask=context.valid_mask,
         param_kind=context.param_kind,
@@ -328,7 +419,9 @@ def _slice_select(
         seq_vars=seq_vars,
         seq_coords=seq_coords,
     )
-    return finalize_structural(context.ao, ds, validate=validate)
+    restored = restore_result_coordinates(ds, caller_snapshot)
+    assert isinstance(restored, xr.Dataset)
+    return finalize_structural(context.ao, restored, validate=validate)
 
 
 def select_param(
@@ -337,7 +430,7 @@ def select_param(
     query: xr.DataArray | np.ndarray | Sequence[float] | float | slice,
     opts: ParamSelectOptions,
     validate: bool,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Param-aware selection for point/list/slice queries.
 
     Parameters

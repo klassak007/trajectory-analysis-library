@@ -26,10 +26,8 @@ from tal.core.param_engine import (
 )
 from tal.core.param_engine import map_apply as map_apply_mod
 from tal.core.param_engine import map_build as map_build_mod
-from tal.core.param_engine import query_grid as query_grid_mod
 from tal.core.param_ops.guards import mark_reserved_coord
 from tal.core.schema_read import read_roles
-from tal.utils.xarray_namespace import unique_temp_dim as shared_unique_temp_dim
 
 
 class _HostileKey:
@@ -44,6 +42,14 @@ class _HostileKey:
 
     def __str__(self) -> str:
         raise RuntimeError("str exploded")
+
+
+def _forbidden_empty_param_source(
+    label: str,
+    shape: tuple[int, ...],
+    dtype: np.dtype[object],
+) -> np.ndarray:
+    raise RuntimeError(f"forbidden empty parameter source task: {label}")
 
 
 def _ds_sample() -> xr.Dataset:
@@ -482,9 +488,7 @@ def test_param_engine_026_query_grid_temp_dim_collision_with_coord_name_avoided(
     np.testing.assert_allclose(grid.values.values, np.asarray([0.0, 1.0, 2.0, 3.0], dtype="float64"))
 
 
-def test_param_engine_027_query_grid_temp_dim_collision_with_dataarray_name_avoided(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_param_engine_027_query_grid_temp_dim_collision_with_dataarray_name_avoided() -> None:
     """ID: PARAM_ENGINE_027_query_grid_temp_dim_collision_with_dataarray_name_avoided."""
     query = xr.DataArray(
         np.asarray([[0.0, 1.0], [2.0, 3.0]], dtype="float64"),
@@ -492,19 +496,10 @@ def test_param_engine_027_query_grid_temp_dim_collision_with_dataarray_name_avoi
         coords={"trial": ["a", "b"], "sample": [0, 1]},
         name="query__stack",
     )
-    captured: list[tuple[str, ...]] = []
-    original = query_grid_mod.unique_temp_dim
-
-    def _spy(base: str, *, taken_dims: tuple[str, ...]) -> str:
-        captured.append(tuple(taken_dims))
-        return shared_unique_temp_dim(base, taken_dims=taken_dims)
-
-    monkeypatch.setattr(query_grid_mod, "unique_temp_dim", _spy)
     grid = normalize_query_grid(query, query_dim="query")
     assert grid.values.dims == ("query",)
-    assert captured
-    assert "query__stack" in captured[0]
-    monkeypatch.setattr(query_grid_mod, "unique_temp_dim", original)
+    assert grid.values.name == "query__stack"
+    np.testing.assert_allclose(grid.values, [0.0, 1.0, 2.0, 3.0])
 
 
 def test_param_engine_023_map_indexers_materialized_for_dask_consumers() -> None:
@@ -750,6 +745,400 @@ def test_param_hard_empty_query_001_preserves_topology_without_duplicate_failure
     assert mapping.valid.dims == ("trial", "query")
     assert mapping.valid.shape == (2, 0)
     assert list(mapping.valid.coords["trial"].data) == ["a", "b"]
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_hard_empty_query_002_preserves_global_failure_order(lazy: bool) -> None:
+    """ID: PARAM_HARD_EMPTY_QUERY_002_preserves_global_failure_order."""
+    param = xr.DataArray(
+        np.asarray(
+            [
+                ["2020-01-02", "2020-01-01", "2020-01-03"],
+                [
+                    "1677-09-21T00:12:43.145224193",
+                    "2000-01-01",
+                    "2262-04-11T23:47:16.854775807",
+                ],
+            ],
+            dtype="datetime64[ns]",
+        ),
+        dims=("trial", "sample"),
+    )
+    query = xr.DataArray(
+        np.empty((2, 0), dtype="datetime64[ns]"),
+        dims=("trial", "query"),
+    )
+    if lazy:
+        pytest.importorskip("dask.array")
+        param = param.chunk({"trial": 1, "sample": 3})
+        query = query.chunk({"trial": 1, "query": 1})
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+            param_kind="datetime64",
+        )
+        with pytest.raises(ValueError, match="monotonic non-decreasing") as err:
+            mapping.valid.compute(scheduler="synchronous")
+    else:
+        with pytest.raises(ValueError, match="monotonic non-decreasing") as err:
+            build_param_map(
+                param=param,
+                query=query,
+                sequence_dim="sample",
+                query_dim="query",
+                param_kind="datetime64",
+            )
+    assert type(err.value) is ValueError
+
+
+def test_param_core_empty_map_block_001_source_validation_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: PARAM_CORE_EMPTY_MAP_BLOCK_001_source_validation_is_bounded."""
+    from tal.core.param_engine import numpy_backends
+
+    original = numpy_backends.validate_map_domain_block_numpy_status
+    row_counts: list[int] = []
+
+    def tracked(param: np.ndarray, mask: np.ndarray, **kwargs: object):
+        row_counts.append(int(np.prod(param.shape[:-1], dtype=np.int64)))
+        return original(param, mask, **kwargs)
+
+    monkeypatch.setattr(
+        numpy_backends,
+        "validate_map_domain_block_numpy_status",
+        tracked,
+    )
+    param = xr.DataArray(
+        np.broadcast_to([0.0, 1.0], (65_537, 2)),
+        dims=("trial", "sample"),
+    )
+    mapping = build_param_map(
+        param=param,
+        query=xr.DataArray(np.empty(0), dims="query"),
+        sequence_dim="sample",
+        query_dim="query",
+    )
+
+    assert mapping.valid.shape == (65_537, 0)
+    assert row_counts == [65_536, 1]
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_core_empty_map_broadcast_001_query_topology_does_not_repeat_source_validation(
+    lazy: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: PARAM_CORE_EMPTY_MAP_BROADCAST_001_query_topology_does_not_repeat_source_validation."""
+    from tal.core.param_engine import numpy_backends
+
+    original = numpy_backends.validate_map_domain_block_numpy_status
+    row_counts: list[int] = []
+
+    def tracked(param: np.ndarray, mask: np.ndarray, **kwargs: object):
+        row_counts.append(int(np.prod(param.shape[:-1], dtype=np.int64)))
+        return original(param, mask, **kwargs)
+
+    monkeypatch.setattr(numpy_backends, "validate_map_domain_block_numpy_status", tracked)
+    param = xr.DataArray([0.0, 1.0], dims="sample")
+    if lazy:
+        param = param.chunk({"sample": 2})
+    size = 65_537
+    index = xr.indexes.RangeIndex.arange(size, dim="trial")
+    query = xr.DataArray(
+        np.empty((size, 0)),
+        dims=("trial", "query"),
+        coords=xr.Coordinates.from_xindex(index),
+    )
+    mapping = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+    )
+
+    assert mapping.valid.shape == (size, 0)
+    assert mapping.valid.xindexes["trial"].equals(query.xindexes["trial"])
+    if lazy:
+        assert row_counts == []
+        mapping.valid.compute(scheduler="synchronous")
+    assert row_counts == [1]
+
+
+def test_param_hard_empty_map_broadcast_001_lazy_source_failure_is_deferred() -> None:
+    """Query-only topology must not corrupt deferred source-domain validation."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    param = xr.DataArray([0.0, 2.0, 1.0], dims="sample").chunk({"sample": 3})
+    query = xr.DataArray(np.empty((2, 0)), dims=("trial", "query"))
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+        )
+
+    assert tasks == []
+    with pytest.raises(ValueError, match="build_param_map: parameter coordinate must be monotonic"):
+        mapping.valid.compute(scheduler="synchronous")
+
+
+@pytest.mark.parametrize("lazy_input", ("param", "query", "both"))
+def test_param_core_empty_map_block_002_mixed_lazy_zero_source_stays_lazy(
+    lazy_input: str,
+) -> None:
+    """ID: PARAM_CORE_EMPTY_MAP_BLOCK_002_mixed_lazy_zero_source_stays_lazy."""
+    da = pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    param = xr.DataArray(np.empty(0), dims="sample")
+    query_index = xr.indexes.RangeIndex.arange(65_537, dim="query")
+    query = xr.DataArray(
+        np.linspace(0.0, 1.0, 65_537),
+        dims="query",
+        coords=xr.Coordinates.from_xindex(query_index),
+    )
+    if lazy_input in {"param", "both"}:
+        param = param.copy(data=da.from_array(param.data, chunks=(0,)))
+    if lazy_input in {"query", "both"}:
+        query = query.copy(data=da.from_array(query.data, chunks=(65_537,)))
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+        )
+        actual = apply_param_map(
+            xr.DataArray(np.empty(0, dtype=np.complex64), dims="sample"),
+            param_map=mapping,
+            sequence_dim="sample",
+        )
+
+    assert tasks == []
+    assert mapping.valid.chunks is not None
+    assert actual.chunks is not None
+    assert max(actual.chunks[actual.get_axis_num("query")]) <= 65_536
+    assert actual.dtype == np.dtype("complex128")
+    assert mapping.valid.xindexes["query"].equals(query.xindexes["query"])
+    assert actual.xindexes["query"].equals(query.xindexes["query"])
+    computed = actual.compute(scheduler="synchronous")
+    assert computed.shape == (65_537,)
+    assert bool(computed.isnull().all())
+
+
+@pytest.mark.parametrize("query_size", (0, 1))
+def test_param_perf_map_failure_reduction_001_keeps_dask_tasks_bounded(
+    query_size: int,
+) -> None:
+    """ID: PARAM_PERF_MAP_FAILURE_REDUCTION_001_keeps_dask_tasks_bounded."""
+    pytest.importorskip("dask.array")
+    size = 65_537
+    param = xr.DataArray(
+        np.broadcast_to([0.0, 1.0], (size, 2)),
+        dims=("trial", "sample"),
+    ).chunk({"trial": 65_536, "sample": 2})
+    query = xr.DataArray(
+        np.empty((size, 0)) if query_size == 0 else np.full((size, 1), 0.5),
+        dims=("trial", "query"),
+    ).chunk({"trial": 65_536, "query": max(query_size, 1)})
+    mapping = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+    )
+    assert mapping.valid.chunks is not None
+    assert max(mapping.valid.chunksizes["trial"]) <= 65_536
+    computed = mapping.valid.compute(scheduler="synchronous")
+    assert computed.sizes == {"trial": size, "query": query_size}
+
+
+@pytest.mark.parametrize(
+    "zero_domain",
+    ("source_batch", "source_supplemental_batch", "query_batch"),
+)
+def test_param_core_zero_logical_rows_001_skips_zero_sized_dask_kernels(
+    zero_domain: str,
+) -> None:
+    """ID: PARAM_CORE_ZERO_LOGICAL_ROWS_001_skips_zero_sized_dask_kernels."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    if zero_domain == "source_batch":
+        param = xr.DataArray(np.empty((0, 2)), dims=("trial", "sample")).chunk({"trial": 1, "sample": 2})
+        query = xr.DataArray([0.25, 0.75], dims="query")
+        values = xr.DataArray(np.empty((0, 2)), dims=("trial", "sample")).chunk({"trial": 1, "sample": 2})
+        expected_sizes = {"trial": 0, "query": 2}
+    elif zero_domain == "source_supplemental_batch":
+        param = xr.DataArray(
+            np.empty((2, 0, 2)),
+            dims=("trial", "sensor", "sample"),
+        ).chunk({"trial": 2, "sensor": 1, "sample": 2})
+        query = xr.DataArray([0.25, 0.75], dims="query")
+        values = param.copy()
+        expected_sizes = {"trial": 2, "sensor": 0, "query": 2}
+    else:
+        param = xr.DataArray([0.0, 1.0], dims="sample").chunk({"sample": 2})
+        query = xr.DataArray(np.empty((0, 2)), dims=("trial", "query")).chunk({"trial": 1, "query": 2})
+        values = xr.DataArray([0.0, 1.0], dims="sample").chunk({"sample": 2})
+        expected_sizes = {"trial": 0, "query": 2}
+
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+        )
+        actual = apply_param_map(values, param_map=mapping, sequence_dim="sample")
+
+    assert tasks == []
+    assert mapping.valid.sizes == expected_sizes
+    assert actual.sizes == expected_sizes
+    actual.compute(scheduler="synchronous")
+
+
+def test_zero_row_bounds_and_gather_avoid_source_dependencies() -> None:
+    """Empty bounds and gather results are independent of source task graphs."""
+    da = pytest.importorskip("dask.array")
+    from dask import delayed
+
+    shape = (0, 2)
+    param = xr.DataArray(
+        da.from_delayed(
+            delayed(_forbidden_empty_param_source)("param", shape, np.dtype("float64")),
+            shape=shape,
+            dtype="float64",
+        ),
+        dims=("trial", "sample"),
+    )
+    values = xr.DataArray(
+        da.from_delayed(
+            delayed(_forbidden_empty_param_source)("payload", shape, np.dtype("float64")),
+            shape=shape,
+            dtype="float64",
+        ),
+        dims=("trial", "sample"),
+    )
+    bounds = build_param_bounds_map(
+        param=param,
+        start=0.25,
+        stop=0.75,
+        sequence_dim="sample",
+    )
+    indexer = xr.DataArray(
+        da.zeros((0, 2), chunks=(0, 2), dtype="int64"),
+        dims=("trial", "query"),
+    )
+    gathered = map_apply_mod.gather_along_sequence(
+        values,
+        indexer,
+        sequence_dim="sample",
+        query_dim="query",
+        owner="test",
+    )
+
+    for bound in (bounds.i0, bounds.i1):
+        computed = bound.compute(scheduler="synchronous")
+        assert computed.sizes == {"trial": 0}
+        assert computed.dtype == np.dtype("int64")
+    assert gathered.compute(scheduler="synchronous").sizes == {"trial": 0, "query": 2}
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_hard_empty_map_block_001_failure_order_crosses_blocks(
+    lazy: bool,
+) -> None:
+    """ID: PARAM_HARD_EMPTY_MAP_BLOCK_001_failure_order_crosses_blocks."""
+    size = 65_537
+    baseline = np.asarray(
+        ["2020-01-01", "2020-01-02", "2020-01-03"],
+        dtype="datetime64[ns]",
+    )
+    values = np.broadcast_to(
+        baseline,
+        (size, 3),
+    ).copy()
+    values[-2] = np.asarray(
+        ["2020-01-02", "2020-01-01", "2020-01-03"],
+        dtype="datetime64[ns]",
+    )
+    values[-1] = np.asarray(
+        [
+            "1677-09-21T00:12:43.145224193",
+            "2000-01-01",
+            "2262-04-11T23:47:16.854775807",
+        ],
+        dtype="datetime64[ns]",
+    )
+    param = xr.DataArray(values, dims=("trial", "sample"))
+    query = xr.DataArray(
+        np.empty((size, 0), dtype="datetime64[ns]"),
+        dims=("trial", "query"),
+    )
+    if lazy:
+        pytest.importorskip("dask.array")
+        param = param.chunk({"trial": size, "sample": 3})
+        query = query.chunk({"trial": size, "query": 1})
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+            param_kind="datetime64",
+        )
+        with pytest.raises(ValueError, match="monotonic non-decreasing"):
+            mapping.valid.compute(scheduler="synchronous")
+        return
+    with pytest.raises(ValueError, match="monotonic non-decreasing"):
+        build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+            param_kind="datetime64",
+        )
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("source_size", (0, 2))
+@pytest.mark.parametrize("dtype", (np.int64, np.float32, np.complex64, np.complex128))
+def test_param_core_empty_eval_001_preserves_numeric_result_dtype(
+    lazy: bool,
+    source_size: int,
+    dtype: type[np.generic],
+) -> None:
+    """ID: PARAM_CORE_EMPTY_EVAL_001_preserves_numeric_result_dtype."""
+    param_data = np.arange(source_size, dtype=np.float64)
+    value_data = np.arange(source_size, dtype=dtype)
+    query_data = np.empty(0) if source_size else np.asarray([0.5])
+    param = xr.DataArray(param_data, dims="sample")
+    values = xr.DataArray(value_data, dims="sample")
+    query = xr.DataArray(query_data, dims="query")
+    if lazy:
+        da = pytest.importorskip("dask.array")
+        param = param.copy(data=da.from_array(param_data, chunks=(max(source_size, 1),)))
+        values = values.copy(data=da.from_array(value_data, chunks=(max(source_size, 1),)))
+        query = query.copy(data=da.from_array(query_data, chunks=(max(query_data.size, 1),)))
+    mapping = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+    )
+    actual = apply_param_map(values, param_map=mapping, sequence_dim="sample")
+    assert actual.dtype == np.result_type(np.dtype(dtype), np.float64)
+    if lazy:
+        assert actual.chunks is not None
+        actual.compute()
 
 
 @pytest.mark.parametrize("param_kind", ("numeric", "datetime64"))
@@ -1093,3 +1482,64 @@ def test_param_hard_038_invalid_validity_dtype_fails_closed(values: np.ndarray) 
     )
     with pytest.raises(ValueError, match="ordered real numeric or datetime64 dtype"):
         resolve_param_valid_mask(sized, spec=sized_spec, sequence_size_coord="group_size")
+
+
+def test_map_coordinate_equality_never_executes_independent_lazy_values() -> None:
+    """ID: PARAM_HARD_MAP_COORDINATES_001_lazy_comparison_is_fail_conservative."""
+    da = pytest.importorskip("dask.array")
+    from dask import delayed
+    from dask.callbacks import Callback
+
+    left = da.from_delayed(delayed(np.asarray, pure=False)([1, 2]), shape=(2,), dtype="int64")
+    right = da.from_delayed(delayed(np.asarray, pure=False)([1, 2]), shape=(2,), dtype="int64")
+    param = xr.DataArray(
+        [[0.0, 1.0], [0.0, 1.0]], dims=("trial", "sample"),
+        coords={"aux": ("trial", left)},
+    )
+    query = xr.DataArray(
+        [[0.5], [0.5]], dims=("trial", "query"),
+        coords={"aux": ("trial", right)},
+    )
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)), pytest.raises(
+        ValueError, match="^build_param_map: coordinate 'aux' has conflicting output metadata or values",
+    ):
+        build_param_map(param=param, query=query, sequence_dim="sample", query_dim="query")
+    assert tasks == []
+
+
+def test_map_coordinate_encoding_conflict_is_not_silently_resolved() -> None:
+    """ID: PARAM_HARD_MAP_COORDINATES_002_encoding_conflict_is_owned."""
+    param = xr.DataArray([[0.0, 1.0]], dims=("trial", "sample"), coords={"aux": ("trial", [7])})
+    query = xr.DataArray([[0.5]], dims=("trial", "query"), coords={"aux": ("trial", [7])})
+    param.coords["aux"].encoding["source"] = "left"
+    query.coords["aux"].encoding["source"] = "right"
+    with pytest.raises(ValueError, match="^build_param_map: coordinate 'aux' has conflicting output metadata"):
+        build_param_map(param=param, query=query, sequence_dim="sample", query_dim="query")
+
+
+@pytest.mark.parametrize("kind", ("numeric", "datetime64"))
+@pytest.mark.parametrize("operation", ("map", "bounds"))
+def test_map_alignment_errors_keep_owner_and_cause(kind: str, operation: str) -> None:
+    """ID: PARAM_HARD_MAP_ALIGNMENT_001_exact_alignment_is_owned."""
+    domain = [0.0, 1.0] if kind == "numeric" else np.asarray(
+        ["2020-01-01", "2020-01-02"], dtype="datetime64[ns]",
+    )
+    target = 0.5 if kind == "numeric" else np.datetime64("2020-01-01T12:00:00", "ns")
+    param = xr.DataArray([domain], dims=("trial", "sample"), coords={"trial": ["a"]})
+    other = xr.DataArray([[target]], dims=("trial", "query"), coords={"trial": ["b"]})
+    if operation == "map":
+        invoke = lambda: build_param_map(
+            param=param, query=other, sequence_dim="sample", query_dim="query", param_kind=kind,
+        )
+        owner = "build_param_map"
+    else:
+        start = other.isel(query=0, drop=True)
+        invoke = lambda: build_param_bounds_map(
+            param=param, start=start, stop=start,
+            sequence_dim="sample", param_kind=kind,
+        )
+        owner = "build_param_bounds_map"
+    with pytest.raises(ValueError, match=rf"^{owner}: .*inputs are not label-aligned") as error:
+        invoke()
+    assert error.value.__cause__ is not None

@@ -10,31 +10,36 @@ from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
+from tal.core.orchestration.finalize import transfer_dataset_attrs
+from tal.core.orchestration.runtime_checks import (
+    resolve_single_numeric_var_single_core_dim,
+)
 from tal.core.orchestration.topology import (
     SEMANTIC_NON_CORE_POLICY,
     STRICT_NON_CORE_POLICY,
-    TopologyPolicy,
     TopologyOperand,
+    TopologyPolicy,
     resolve_nary_topology,
 )
-from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
-from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
 from tal.utils.frame_schema import set_frames
-from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
+from tal.utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
+)
 
+from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
 from ..association import (
     SpatialAssociationPlan,
     attach_spatial_association,
     resolve_passive_association,
 )
-from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
-from ..policies.frame import resolve_apply_output_frames
 from ..kernels.pose_apply_kernels import pose_apply_position_kernel
-from ..position import Position
-from .rotation_apply_ops import _rotation_apply_with_owner
+from ..policies.frame import resolve_apply_output_frames
 from ..policies.wrap import wrap_like
+from ..position import Position
 from ..velocity import AngularVelocity, LinearVelocity, Velocity
+from .core_chunks import single_core_chunk
+from .rotation_apply_ops import _rotation_apply_with_owner
 
 if TYPE_CHECKING:
     from ..pose import Pose
@@ -269,9 +274,9 @@ def _apply_pose_position_kernel(
     try:
         output = xr.apply_ufunc(
             kernel,
-            target_da,
-            translation_da,
-            quat_da,
+            single_core_chunk(target_da, dim=target_dim),
+            single_core_chunk(translation_da, dim=translation_dim),
+            single_core_chunk(quat_da, dim=quat_dim),
             input_core_dims=[[target_dim], [translation_dim], [quat_dim]],
             output_core_dims=[[target_dim]],
             vectorize=False,

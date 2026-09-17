@@ -11,7 +11,11 @@ import tal.spatial.kernels.rotation_interp_backends as interp_backends
 from tal import AnalysisObject
 from tal.core.param_ops.types import ParamEvalOptions
 from tal.core.schema_errors import SchemaError
-from tal.core.schema_read import read_param_coord_name, read_roles
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
 from tal.frames import FrameGraph
 from tal.linalg import Array
 from tal.spatial import Rotation
@@ -137,6 +141,336 @@ def _rotation_dataset_temporal(
         ds = AnalysisObject._from_validated(ds).set_param_coord(name="time_s", validate=False).as_dataset(copy="none")
         ds = ds.assign_coords(alt_time=("sample", [10.0, 20.0]))
     return ds.copy(deep=True)
+
+
+@pytest.mark.parametrize("operation", ("as_matrix", "inverse", "compose"))
+def test_rotation_fixed_core_chunks_preserve_lazy_outer_topology(operation: str) -> None:
+    """ID: SPATIAL_CORE_FIXED_CORE_CHUNKS_001_rotation_kernels_accept_split_axes."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    eager = Rotation(_rotation_dataset_quat())
+    source = Rotation(eager.as_dataset(copy="none").chunk({"sample": 1, "quat": (2, 2)}))
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = source.compose(eager) if operation == "compose" else getattr(source, operation)()
+    expected = eager.compose(eager) if operation == "compose" else getattr(eager, operation)()
+    assert tasks == []
+    xr.testing.assert_identical(
+        actual.as_dataset(copy="none").compute(scheduler="synchronous"),
+        expected.as_dataset(copy="none"),
+    )
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_rotation_matrix_to_quat_accepts_split_fixed_core_chunks() -> None:
+    """ID: SPATIAL_CORE_FIXED_CORE_CHUNKS_002_matrix_conversion_is_lazy."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    eager = Rotation(_rotation_dataset_quat()).as_matrix(validate=True)
+    source = Rotation(eager.as_dataset(copy="none").chunk(
+        {"sample": 1, "row": (1, 2), "col": (2, 1)},
+    ))
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = source.as_quat()
+    assert tasks == []
+    xr.testing.assert_identical(
+        actual.as_dataset(copy="none").compute(scheduler="synchronous"),
+        eager.as_quat().as_dataset(copy="none"),
+    )
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+@pytest.mark.parametrize("shape", ((2, 2), (2, 0), (0, 2)))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_rotation_typed_query_labels_follow_flattened_sequence(
+    rep: str, operation: str, shape: tuple[int, int], lazy: bool,
+) -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_001_rotation_flattens_caller_labels."""
+    from dask.callbacks import Callback
+
+    source_ds = _rotation_dataset_temporal(rep=rep)
+    if lazy:
+        source_ds = source_ds.chunk({"sample": 1})
+    graph = FrameGraph()
+    source = Rotation(source_ds).with_graph(graph)
+    query = xr.DataArray(
+        np.linspace(0.1, 0.9, int(np.prod(shape))).reshape(shape),
+        dims=("trial_query", "when"),
+        coords={
+            "trial_query": np.arange(shape[0]),
+            "when": np.arange(shape[1]),
+            "note": ("trial_query", np.arange(shape[0]) + 10),
+        },
+    )
+    query.coords["note"].attrs["meaning"] = "caller label"
+    query.coords["note"].encoding["dtype"] = "int64"
+    if lazy:
+        query = query.chunk({dim: max(size, 1) for dim, size in zip(query.dims, shape, strict=True)})
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = getattr(source.param, operation)(query, validate=True)
+    assert tasks == []
+    assert result.graph is graph
+    dataset = result.as_dataset(copy="none")
+    assert dataset.sizes["sample"] == int(np.prod(shape))
+    assert dataset.coords["trial_query"].dims == ("sample",)
+    assert dataset.coords["when"].dims == ("sample",)
+    assert dataset.coords["note"].dims == ("sample",)
+    assert dataset.coords["note"].attrs == query.coords["note"].attrs
+    assert dataset.coords["note"].encoding == query.coords["note"].encoding
+    assert get_rotation_rep(dataset, owner="test") == rep
+    if shape == (2, 2):
+        np.testing.assert_array_equal(dataset.coords["trial_query"], [0, 0, 1, 1])
+        np.testing.assert_array_equal(dataset.coords["when"], [0, 1, 0, 1])
+        np.testing.assert_array_equal(dataset.coords["note"], [10, 10, 11, 11])
+        expected = Slerp(
+            [0.0, 1.0],
+            SciRotation.from_quat(_rotation_dataset_temporal()["rotation"].data),
+        )(np.linspace(0.1, 0.9, 4)).as_matrix()
+        actual = result.as_matrix().as_dataset(copy="none")["rotation"].compute(scheduler="synchronous")
+        np.testing.assert_allclose(actual, expected, atol=1e-6)
+
+
+def test_rotation_typed_query_preserves_surviving_native_batch_index() -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_002_native_batch_index_survives."""
+    dataset = _rotation_dataset_temporal().expand_dims(trial=[0, 1])
+    dataset = dataset.drop_indexes("trial").drop_vars("trial").assign_coords(
+        xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(2, dim="trial")),
+    )
+    source = Rotation(AnalysisObject.from_data(
+        dataset, sequence_dim="sample", batch_dims=("trial",),
+        core_dims=("quat",), param_coord="time_s",
+    ))
+    query = xr.DataArray(
+        [[0.25, 0.75], [0.5, 0.9]], dims=("trial", "when"),
+        coords=xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(2, dim="trial")),
+    )
+    result = source.param.at(query).as_dataset(copy="none")
+    assert result.sizes["trial"] == 2 and result.sizes["sample"] == 2
+    assert type(result.xindexes["trial"]) is type(query.xindexes["trial"])
+    assert result.xindexes["trial"].equals(query.xindexes["trial"])
+
+
+def test_rotation_typed_query_reorders_native_batch_labels() -> None:
+    """ID: SPATIAL_CORE_NATIVE_BATCH_REINDEX_001_typed_query_uses_core_alignment."""
+    dataset = _rotation_dataset_temporal().expand_dims(trial=[0, 1])
+    dataset = dataset.drop_indexes("trial").drop_vars("trial").assign_coords(
+        xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(2, dim="trial")),
+    )
+    source = Rotation(AnalysisObject.from_data(
+        dataset, sequence_dim="sample", batch_dims=("trial",),
+        core_dims=("quat",), param_coord="time_s",
+    ))
+    query = xr.DataArray(
+        [[0.75], [0.25]], dims=("trial", "when"),
+        coords=xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(1, -1, -1, dim="trial")),
+    )
+    result = source.param.at(query).as_dataset(copy="none")
+    assert isinstance(result.xindexes["trial"], xr.indexes.RangeIndex)
+    assert result.xindexes["trial"].equals(source.as_dataset(copy="none").xindexes["trial"])
+    np.testing.assert_allclose(result.coords["time_s"], [[0.25], [0.75]])
+
+
+def test_rotation_typed_query_rejects_incompatible_shared_index_type() -> None:
+    """ID: SPATIAL_HARD_QUERY_OUTPUT_004_shared_index_type_has_spatial_owner."""
+    dataset = _rotation_dataset_temporal().expand_dims(trial=[0, 1])
+    dataset = dataset.drop_indexes("trial").drop_vars("trial").assign_coords(
+        xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(2, dim="trial")),
+    )
+    source = Rotation(AnalysisObject.from_data(
+        dataset, sequence_dim="sample", batch_dims=("trial",),
+        core_dims=("quat",), param_coord="time_s",
+    ))
+    query = xr.DataArray(
+        [[0.25], [0.75]], dims=("trial", "when"), coords={"trial": [0, 1]},
+    )
+    with pytest.raises(
+        ValueError,
+        match="^spatial.rotation.param.at: shared batch index along 'trial' has incompatible xarray index topology",
+    ):
+        source.param.at(query)
+
+
+def test_rotation_query_ownership_uses_actual_generated_coordinates() -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_008_rotation_actual_generated_claims."""
+    source = Rotation(_rotation_dataset_temporal())
+    label_query = xr.DataArray(
+        [0.25, 0.75], dims="valid", coords={"valid": ["first", "second"]},
+    )
+    result = source.param.at(label_query).as_dataset(copy="none")
+    np.testing.assert_array_equal(result.coords["valid"], ["first", "second"])
+    assert result.coords["valid"].dims == ("sample",)
+    conflicting = xr.DataArray([0.25, 0.75], dims="time_s")
+    with pytest.raises(ValueError, match="^spatial.rotation.param.at: query axis or index 'time_s'"):
+        source.param.at(conflicting)
+
+
+def test_rotation_typed_query_keeps_shared_transform_batch_index_lazy() -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_007_shared_transform_batch_index_survives."""
+    from typing import Any
+
+    class Transform(xr.indexes.CoordinateTransform):
+        def __init__(self, calls: list[str]) -> None:
+            self.calls = calls
+            super().__init__(("trial",), {"trial": 2})
+
+        def forward(self, positions: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append("forward")
+            return {"trial": positions["trial"]}
+
+        def reverse(self, labels: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append("reverse")
+            return {"trial": labels["trial"]}
+
+        def equals(self, other: object, **kwargs: object) -> bool:
+            _ = kwargs
+            return isinstance(other, Transform)
+
+    calls: list[str] = []
+    coordinates = xr.Coordinates.from_xindex(
+        xr.indexes.CoordinateTransformIndex(Transform(calls))
+    )
+    dataset = _rotation_dataset_temporal().expand_dims(trial=2).assign_coords(coordinates)
+    source = Rotation(AnalysisObject.from_data(
+        dataset, sequence_dim="sample", batch_dims=("trial",),
+        core_dims=("quat",), param_coord="time_s",
+    ))
+    query = xr.DataArray([[0.25, 0.75], [0.5, 0.9]], dims=("trial", "when"), coords=coordinates)
+    calls.clear()
+    result = source.param.at(query).as_dataset(copy="none")
+    assert calls == []
+    assert type(result.xindexes["trial"]) is type(query.xindexes["trial"])
+    assert result.xindexes["trial"].equals(query.xindexes["trial"])
+
+
+def test_rotation_typed_query_rejects_transform_label_projection_without_execution() -> None:
+    """ID: SPATIAL_HARD_QUERY_OUTPUT_001_transform_projection_rejects_lazily."""
+    from typing import Any
+
+    from dask.callbacks import Callback
+
+    class Transform(xr.indexes.CoordinateTransform):
+        def __init__(self, calls: list[str]) -> None:
+            self.calls = calls
+            super().__init__(("query_row",), {"query_row": 2})
+
+        def forward(self, positions: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append("forward")
+            return {"query_row": positions["query_row"]}
+
+        def reverse(self, labels: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append("reverse")
+            return {"query_row": labels["query_row"]}
+
+        def equals(self, other: object, **kwargs: object) -> bool:
+            _ = kwargs
+            return isinstance(other, Transform)
+
+    calls: list[str] = []
+    query = xr.DataArray(
+        [[0.25, 0.75], [0.5, 0.9]], dims=("query_row", "when"),
+        coords=xr.Coordinates.from_xindex(xr.indexes.CoordinateTransformIndex(Transform(calls))),
+    )
+    source = Rotation(_rotation_dataset_temporal())
+    tasks: list[object] = []
+    with (
+        Callback(pretask=lambda key, *_: tasks.append(key)),
+        pytest.raises(ValueError, match="^spatial.rotation.param.at: flattening transform-backed"),
+    ):
+        source.param.at(query)
+    assert calls == [] and tasks == []
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+def test_rotation_accepts_query_lane_named_like_output_sequence(rep: str, operation: str) -> None:
+    """ID: SPATIAL_CORE_QUERY_LANE_002_rotation_consumes_source_named_query_axis."""
+    source = Rotation(_rotation_dataset_temporal(rep=rep))
+    query = xr.DataArray([0.25, 0.75], dims="sample", coords={"sample": [10, 20]})
+    actual = getattr(source.param, operation)(query).as_dataset(copy="none")
+    reference = getattr(source.param, operation)([0.25, 0.75]).as_dataset(copy="none")
+    assert get_rotation_rep(actual, owner="test") == rep
+    np.testing.assert_array_equal(actual.coords["sample"], [0, 1])
+    np.testing.assert_allclose(actual["rotation"], reference["rotation"])
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+def test_rotation_empty_query_projects_lazy_caller_label(rep: str, operation: str) -> None:
+    """ID: SPATIAL_CORE_EMPTY_QUERY_LABEL_002_rotation_lazy_projection_is_empty."""
+    da = pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    source = Rotation(_rotation_dataset_temporal(rep=rep).chunk({"sample": 1}))
+    query = xr.DataArray(
+        np.empty((2, 0)), dims=("row_query", "when"),
+        coords={"label": ("row_query", da.from_array(np.asarray([7, 8]), chunks=1))},
+    )
+    query.coords["label"].attrs["origin"] = "caller"
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = getattr(source.param, operation)(query).as_dataset(copy="none")
+    assert tasks == []
+    assert actual.sizes["sample"] == 0
+    assert actual.coords["label"].dims == ("sample",)
+    assert actual.coords["label"].chunks is not None
+    assert actual.coords["label"].attrs == {"origin": "caller"}
+    assert get_rotation_rep(actual, owner="test") == rep
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_rotation_empty_lazy_label_retains_current_domain_validation() -> None:
+    """ID: SPATIAL_HARD_EMPTY_QUERY_LABEL_002_rotation_validation_dependency_survives."""
+    da = pytest.importorskip("dask.array")
+    from dask import delayed
+    from dask.callbacks import Callback
+
+    domain = da.from_delayed(delayed(np.array)([1.0, 0.0]), shape=(2,), dtype=float)
+    dataset = _rotation_dataset_temporal().assign_coords(time_s=("sample", domain))
+    source = Rotation(dataset)
+    query = xr.DataArray(
+        np.empty((2, 0)), dims=("row_query", "when"),
+        coords={"label": ("row_query", da.from_array(np.asarray([7, 8]), chunks=1))},
+    )
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = source.param.at(query).as_dataset(copy="none")
+    assert tasks == [] and actual.coords["label"].chunks is not None
+    with pytest.raises(ValueError, match="build_param_map: parameter coordinate must be monotonic"):
+        actual.compute(scheduler="synchronous")
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_rotation_temporal_query_coordinate_cannot_replace_payload(
+    rep: str, operation: str, lazy: bool,
+) -> None:
+    """ID: SPATIAL_HARD_QUERY_NAMESPACE_001_typed_payload_is_protected."""
+    from dask.callbacks import Callback
+
+    ds = _rotation_dataset_temporal(rep=rep)
+    if lazy:
+        ds = ds.chunk({"sample": 2})
+    source = Rotation(ds)
+    before = source.as_dataset(copy="deep")
+    query = xr.DataArray([0.5], dims="when", coords={"rotation": ("when", [99.0])})
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)), pytest.raises(
+        ValueError, match=r"^spatial\.rotation\.param\.(at|resample_to): query name 'rotation' collides",
+    ):
+        getattr(source.param, operation)(query)
+    assert tasks == []
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
 
 
 def _as_dataarray_with_schema(ds: xr.Dataset, *, var_name: str = "rotation") -> xr.DataArray:
@@ -938,10 +1272,142 @@ def test_spatial_core_empty_rotation_eval_001_preserves_typed_topology(
     assert result.graph is graph
     assert get_rotation_rep(dataset, owner="test") == rep
     assert dataset.sizes == {"trial": 2, "sample": len(query), **({"quat": 4} if rep == "quat" else {"row": 3, "col": 3})}
-    xr.testing.assert_identical(dataset.coords["batch_note"], before.coords["batch_note"])
+    size_name = read_sequence_size_coord_name(dataset)
+    assert size_name is not None
+    np.testing.assert_array_equal(dataset.coords[size_name], [0, 0])
+    xr.testing.assert_identical(dataset.coords["batch_note"].drop_vars(size_name), before.coords["batch_note"])
     assert (dataset["rotation"].chunks is not None) == lazy
     assert tasks == []
     assert bool(np.isnan(dataset.compute()["rotation"]).all())
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("representation", ("quat", "matrix"))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("method", ("nearest", "slerp"))
+def test_empty_rotation_result_remains_structurally_missing_when_reused(
+    representation: str, lazy: bool, method: str,
+) -> None:
+    """ID: SPATIAL_HARD_EMPTY_ROTATION_001_reuse_has_no_samples."""
+    eager = Rotation(_rotation_dataset_temporal())
+    if representation == "matrix":
+        eager = eager.as_matrix()
+    empty = eager.as_dataset(copy="none").isel(sample=slice(0, 0))
+    if lazy:
+        pytest.importorskip("dask.array")
+        empty = empty.chunk({"sample": 1})
+    source = Rotation(empty)
+    before = source.as_dataset(copy="deep")
+    opts = RotationTemporalOptions(method=method)
+    tasks: list[object] = []
+    if lazy:
+        from dask.callbacks import Callback
+
+        with Callback(pretask=lambda key, *_: tasks.append(key)):
+            first = source.param.at([0.0, 1.0], opts=opts)
+            second = first.param.resample_to([0.5], opts=opts)
+    else:
+        first = source.param.at([0.0, 1.0], opts=opts)
+        second = first.param.resample_to([0.5], opts=opts)
+    assert tasks == []
+    for result in (first, second):
+        dataset = result.as_dataset(copy="none")
+        size_name = read_sequence_size_coord_name(dataset)
+        assert size_name is not None
+        np.testing.assert_array_equal(dataset.coords[size_name], 0)
+        assert get_rotation_rep(dataset, owner="test") == representation
+        assert bool(np.isnan(dataset["rotation"].compute(scheduler="synchronous")).all())
+    assert not bool(second.as_dataset(copy="none").coords["valid"].any())
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+def test_spatial_core_empty_rotation_query_001_lazy_slerp_uses_empty_owner(
+    rep: str,
+) -> None:
+    """ID: SPATIAL_CORE_EMPTY_ROTATION_QUERY_001_lazy_slerp_uses_empty_owner."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    source = Rotation(_rotation_dataset_temporal(rep=rep))
+    dataset = source.as_dataset(copy="none").copy()
+    dataset["rotation"] = dataset["rotation"].chunk({"sample": 1})
+    graph = FrameGraph()
+    source = Rotation(dataset).with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    query = xr.DataArray(
+        np.empty(0),
+        dims="when",
+        coords={"when": np.asarray([], dtype=np.int64)},
+    )
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at(
+            query,
+            opts=RotationTemporalOptions(method="slerp"),
+        )
+
+    actual = result.as_dataset(copy="none")
+    assert tasks == []
+    assert result.graph is graph
+    assert get_rotation_rep(actual, owner="test") == rep
+    assert actual.sizes["sample"] == 0
+    assert actual["rotation"].chunks is not None
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("rep", ("quat", "matrix"))
+@pytest.mark.parametrize("method", ("nearest", "slerp"))
+def test_spatial_core_zero_batch_rotation_eval_001_skips_lazy_kernels(
+    rep: str,
+    method: str,
+) -> None:
+    """ID: SPATIAL_CORE_ZERO_BATCH_ROTATION_EVAL_001_skips_lazy_kernels."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    values = np.empty((0, 2, 4), dtype=np.float64)
+    source = Rotation.from_data(
+        xr.DataArray(
+            values,
+            dims=("trial", "sample", "quat"),
+            coords={
+                "trial": np.asarray([], dtype=np.int64),
+                "sample": [0, 1],
+                "quat": ["x", "y", "z", "w"],
+                "time": xr.DataArray(
+                    np.empty((0, 2)),
+                    dims=("trial", "sample"),
+                ).chunk({"trial": 1, "sample": 2}),
+            },
+            name="rotation",
+        ).chunk({"trial": 1, "sample": 2, "quat": 4}),
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("quat",),
+        param_coord="time",
+    )
+    if rep == "matrix":
+        source = source.as_matrix()
+    graph = FrameGraph()
+    source = source.with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at(
+            [0.25, 0.75],
+            opts=RotationTemporalOptions(method=method),
+        )
+
+    actual = result.as_dataset(copy="none")
+    assert tasks == []
+    assert actual.sizes["trial"] == 0
+    assert actual.sizes["sample"] == 2
+    assert result.graph is graph
+    assert get_rotation_rep(actual, owner="test") == rep
+    assert actual["rotation"].chunks is not None
+    actual.compute(scheduler="synchronous")
     xr.testing.assert_identical(source.as_dataset(copy="none"), before)
 
 

@@ -1,22 +1,30 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from math import prod
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from tal.utils.xarray_namespace import (
-    dataarray_namespace_names,
-    rename_dims_collision_safe,
-    unique_temp_dim,
+from ..orchestration.indexing import (
+    capture_index_topology,
+    capture_result_coordinates,
+    require_compatible_lane_index_types,
+    require_unique_lane_indexes,
+    restore_index_topology,
+    restore_result_coordinates,
 )
-
-from ..orchestration.indexing import require_unique_lane_indexes
 from ..ordered_dtypes import (
     is_float64_exact_integer,
     is_integral_dtype,
     is_ordered_real_numeric_dtype,
+)
+from ..schema_validate.finalize import transfer_dataarray_metadata
+from .query_topology import (
+    QueryTopologyPlan,
+    prepare_query_topology,
+    reshape_query_data,
 )
 from .types import QueryGrid
 
@@ -43,21 +51,29 @@ def _stack_to_query_dim(
     if len(dims) == 1:
         dim = dims[0]
         return query if dim == query_dim else query.rename({dim: query_dim})
-    names = set(dataarray_namespace_names(query))
-    temp_dim = unique_temp_dim(f"{query_dim}__stack", taken_dims=tuple(sorted(names)))
-    names.add(temp_dim)
-    stacked = query.stack({temp_dim: list(dims)})
-    if query_dim in stacked.coords:
-        level_name = unique_temp_dim(
-            f"{query_dim}__level",
-            taken_dims=dataarray_namespace_names(stacked),
-        )
-        stacked = stacked.rename({query_dim: level_name})
-    return rename_dims_collision_safe(
-        stacked,
-        mapping={temp_dim: query_dim},
-        temp_prefix=f"{query_dim}__tmp__",
+    outer_dims = tuple(dim for dim in query.dims if dim not in dims)
+    ordered = query.transpose(*outer_dims, *dims)
+    shape = (
+        *(int(ordered.sizes[dim]) for dim in outer_dims),
+        int(prod(ordered.sizes[dim] for dim in dims)),
     )
+    data = reshape_query_data(
+        ordered.variable.data,
+        shape=shape,
+        dtype=ordered.dtype,
+        lazy=ordered.variable.chunks is not None,
+    )
+    target = xr.DataArray(
+        xr.Variable((*outer_dims, query_dim), data),
+        name=query.name,
+    )
+    target = transfer_dataarray_metadata(query, target)
+    coordinates = capture_result_coordinates(
+        query,
+        output_dims=outer_dims,
+        owner="normalize_query_grid",
+    )
+    return restore_result_coordinates(target, coordinates)  # type: ignore[return-value]
 
 
 def _as_query_dataarray(
@@ -245,11 +261,16 @@ def _reindex_batch_dim(
         return query
     indexer = batch_coords[dim]
     if not isinstance(indexer, xr.DataArray):
-        raise ValueError(f"normalize_query_grid: batch_coords[{dim!r}] must be an xr.DataArray.")
+        raise ValueError(  # noqa: TRY004 - preserve the established public error boundary
+            f"normalize_query_grid: batch_coords[{dim!r}] must be an xr.DataArray."
+        )
     _validate_batch_indexer_topology(
         indexer,
         dim=dim,
         owner="normalize_query_grid",
+    )
+    require_compatible_lane_index_types(
+        query, indexer, lane_dim=dim, owner="normalize_query_grid",
     )
     source_xindex = query.xindexes.get(dim)
     target_xindex = indexer.xindexes.get(dim)
@@ -275,6 +296,12 @@ def _reindex_batch_dim(
             "or use an ordered floating-point query dtype."
         )
     fill = np.datetime64("NaT", "ns") if param_kind == "datetime64" else np.nan
+    if isinstance(source_xindex, xr.indexes.RangeIndex) and isinstance(target_xindex, xr.indexes.RangeIndex):
+        # xarray cannot reindex a RangeIndex against a different RangeIndex;
+        # use its public labels temporarily, then restore the target native index.
+        reindexed = query.drop_indexes(dim).set_xindex(dim).reindex({dim: target_index}, fill_value=fill)
+        snapshot = capture_index_topology(indexer, dims=(dim,))
+        return restore_index_topology(reindexed, snapshot)  # type: ignore[return-value]
     return query.reindex({dim: indexer}, fill_value=fill)
 
 
@@ -291,6 +318,53 @@ def _apply_batch_coords(
     for dim in batch_dims:
         out = _reindex_batch_dim(out, dim=dim, batch_coords=batch_coords, param_kind=param_kind)
     return out
+
+
+def _normalize_query_grid_with_topology(
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    *,
+    query_dim: str = "query",
+    batch_dims: Sequence[str] = (),
+    batch_coords: Mapping[str, xr.DataArray] | None = None,
+    param_kind: str = "numeric",
+    enforce_order: bool = True,
+) -> tuple[QueryGrid, QueryTopologyPlan]:
+    """Prepare normalized values and private public-topology state."""
+    batch_tuple = tuple(str(dim) for dim in batch_dims)
+    if query_dim in batch_tuple:
+        raise ValueError(
+            "normalize_query_grid: query_dim "
+            f"{query_dim!r} collides with batch_dims {list(batch_tuple)!r}."
+        )
+    base, stacked = _as_query_dataarray(query, query_dim=query_dim, param_kind=param_kind)
+    q, batch_stacked = _normalize_batched_query(base, query_dim=query_dim, batch_dims=batch_tuple)
+    stacked_dims = batch_stacked or stacked
+    for dim in stacked_dims or ():
+        _assert_unique_axis_labels(base, dim=dim, owner="normalize_query_grid")
+    _validate_query_axis_labels(
+        q,
+        query_dim=query_dim,
+        batch_dims=batch_tuple,
+        owner="normalize_query_grid",
+    )
+    q = _apply_batch_coords(q, batch_dims=batch_tuple, batch_coords=batch_coords, param_kind=param_kind)
+    if enforce_order and query_dim in q.dims:
+        lead = [dim for dim in q.dims if dim != query_dim]
+        q = q.transpose(*lead, query_dim)
+    topology_source = base
+    if batch_coords and stacked_dims is not None:
+        topology_source = _apply_batch_coords(
+            base,
+            batch_dims=batch_tuple,
+            batch_coords=batch_coords,
+            param_kind=param_kind,
+        )
+    topology = prepare_query_topology(
+        topology_source,
+        query_dim=query_dim,
+        stacked_dims=stacked_dims,
+    )
+    return QueryGrid(values=q, query_dim=query_dim, stacked_dims=stacked_dims), topology
 
 
 def normalize_query_grid(
@@ -328,26 +402,15 @@ def normalize_query_grid(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    batch_tuple = tuple(str(dim) for dim in batch_dims)
-    if query_dim in batch_tuple:
-        raise ValueError(
-            "normalize_query_grid: query_dim "
-            f"{query_dim!r} collides with batch_dims {list(batch_tuple)!r}."
-        )
-    base, stacked = _as_query_dataarray(query, query_dim=query_dim, param_kind=param_kind)
-    q, batch_stacked = _normalize_batched_query(base, query_dim=query_dim, batch_dims=batch_tuple)
-    stacked_dims = batch_stacked or stacked
-    _validate_query_axis_labels(
-        q,
+    grid, _ = _normalize_query_grid_with_topology(
+        query,
         query_dim=query_dim,
-        batch_dims=batch_tuple,
-        owner="normalize_query_grid",
+        batch_dims=batch_dims,
+        batch_coords=batch_coords,
+        param_kind=param_kind,
+        enforce_order=enforce_order,
     )
-    q = _apply_batch_coords(q, batch_dims=batch_tuple, batch_coords=batch_coords, param_kind=param_kind)
-    if enforce_order and query_dim in q.dims:
-        lead = [dim for dim in q.dims if dim != query_dim]
-        q = q.transpose(*lead, query_dim)
-    return QueryGrid(values=q, query_dim=query_dim, stacked_dims=stacked_dims)
+    return grid
 
 
 __all__ = ["normalize_query_grid"]

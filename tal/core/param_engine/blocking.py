@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import chain, product
+from math import prod
 
 import numpy as np
 import xarray as xr
@@ -42,6 +43,14 @@ class LogicalRowBlockPlan:
     @property
     def grid_shape(self) -> tuple[int, ...]:
         return tuple(len(parts) for parts in self.chunks)
+
+    @property
+    def logical_row_count(self) -> int:
+        return int(prod(self.sizes))
+
+    @property
+    def has_no_rows(self) -> bool:
+        return self.logical_row_count == 0
 
 
 def _ordered_logical_dims(
@@ -140,6 +149,26 @@ def prepare_logical_row_blocks(
         )
     )
     return LogicalRowBlockPlan(dims, sizes, chunks, blocks)
+
+
+def logical_output_chunks(
+    values: tuple[xr.DataArray, ...],
+    *,
+    dims: tuple[str, ...],
+    sizes: tuple[int, ...],
+) -> tuple[tuple[int, ...], ...]:
+    """Reuse available lazy chunks for a metadata-only output topology."""
+    return tuple(
+        next(
+            (
+                value.chunksizes[dim]
+                for value in values
+                if value.chunks is not None and dim in value.dims
+            ),
+            (size,),
+        )
+        for dim, size in zip(dims, sizes, strict=True)
+    )
 
 
 def project_logical_row_plan(
@@ -268,6 +297,7 @@ __all__ = [
     "LogicalRowBlock",
     "LogicalRowBlockPlan",
     "assemble_logical_blocks",
+    "logical_output_chunks",
     "prepare_logical_row_blocks",
     "project_logical_row_plan",
     "select_logical_block",

@@ -67,6 +67,8 @@ def _require_provider_coverage(
 ) -> None:
     caller_valid = topology.caller.valid_mask if topology.caller is not None else None
     for evaluation in item.evaluations:
+        if evaluation.has_no_rows:
+            continue
         pmap = evaluation.param_map
         valid = pmap.valid if caller_valid is None else (pmap.valid | ~caller_valid.rename({topology.sequence_dim: topology.query_dim}))
         _realize_coverage(valid, owner=owner)

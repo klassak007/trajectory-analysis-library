@@ -181,12 +181,20 @@ def test_param_core_prepared_eval_003_query_topology_participates_in_reuse() -> 
     flat_fresh = _prepare(param, flat_query)
     flat = _prepare(param, flat_query, reuse=(stacked,))
     restacked = _prepare(param, stacked_query.copy(deep=True), reuse=(flat_fresh,))
+    equivalent = _prepare(param, stacked_query.copy(deep=True), reuse=(stacked,))
+    relabeled = _prepare(
+        param,
+        stacked_query.assign_coords(row=["x", "y"]),
+        reuse=(stacked,),
+    )
 
     assert stacked.grid.stacked_dims == ("row", "column")
     assert flat_fresh.grid.stacked_dims is None
     assert flat is not stacked
     assert restacked.grid.stacked_dims == ("row", "column")
     assert restacked is not flat_fresh
+    assert equivalent is stacked
+    assert relabeled is not stacked
 
 
 def test_param_core_prepared_eval_004_query_coordinate_topology_participates_in_reuse() -> None:
@@ -616,6 +624,45 @@ def test_param_perf_combined_block_001_boundary_allocation_has_no_cartesian_jump
     assert large - small < 8 * 1024**2, (small, large)
 
 
+def _map_assembly_excess_peak(query_size: int, *, lazy: bool) -> int:
+    param = xr.DataArray([0.0, 1.0], dims="sample")
+    query = xr.DataArray(np.linspace(0.0, 1.0, query_size), dims="query")
+    if lazy:
+        pytest.importorskip("dask.array")
+        param = param.chunk({"sample": 2})
+        query = query.chunk({"query": max(query_size, 1)})
+    gc.collect()
+    tracemalloc.start()
+    try:
+        mapping = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+        )
+        current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert mapping.valid.shape == (query_size,)
+    return peak - current
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_perf_map_assembly_001_uses_only_bounded_temporary_storage(
+    lazy: bool,
+) -> None:
+    """ID: PARAM_PERF_MAP_ASSEMBLY_001_uses_only_bounded_temporary_storage."""
+    sizes = (4 * 65_536, 16 * 65_536)
+    build_param_map(
+        param=xr.DataArray([0.0, 1.0], dims="sample"),
+        query=xr.DataArray([0.5], dims="query"),
+        sequence_dim="sample",
+        query_dim="query",
+    )
+    excess = tuple(_map_assembly_excess_peak(size, lazy=lazy) for size in sizes)
+    assert excess[1] - excess[0] < 4 * 1024**2, excess
+
+
 def _apply_excess_peak(mapping, *, query_size: int) -> int:
     values = xr.DataArray([2.0, 4.0], dims="sample")
     gc.collect()
@@ -675,6 +722,37 @@ def test_param_core_block_apply_001_boundary_sizes_preserve_values(size: int) ->
     xr.testing.assert_allclose(actual, expected)
     assert mapping.i0.xindexes["query_label"].equals(query.xindexes["query_label"])
     assert actual.xindexes["query_label"].equals(query.xindexes["query_label"])
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_core_block_apply_002_noncontiguous_input_parity(lazy: bool) -> None:
+    """ID: PARAM_CORE_BLOCK_APPLY_002_noncontiguous_input_parity."""
+    param_data = np.asarray([[0.0, 9.0, 1.0, 9.0, 2.0, 9.0]])[:, ::2]
+    query_data = np.asarray([[0.25, 9.0, 1.5, 9.0]])[:, ::2]
+    value_data = np.arange(24.0).reshape(1, 6, 4)[:, ::2, ::2]
+    assert not param_data.flags.c_contiguous
+    assert not query_data.flags.c_contiguous
+    assert not value_data.flags.c_contiguous
+    param = xr.DataArray(param_data, dims=("trial", "sample"))
+    query = xr.DataArray(query_data, dims=("trial", "query"))
+    values = xr.DataArray(value_data, dims=("trial", "sample", "axis"))
+    if lazy:
+        pytest.importorskip("dask.array")
+        param = param.chunk({"trial": 1, "sample": 3})
+        query = query.chunk({"trial": 1, "query": 2})
+        values = values.chunk({"trial": 1, "sample": 3, "axis": 2})
+    mapping = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+    )
+    actual = apply_param_map(values, param_map=mapping, sequence_dim="sample")
+    expected = xr.DataArray(
+        [[[2.0, 12.0], [4.0, 14.0]]],
+        dims=("trial", "axis", "query"),
+    )
+    xr.testing.assert_allclose(actual.compute() if lazy else actual, expected)
 
 
 @pytest.mark.parametrize("size", (0, 65_537))

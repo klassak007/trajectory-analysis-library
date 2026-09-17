@@ -7,8 +7,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ..orchestration.indexing import restore_result_coordinates
 from .map_build import build_param_map
-from .query_grid import normalize_query_grid
+from .query_grid import _normalize_query_grid_with_topology
+from .query_topology import QueryTopologyPlan
 from .types import ParamMap, ParamMapOptions, QueryGrid
 
 
@@ -24,6 +26,11 @@ class PreparedParamEvaluation:
     options: ParamMapOptions
     source_param: xr.DataArray
     source_valid: xr.DataArray
+    query_topology: QueryTopologyPlan
+
+    @property
+    def has_no_rows(self) -> bool:
+        return int(self.param_map.valid.size) == 0
 
 
 def _array_is_lazy(value: xr.DataArray) -> bool:
@@ -72,7 +79,10 @@ def _eager_values_equal(left: xr.DataArray, right: xr.DataArray) -> bool:
         return False
 
 
-def _index_groups_equal(left: xr.DataArray, right: xr.DataArray) -> bool:
+def _index_groups_equal(
+    left: xr.Dataset | xr.DataArray,
+    right: xr.Dataset | xr.DataArray,
+) -> bool:
     left_groups = tuple(left.xindexes.group_by_index())
     right_groups = tuple(right.xindexes.group_by_index())
     if len(left_groups) != len(right_groups):
@@ -125,7 +135,10 @@ def _coordinate_values_equal(
     return _eager_values_equal(left, right)
 
 
-def _coordinate_topology_equal(left: xr.DataArray, right: xr.DataArray) -> bool:
+def _coordinate_topology_equal(
+    left: xr.Dataset | xr.DataArray,
+    right: xr.Dataset | xr.DataArray,
+) -> bool:
     if tuple(left.coords) != tuple(right.coords):
         return False
     indexed = set(left.xindexes)
@@ -173,6 +186,32 @@ def _query_grids_equivalent(left: QueryGrid, right: QueryGrid) -> bool:
     )
 
 
+def _topology_coordinates(plan: QueryTopologyPlan) -> xr.Dataset:
+    return restore_result_coordinates(  # type: ignore[return-value]
+        xr.Dataset(),
+        plan.coordinates,
+    )
+
+
+def _query_topologies_equivalent(
+    left: QueryTopologyPlan,
+    right: QueryTopologyPlan,
+) -> bool:
+    if (
+        left.query_dim != right.query_dim
+        or left.dims != right.dims
+        or left.sizes != right.sizes
+        or left.stacked_dims != right.stacked_dims
+    ):
+        return False
+    left_coords = _topology_coordinates(left)
+    right_coords = _topology_coordinates(right)
+    return _index_groups_equal(left_coords, right_coords) and _coordinate_topology_equal(
+        left_coords,
+        right_coords,
+    )
+
+
 def prepared_evaluation_matches(
     prepared: PreparedParamEvaluation,
     *,
@@ -183,6 +222,7 @@ def prepared_evaluation_matches(
     batch_dims: tuple[str, ...],
     param_kind: str,
     options: ParamMapOptions,
+    query_topology: QueryTopologyPlan,
 ) -> bool:
     """Return whether an existing request-local map is exactly reusable."""
     if (
@@ -194,7 +234,11 @@ def prepared_evaluation_matches(
         return False
     try:
         return (
-            _query_grids_equivalent(prepared.grid, grid)
+            _query_topologies_equivalent(
+                prepared.query_topology,
+                query_topology,
+            )
+            and _query_grids_equivalent(prepared.grid, grid)
             and _dataarrays_equivalent(prepared.source_param, param)
             and _dataarrays_equivalent(prepared.source_valid, valid_mask)
         )
@@ -216,7 +260,7 @@ def prepare_param_evaluation(
     reuse: Iterable[PreparedParamEvaluation] = (),
 ) -> PreparedParamEvaluation:
     """Normalize and map one request, reusing an exactly equivalent plan."""
-    grid = normalize_query_grid(
+    grid, query_topology = _normalize_query_grid_with_topology(
         query,
         query_dim=query_dim,
         batch_dims=batch_dims,
@@ -233,6 +277,7 @@ def prepare_param_evaluation(
             batch_dims=batch_dims,
             param_kind=param_kind,
             options=options,
+            query_topology=query_topology,
         ):
             return candidate
     return _new_prepared_evaluation(
@@ -243,6 +288,7 @@ def prepare_param_evaluation(
         batch_dims=batch_dims,
         param_kind=param_kind,
         options=options,
+        query_topology=query_topology,
     )
 
 
@@ -255,6 +301,7 @@ def _new_prepared_evaluation(
     batch_dims: tuple[str, ...],
     param_kind: str,
     options: ParamMapOptions,
+    query_topology: QueryTopologyPlan,
 ) -> PreparedParamEvaluation:
     param_map = build_param_map(
         param=param,
@@ -274,6 +321,7 @@ def _new_prepared_evaluation(
         options=options,
         source_param=param,
         source_valid=valid_mask,
+        query_topology=query_topology,
     )
 
 

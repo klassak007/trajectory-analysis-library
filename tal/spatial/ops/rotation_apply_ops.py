@@ -54,6 +54,7 @@ from ..policies.frame import resolve_apply_output_frames
 from ..policies.wrap import wrap_like
 from ..position import Position
 from ..velocity import AngularVelocity, LinearVelocity, Velocity
+from .core_chunks import single_core_chunk
 
 if TYPE_CHECKING:
     from ..rotation import Rotation
@@ -333,8 +334,8 @@ def _apply_vector_rotation_kernel(
     try:
         rotated = xr.apply_ufunc(
             kernel,
-            target_da,
-            quat_da,
+            single_core_chunk(target_da, dim=target_dim),
+            single_core_chunk(quat_da, dim=quat_dim),
             input_core_dims=[[target_dim], [quat_dim]],
             output_core_dims=[[target_dim]],
             vectorize=False,
