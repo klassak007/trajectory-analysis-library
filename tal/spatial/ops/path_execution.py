@@ -16,6 +16,7 @@ from tal.core.schema_read import read_roles
 from tal.frames import FramePath
 from tal.utils.numba_support import _numba_available
 
+from ..kernels.fused_pose_path import fuse_pose_path
 from ..kernels.streaming_pose_path import stream_pose_path_blocks
 from ..metadata import get_pose_rep
 from ..pose import Pose
@@ -30,7 +31,7 @@ from .path_query_ops import (
 from .path_query_plan import PreparedPathQuery, PreparedProviderQuery
 from .pose_component_ops import resolve_pose_component_specs
 
-PathExecutionKind = Literal["generic", "compiled-leaf", "scipy-stream"]
+PathExecutionKind = Literal["generic", "fused-numba", "scipy-stream"]
 
 
 @dataclass(frozen=True)
@@ -184,10 +185,11 @@ def prepare_pose_path_execution(
     query: PreparedPathQuery,
 ) -> PreparedPosePathExecution:
     """Classify one prepared Pose request without inspecting payload values."""
-    if not _streaming_eligible(query):
+    topology = query.topology
+    if topology is None or topology.query.size == 0 or not _streaming_eligible(query):
         kind: PathExecutionKind = "generic"
     elif _numba_available():
-        kind = "compiled-leaf"
+        kind = "fused-numba"
     else:
         kind = "scipy-stream"
     return PreparedPosePathExecution(path, query, kind)
@@ -270,9 +272,34 @@ def _execute_streaming(plan: PreparedPosePathExecution, *, owner: str) -> Pose:
     return _restore_output_topology(value, topology, owner=owner)  # type: ignore[return-value]
 
 
+def _execute_fused(plan: PreparedPosePathExecution, *, owner: str) -> Pose:
+    topology = plan.query.topology
+    if topology is None:
+        raise ValueError(f"{owner}: fused query topology is missing.")
+    provider_arrays = tuple(_pose_arrays(item) for item in plan.query.items)
+    prepared = plan.query.items[0].evaluations[0].param_map
+    try:
+        result = fuse_pose_path(
+            np.stack(tuple(item.translation for item in provider_arrays)),
+            np.stack(tuple(item.quaternion for item in provider_arrays)),
+            np.asarray(tuple(-1 if step.invert else 1 for step in plan.path.steps), dtype=np.int8),
+            i0=np.asarray(prepared.i0.data),
+            i1=np.asarray(prepared.i1.data),
+            alpha=np.asarray(prepared.alpha.data),
+            valid=np.asarray(prepared.valid.data),
+            quaternion_dtypes=tuple(item.quaternion.dtype for item in provider_arrays),
+        )
+    except (TypeError, ValueError) as exc:
+        _raise_path_query_execution_error(exc, owner=owner)
+    value = Pose._from_unvalidated(_streaming_dataset(provider_arrays[0], result, topology.query_dim))
+    return _restore_output_topology(value, topology, owner=owner)  # type: ignore[return-value]
+
+
 def execute_pose_path(plan: PreparedPosePathExecution, *, owner: str) -> CompletePathQuery | Pose:
     """Dispatch one frozen Pose request to its accepted executor."""
     require_path_query_coverage(plan.query, owner=owner)
+    if plan.kind == "fused-numba":
+        return _execute_fused(plan, owner=owner)
     if plan.kind == "scipy-stream":
         return _execute_streaming(plan, owner=owner)
     return execute_path_query(plan.query, owner=owner, coverage_checked=True)

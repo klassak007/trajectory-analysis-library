@@ -16,6 +16,7 @@ from benchmarks._spatial_path_benchmark_protocol import MeasuredRoute
 from benchmarks._spatial_path_execution_routes import (
     materialize_route_result,
     route_effective_backend,
+    typed_route_operation,
 )
 from benchmarks.bench_spatial_fused_temporal_paths import (
     BenchmarkCaseConfig,
@@ -38,6 +39,36 @@ from tal.spatial.kernels.rotation_interp_backends import (
     ROTATION_INTERP_BACKEND_SCIPY,
     slerp_quat_backend,
 )
+
+
+def test_spatial_bench_generic_comparator_executes_without_fusion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ID: SPATIAL_BENCH_GENERIC_COMPARATOR_001_is_not_public_fused_alias."""
+    import tal.spatial.ops.path_execution as execution
+
+    fixture = frozen_fixture("h1", query_size=5, edges=1)
+
+    def reject_fusion(*args: object, **kwargs: object) -> None:
+        _ = args, kwargs
+        pytest.fail("generic benchmark comparator entered fused execution")
+
+    monkeypatch.setattr(execution, "fuse_pose_path", reject_fusion)
+    result = typed_route_operation("promoted-generic", fixture)()
+    assert result.as_dataset(copy="none").sizes["query"] == 5
+
+
+@pytest.mark.parametrize("case", ("h0", "h1"))
+def test_spatial_bench_scipy_direct_path_is_validated_full_path(
+    case: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The opt-in full-path SciPy comparator uses an independent validator."""
+    assert benchmark_main((
+        "--cases", case, "--sizes", "33", "--edges", "8",
+        "--routes", "scipy-direct-path", "--warmups", "1", "--repeats", "1",
+    )) == 0
+    output = capsys.readouterr().out
+    assert "route=scipy-direct-path; effective_backend=scipy" in output
+    assert f"parity=ok; case={case}; query=33; comparators=1; validated_runs=2" in output
 
 
 def _axis_angle_quat(angle: float, dtype: np.dtype) -> np.ndarray:
@@ -342,7 +373,9 @@ def test_spatial_bench_fused_path_007_rss_subprocess_preserves_case_configuratio
         assert rss.effective_backend == expected
 
 
+@pytest.mark.parametrize("route", ("scipy-vectorized", "scipy-direct-path"))
 def test_spatial_bench_fused_path_008_scipy_main_does_not_require_numba(
+    route: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -368,7 +401,7 @@ def test_spatial_bench_fused_path_008_scipy_main_does_not_require_numba(
             "--edges",
             "1",
             "--routes",
-            "scipy-vectorized",
+            route,
             "--warmups",
             "0",
             "--repeats",

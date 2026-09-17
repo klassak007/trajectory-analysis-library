@@ -312,7 +312,7 @@ def test_spatial_core_streaming_path_001_matches_generic_pose_execution(
     query = np.linspace(0.0, 1.0, 257)
     monkeypatch.setattr(execution, "_numba_available", lambda: False)
     streamed = solve_pose_path_transform(f"f{edges}", "f0", graph=graph, query=query)
-    monkeypatch.setattr(execution, "_numba_available", lambda: True)
+    monkeypatch.setattr(execution, "_streaming_eligible", lambda plan: False)
     generic = solve_pose_path_transform(f"f{edges}", "f0", graph=graph, query=query)
     xr.testing.assert_allclose(streamed.as_dataset(copy="none"), generic.as_dataset(copy="none"))
     assert streamed.graph is graph
@@ -509,14 +509,19 @@ def test_spatial_perf_streaming_path_002_dask_task_shape_matches_typed_pipeline(
         assert max(public_ds[name].chunks[public_ds[name].get_axis_num("query")]) <= 65_536
 
 
-@pytest.mark.parametrize("route", ("pose-generic", "pose-streaming", "rotation"))
+@pytest.mark.parametrize("route", ("pose-generic", "pose-fused", "pose-streaming", "rotation"))
 def test_spatial_hard_path_error_001_single_owner_and_original_cause(route, monkeypatch) -> None:
     """ID: SPATIAL_HARD_PATH_ERROR_001_single_owner_and_original_cause."""
     import tal.spatial.ops.path_execution as execution
 
+    if route == "pose-fused":
+        pytest.importorskip("numba")
+
     graph = FrameGraph()
     dataset = _edge_pose(0).as_dataset(copy="deep")
     dataset["rotation"] = xr.zeros_like(dataset["rotation"])
+    if route == "pose-generic":
+        dataset.attrs["generic_route_control"] = True
     Pose(dataset, parent="f0", child="f1", graph=graph).register()
     monkeypatch.setattr(execution, "_numba_available", lambda: route != "pose-streaming")
     calls = []
@@ -534,6 +539,9 @@ def test_spatial_hard_path_error_001_single_owner_and_original_cause(route, monk
     assert str(failure.value).count(f"{owner}:") == 1
     cause = failure.value.__cause__
     assert isinstance(cause, ValueError)
-    assert str(cause).startswith("spatial.rotation.interp_backend:")
+    if route == "pose-fused":
+        assert str(cause).startswith("edge 0, query 0:")
+    else:
+        assert str(cause).startswith("spatial.rotation.interp_backend:")
     assert cause.__cause__ is None
     assert calls == (["stream"] if route == "pose-streaming" else [])
