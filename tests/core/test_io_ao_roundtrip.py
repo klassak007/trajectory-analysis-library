@@ -412,10 +412,11 @@ def test_io_hard_p10a_016_zarr_close_composes_subclass_and_backend_ownership(
 
 def test_io_hard_p10a_010_zarr_writer_rejects_invalid_schema_before_store_mutation(
     tmp_path: Path,
+    unsafe_from_data,
 ) -> None:
     """ID: IO_HARD_P10A_010_zarr_writer_rejects_invalid_schema_before_store_mutation."""
     malformed = _batched_roundtrip_source().as_dataset(copy="none").assign_coords(n_valid=("trial", [2, 4]))
-    ao = AnalysisObject.from_data(
+    ao = unsafe_from_data(
         malformed,
         sequence_dim="sample",
         batch_dims=("trial",),

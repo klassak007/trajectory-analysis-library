@@ -39,6 +39,7 @@ from .group_ops import (
     GroupingBinSpec,
     GroupMaterializeOptions,
 )
+from .layout import AnalysisLayoutSpec
 from .param_ops import (
     ParamEvalOptions,
     ParamSelectOptions,
@@ -58,6 +59,7 @@ from .schema_errors import SchemaError
 
 __all__ = [
     "AlignOptions",
+    "AnalysisLayoutSpec",
     "AnalysisObject",
     "BatchConcatOptions",
     "BatchGroupReduceOptions",

@@ -27,8 +27,11 @@ def _ao_structured() -> AnalysisObject:
 
 
 def _ao_with_scalar_validity() -> AnalysisObject:
+    from tal.core.schema import repair_schema_after_structure
+
     ds = _ao_structured().as_dataset().isel(trial=0, drop=True)
     ds = ds.assign_coords(group_size=xr.DataArray(np.asarray(3), dims=()))
+    ds = repair_schema_after_structure(ds, validate=False)
     return AnalysisObject.from_data(
         ds,
         sequence_dim="sample",

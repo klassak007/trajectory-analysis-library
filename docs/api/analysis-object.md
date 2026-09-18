@@ -50,6 +50,28 @@ AnalysisObject.from_data(
 roles, parameter coordinate metadata, and validity metadata before the final
 validation pass.
 
+For repeated complete layouts, use `tal.core.AnalysisLayoutSpec`. Its five
+fields declare a complete target: omitted roles and optional coordinates are
+cleared even when a source Dataset already has TAL schema. In contrast,
+`from_data(...)` preserves source declarations for omitted overlay fields.
+Both validate existing source schema and component state before rewriting it.
+
+```python
+import xarray as xr
+from tal.core import AnalysisLayoutSpec
+
+dataset = xr.Dataset({"position": (("sample", "axis"), [[1.0, 2.0, 3.0]])},
+                     coords={"sample": [0], "axis": ["x", "y", "z"]})
+layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
+position = layout.wrap(dataset, data_vars="position")
+```
+
+`data_vars` applies only to Dataset input. It selects one or more ordered data
+variables before the external ownership copy, so discarded payloads are not
+copied. `AnalysisObject.select_vars(names)` selects from an existing AO,
+preserving its subtype where valid and sharing eligible payload buffers while
+isolating metadata. It couples an existing lazy resource to the selected alias.
+
 Key rules:
 
 - `core_dims` and `batch_dims` may be declared without `sequence_dim`.
@@ -96,6 +118,7 @@ ao.isel(...)
 ao.sel(...)
 ao.where(...)
 ao.drop_vars(...)
+ao.select_vars(...)
 ao.rename(...)
 ao.transpose(...)
 ```
@@ -190,9 +213,11 @@ safety and hashability.
    tal.AnalysisObject.sel
    tal.AnalysisObject.where
    tal.AnalysisObject.drop_vars
+   tal.AnalysisObject.select_vars
    tal.AnalysisObject.rename
    tal.AnalysisObject.transpose
    tal.AnalysisObject.from_data
+   tal.core.AnalysisLayoutSpec
    tal.AnalysisObject.set_roles
    tal.AnalysisObject.set_param_coord
    tal.AnalysisObject.set_validity

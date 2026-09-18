@@ -968,30 +968,6 @@ def test_ao_fromdata_006_atomic_on_failure() -> None:
     assert "tal" not in ds.attrs
 
 
-def test_ao_fromdata_007_single_final_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ID: AO_FROMDATA_007_single_final_validation."""
-    calls: list[str] = []
-
-    def _count_validate(ds: xr.Dataset) -> xr.Dataset:
-        calls.append("validate")
-        return schema_validate_mod.validate_schema(ds)
-
-    monkeypatch.setattr(ao_mod, "_validate_schema", _count_validate)
-    monkeypatch.setattr(schema_mod, "_validate_schema", _count_validate)
-    ds = _ds_trial().assign_coords(
-        phase=(("trial", "sample"), np.asarray([[0.0, 0.1, 0.2], [1.0, 1.1, 1.2]]))
-    )
-    AnalysisObject.from_data(
-        ds,
-        sequence_dim="sample",
-        batch_dims=("trial",),
-        core_dims=("axis",),
-        param_coord="phase",
-        validate=True,
-    )
-    assert calls == ["validate"]
-
-
 @pytest.mark.parametrize(
     ("validate", "expected"),
     ((False, 2), (True, 3)),

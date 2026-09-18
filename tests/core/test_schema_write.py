@@ -4,12 +4,14 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tal.core import AnalysisObject, SchemaError
 from tal.core import (
+    AnalysisObject,
+    SchemaError,
     merge_schema,
     set_param_coord,
     set_roles,
     set_validity,
+    validate_schema,
 )
 
 
@@ -211,6 +213,55 @@ def test_schema_write_roles_006_explicit_empty_clears() -> None:
     assert roles["sequence_dim"] == "sample"
     assert roles["batch_dims"] == []
     assert roles["core_dims"] == []
+
+
+@pytest.mark.parametrize("field", ("batch_dims", "core_dims"))
+@pytest.mark.parametrize("invalid", ("xy", b"xy", {"x": 1}, {"x", "y"}, None))
+@pytest.mark.parametrize("via_ao", (False, True))
+def test_schema_write_roles_009_invalid_container_reaches_schema_validator(
+    field: str, invalid: object, via_ao: bool
+) -> None:
+    """ID: SCHEMA_WRITE_ROLES_009_invalid_container_reaches_schema_validator."""
+    source = xr.Dataset({"value": (("x", "y"), np.ones((2, 2)))})
+    original = AnalysisObject(source) if via_ao else source
+    writer = original.set_roles if via_ao else lambda **kwargs: set_roles(original, **kwargs)
+    with pytest.raises(SchemaError) as failure:
+        writer(**{field: invalid}, validate=True)
+    _assert_schema_error(
+        failure,
+        code=f"schema.roles.{field}.invalid",
+        path=f"tal.core.roles.{field}",
+    )
+    unvalidated = writer(**{field: invalid}, validate=False)
+    unvalidated_ds = unvalidated.as_dataset(copy="none") if via_ao else unvalidated
+    assert unvalidated_ds.attrs["tal"]["core"]["roles"][field] == invalid
+    with pytest.raises(SchemaError) as deferred:
+        validate_schema(unvalidated_ds)
+    assert deferred.value.code == f"schema.roles.{field}.invalid"
+    original_ds = original.as_dataset(copy="none") if via_ao else original
+    assert "roles" not in original_ds.attrs.get("tal", {}).get("core", {})
+
+
+@pytest.mark.parametrize("field", ("batch_dims", "core_dims"))
+@pytest.mark.parametrize("container", (list, tuple))
+@pytest.mark.parametrize("via_ao", (False, True))
+@pytest.mark.parametrize("validate", (False, True))
+def test_schema_write_roles_010_list_and_tuple_still_canonicalize(
+    field: str,
+    container: type[list[str]] | type[tuple[str, ...]],
+    via_ao: bool,
+    validate: bool,
+) -> None:
+    """ID: SCHEMA_WRITE_ROLES_010_list_tuple_canonicalize."""
+    source = xr.Dataset({"value": (("x", "y"), np.ones((2, 2)))})
+    original = AnalysisObject(source) if via_ao else source
+    result = (
+        original.set_roles(**{field: container(["x"])}, validate=validate)
+        if via_ao
+        else set_roles(source, **{field: container(["x"])}, validate=validate)
+    )
+    result_ds = result.as_dataset(copy="none") if via_ao else result
+    assert result_ds.attrs["tal"]["core"]["roles"][field] == ["x"]
 
 
 def test_schema_write_param_001_set_1d_param_coord() -> None:

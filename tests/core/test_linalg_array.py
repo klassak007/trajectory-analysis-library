@@ -906,10 +906,13 @@ def test_bcast_hard_021_extra_undeclared_nonsemantic_dims_fail_closed_under_defa
 def test_bcast_hard_022_topology_mismatch_still_fails_fast_under_semantic_default() -> None:
     """ID: BCAST_HARD_022_topology_mismatch_still_fails_fast_under_semantic_default."""
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
+    from tal.core.schema import repair_schema_after_structure
+
     right = Array(
         AnalysisObject.from_data(
-            _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col").as_dataset(copy="none").rename(
-                {"sample": "time"}
+            repair_schema_after_structure(
+                _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col")
+                .as_dataset(copy="none").rename({"sample": "time"}), validate=False
             ),
             sequence_dim="time",
             batch_dims=("trial",),
@@ -932,10 +935,13 @@ def test_bcast_hard_023_core_dim_ambiguity_rejected_under_e3a_default_policy() -
 def test_bcast_hard_025_owner_prefixed_boundaries_preserved_after_default_flip() -> None:
     """ID: BCAST_HARD_025_owner_prefixed_boundaries_preserved_after_default_flip."""
     left = Array(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
+    from tal.core.schema import repair_schema_after_structure
+
     right = Array(
         AnalysisObject.from_data(
-            _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col").as_dataset(copy="none").rename(
-                {"sample": "time"}
+            repair_schema_after_structure(
+                _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col")
+                .as_dataset(copy="none").rename({"sample": "time"}), validate=False
             ),
             sequence_dim="time",
             batch_dims=("trial",),

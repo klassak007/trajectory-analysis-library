@@ -15,7 +15,7 @@ from dask import delayed
 from dask.local import get_sync
 
 from tal.core import AnalysisObject, SchemaError
-from tal.core.schema import set_validity
+from tal.core.schema import set_roles, set_validity
 from tal.io import CsvExportOptions, write_csv_logs
 from tal.io import adapter_paths as adapter_paths_module
 from tal.io import csv_commit as csv_commit_module
@@ -170,13 +170,9 @@ def _lazy_size_export_ao(
         {"value": (("trial", "sample"), [[1.0, 2.0]])},
         coords=coords,
     )
-    return AnalysisObject.from_data(
-        ds,
-        sequence_dim="sample",
-        batch_dims=("trial",),
-        sequence_size_coord="sequence_size",
-        validate=False,
-    )
+    tagged = set_roles(ds, sequence_dim="sample", batch_dims=("trial",), core_dims=(), validate=False)
+    tagged = set_validity(tagged, sequence_size_coord="sequence_size", validate=False)
+    return AnalysisObject._from_unvalidated(tagged, schema_prepared=True)
 
 
 def test_io_core_p10b_015_csv_export_uses_batch_coord_labels_and_preserves_batch_order_in_outputs(
@@ -582,6 +578,7 @@ def test_io_core_p10b_012_export_label_normalization_rules_are_contract_locked(t
 
 def test_io_hard_p10b_013_csv_export_preflight_precedes_output_mutation(
     tmp_path: Path,
+    unsafe_from_data,
 ) -> None:
     """ID: IO_HARD_P10B_013_csv_export_preflight_precedes_output_mutation."""
     collision = _grouped_ao(
@@ -599,7 +596,7 @@ def test_io_hard_p10b_013_csv_export_preflight_precedes_output_mutation(
         values=np.asarray([[1.0], [2.0]], dtype=float),
         sizes=np.asarray([1, 1], dtype=np.int64),
     ).as_dataset(copy="none").assign_coords(sequence_size=("trial", [1, 2]))
-    malformed = AnalysisObject.from_data(
+    malformed = unsafe_from_data(
         malformed_ds,
         sequence_dim="sample",
         batch_dims=("trial",),
@@ -880,6 +877,7 @@ def test_io_hard_p10b_019_csv_export_validates_size_override_before_payload_exec
 
 def test_io_hard_p10b_069_csv_projection_preflight_precedes_lazy_size_read(
     tmp_path: Path,
+    unsafe_from_data,
 ) -> None:
     """ID: IO_HARD_P10B_069_csv_projection_preflight_precedes_lazy_size_read."""
     size_calls: list[str] = []
@@ -898,7 +896,7 @@ def test_io_hard_p10b_069_csv_projection_preflight_precedes_lazy_size_read(
             "sequence_size": ("trial", size),
         },
     )
-    ao = AnalysisObject.from_data(
+    ao = unsafe_from_data(
         ds,
         sequence_dim="sample",
         batch_dims=("trial",),
@@ -1336,7 +1334,7 @@ def test_io_hard_p10b_078_csv_empty_batch_validates_export_root(tmp_path: Path) 
         write_csv_logs(ao, str(blocked / "child"))
 
 
-def test_io_hard_p10b_111_empty_batch_skips_lazy_validity_values(tmp_path: Path) -> None:
+def test_io_hard_p10b_111_empty_batch_skips_lazy_validity_values(tmp_path: Path, unsafe_from_data) -> None:
     """ID: IO_HARD_P10B_111_empty_batch_skips_lazy_validity_values."""
     calls: list[str] = []
 
@@ -1357,7 +1355,7 @@ def test_io_hard_p10b_111_empty_batch_skips_lazy_validity_values(tmp_path: Path)
             "sequence_size": ("trial", sizes),
         },
     )
-    ao = AnalysisObject.from_data(
+    ao = unsafe_from_data(
         ds,
         sequence_dim="sample",
         batch_dims=("trial",),

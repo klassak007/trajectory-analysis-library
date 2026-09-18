@@ -423,6 +423,9 @@ def test_spatial_core_120_velocity_merge_tolerates_reserved_valid_coord_attr_dri
     assert "valid" in angular_ds.coords
     assert linear_ao.as_dataset(copy="none").coords["valid"].attrs
     angular_ds.coords["valid"].attrs = {}
+    from tal.core.schema import repair_schema_after_structure
+
+    angular_ds = repair_schema_after_structure(angular_ds, validate=False)
     angular = AngularVelocity(
         AnalysisObject.from_data(
             angular_ds,
@@ -464,6 +467,9 @@ def test_spatial_core_121_acceleration_merge_tolerates_reserved_valid_coord_attr
     assert "valid" in angular_ds.coords
     assert linear_ao.as_dataset(copy="none").coords["valid"].attrs
     angular_ds.coords["valid"].attrs = {}
+    from tal.core.schema import repair_schema_after_structure
+
+    angular_ds = repair_schema_after_structure(angular_ds, validate=False)
     angular = AngularAcceleration(
         AnalysisObject.from_data(
             angular_ds,

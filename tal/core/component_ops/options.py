@@ -218,6 +218,12 @@ def _require_labels_present_on_dim(
     name: str,
     owner: str,
 ) -> None:
+    native = ds.xindexes.get(core_dim)
+    if not isinstance(native, xr.indexes.PandasIndex):
+        raise TypeError(
+            f"{owner}: registry[{name!r}] requires a materialized, pandas-compatible "
+            f"label index on core dim {core_dim!r}."
+        )
     index = ds.get_index(core_dim)
     if index.has_duplicates:
         raise ValueError(f"{owner}: registry[{name!r}] requires unique coordinate labels on dim {core_dim!r}.")

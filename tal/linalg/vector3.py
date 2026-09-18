@@ -152,6 +152,9 @@ class Vector3(Vector):
             raise ValueError(f"{owner}: Vector3 requires declared roles.")
         axis = core_dims[0]
         selected = ds.sel({axis: label}, drop=True)
+        from tal.core.schema import repair_schema_after_structure
+
+        selected = repair_schema_after_structure(selected, validate=False)
         component = AnalysisObject.from_data(
             selected,
             sequence_dim=sequence_dim,

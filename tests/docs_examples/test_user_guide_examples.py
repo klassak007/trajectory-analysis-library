@@ -35,3 +35,8 @@ def test_user_guide_registry_has_no_orphaned_examples() -> None:
     registered = set(iter_user_guide_example_ids())
     handlers = set(USER_GUIDE_EXECUTABLE_EXAMPLES)
     assert handlers == registered
+
+
+def test_ao_layout_doc_001_public_docs_and_examples_execute() -> None:
+    """ID: AO_LAYOUT_DOC_001_public_docs_and_examples_execute."""
+    USER_GUIDE_EXECUTABLE_EXAMPLES["UG-CREATING-REUSABLE-LAYOUT"]()

@@ -762,7 +762,7 @@ def test_combine_concat_seq_020_outer_missing_rows_label_mapping_is_by_label_not
     assert int(sizes.sel(trial="c").item()) == 1
 
 
-def test_combine_concat_seq_021_invalid_present_source_size_still_rejected() -> None:
+def test_combine_concat_seq_021_invalid_present_source_size_still_rejected(unsafe_from_data) -> None:
     """ID: COMBINE_CONCAT_SEQ_021_invalid_present_source_size_still_rejected."""
     first = _ao_grouped(
         trial_labels=("a", "b"),
@@ -779,7 +779,7 @@ def test_combine_concat_seq_021_invalid_present_source_size_still_rejected() -> 
             "group_size": ("trial", np.asarray([1.9], dtype="float64")),
         },
     )
-    second = AnalysisObject.from_data(
+    second = unsafe_from_data(
         second_ds,
         sequence_dim="sample",
         batch_dims=("trial",),
@@ -842,7 +842,7 @@ def test_combine_concat_batch_008_chunked_scalar_sequence_size_coord_fails_fast(
     assert err.value.actual["reason"] == "chunked coordinate not schema-value-validatable"
 
 
-def test_combine_concat_batch_009_invalid_sequence_size_values_rejected() -> None:
+def test_combine_concat_batch_009_invalid_sequence_size_values_rejected(unsafe_from_data) -> None:
     """ID: COMBINE_CONCAT_BATCH_009_invalid_sequence_size_values_rejected."""
     left_ds = xr.Dataset(
         data_vars={"value": (("sample",), [0.0, 1.0, 2.0])},
@@ -860,7 +860,7 @@ def test_combine_concat_batch_009_invalid_sequence_size_values_rejected() -> Non
             "n_valid": xr.DataArray(np.asarray(2, dtype="int64"), dims=()),
         },
     )
-    left = AnalysisObject.from_data(
+    left = unsafe_from_data(
         left_ds,
         sequence_dim="sample",
         batch_dims=(),

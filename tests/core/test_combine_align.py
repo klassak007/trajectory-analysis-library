@@ -294,7 +294,7 @@ def test_combine_align_009_outer_chunked_sequence_size_coord_fails_fast() -> Non
     assert err.value.actual["reason"] == "chunked coordinate not schema-value-validatable"
 
 
-def test_combine_align_010_invalid_sequence_size_coord_values_rejected() -> None:
+def test_combine_align_010_invalid_sequence_size_coord_values_rejected(unsafe_from_data) -> None:
     """ID: COMBINE_ALIGN_010_invalid_sequence_size_coord_values_rejected."""
     left_ds = xr.Dataset(
         data_vars={"value": (("sample",), [1.0, 2.0])},
@@ -312,7 +312,7 @@ def test_combine_align_010_invalid_sequence_size_coord_values_rejected() -> None
             "n_valid": xr.DataArray(np.asarray(2, dtype="int64"), dims=()),
         },
     )
-    left = AnalysisObject.from_data(
+    left = unsafe_from_data(
         left_ds,
         sequence_dim="sample",
         batch_dims=(),

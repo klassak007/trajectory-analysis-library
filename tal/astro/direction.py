@@ -278,6 +278,9 @@ class TopocentricDirection(TypedAnalysisObject):
             output_var=resolved_var,
             owner=owner,
         )
+        from tal.core.schema import repair_schema_after_structure
+
+        ds = repair_schema_after_structure(ds, validate=False)
         ao = AnalysisObject.from_data(
             ds,
             sequence_dim=sequence_dim,

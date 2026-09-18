@@ -7,14 +7,13 @@ from typing import Any, Literal
 import xarray as xr
 
 from .schema_errors import schema_error
+from .schema_validate import SCHEMA_VERSION, _validate_schema_envelope
+from .schema_validate import validate_schema as _validate_schema
 from .schema_validate.common import (
     ALLOWED_LAYOUTS,
     is_active_schema_version,
     safe_path_key_segment,
 )
-from .schema_validate import SCHEMA_VERSION
-from .schema_validate import _validate_schema_envelope
-from .schema_validate import validate_schema as _validate_schema
 from .schema_validate.finalize import (
     _copy_schema_value,
     _copy_tal_graph,
@@ -41,6 +40,7 @@ class _SchemaUpdatePlan:
     param_coord: str | None | UnsetType = UNSET
     sequence_size_coord: str | None | UnsetType = UNSET
     layout: Literal["left_packed"] = "left_packed"
+    complete_target: bool = False
 
 
 def _fail_patch(code: str, actual: Any, hint: str) -> None:
@@ -278,70 +278,6 @@ def _merge_dict(base: Mapping[Any, Any], patch: Mapping[Any, Any]) -> dict[Any, 
     return _merge_owned_mapping(owned_patch, bases)
 
 
-def _existing_roles(core: dict[str, Any]) -> dict[str, Any]:
-    roles = core.get("roles")
-    if not isinstance(roles, dict):
-        roles = {}
-        core["roles"] = roles
-    roles.setdefault("batch_dims", [])
-    roles.setdefault("core_dims", [])
-    return roles
-
-
-def _canon_dim_list(value: Sequence[str] | UnsetType) -> Any:
-    if isinstance(value, (str, bytes)):
-        return value
-    if isinstance(value, Sequence):
-        return [_canon_name(item) for item in value]
-    return value
-
-
-def _canon_name(value: Any) -> Any:
-    return str.__str__(value) if isinstance(value, str) else value
-
-
-def _owned_core(tal: dict[str, Any]) -> dict[str, Any]:
-    core = tal.get("core")
-    if isinstance(core, dict):
-        return core
-    out: dict[str, Any] = {}
-    tal["core"] = out
-    return out
-
-
-def _apply_role_update(core: dict[str, Any], plan: _SchemaUpdatePlan) -> None:
-    values = (plan.sequence_dim, plan.batch_dims, plan.core_dims)
-    if all(value is UNSET for value in values):
-        return
-    roles = _existing_roles(core)
-    if plan.sequence_dim is not UNSET:
-        if plan.sequence_dim is None:
-            roles.pop("sequence_dim", None)
-        else:
-            roles["sequence_dim"] = _canon_name(plan.sequence_dim)
-    if plan.batch_dims is not UNSET:
-        roles["batch_dims"] = _canon_dim_list(plan.batch_dims)
-    if plan.core_dims is not UNSET:
-        roles["core_dims"] = _canon_dim_list(plan.core_dims)
-
-
-def _apply_optional_updates(core: dict[str, Any], plan: _SchemaUpdatePlan) -> None:
-    if plan.param_coord is not UNSET:
-        if plan.param_coord is None:
-            core.pop("param_coord", None)
-        else:
-            core["param_coord"] = {"name": _canon_name(plan.param_coord)}
-    if plan.sequence_size_coord is UNSET:
-        return
-    if plan.sequence_size_coord is None:
-        core.pop("validity", None)
-        return
-    core["validity"] = {
-        "sequence_size_coord": _canon_name(plan.sequence_size_coord),
-        "layout": _canon_name(plan.layout),
-    }
-
-
 def _apply_schema_update(
     ds: xr.Dataset,
     plan: _SchemaUpdatePlan,
@@ -349,13 +285,9 @@ def _apply_schema_update(
     validate: bool,
 ) -> xr.Dataset:
     """Apply one complete canonical core-schema update."""
-    candidate = _require_dataset(ds, owner="apply_schema_update")
-    tal = _copy_tal(candidate)
-    tal["version"] = SCHEMA_VERSION
-    core = _owned_core(tal)
-    _apply_role_update(core, plan)
-    _apply_optional_updates(core, plan)
-    return _apply_writer(candidate, tal, validate=validate)
+    from .schema_update import apply_schema_update
+
+    return apply_schema_update(ds, plan, validate=validate)
 
 
 def set_roles(

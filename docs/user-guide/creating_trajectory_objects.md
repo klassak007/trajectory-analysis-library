@@ -95,6 +95,35 @@ metadata after loading.
 Delayed schema writes are still explicit and validated. They return new AOs
 rather than mutating the source object in place.
 
+## Reuse a complete layout and select variables
+
+<!-- example-id: UG-CREATING-REUSABLE-LAYOUT -->
+```python
+import xarray as xr
+from tal.core import AnalysisLayoutSpec
+from tal.spatial import Position
+
+layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
+dataset = xr.Dataset(
+    {
+        "position": (("sample", "axis"), [[1.0, 2.0, 3.0]]),
+        "quality": ("sample", [1]),
+    },
+    coords={"sample": [0], "axis": ["x", "y", "z"]},
+)
+selected = layout.wrap(dataset, data_vars="position")
+position = Position(selected)
+ordered = layout.wrap(dataset).select_vars(("quality", "position"))
+assert list(ordered.as_dataset().data_vars) == ["quality", "position"]
+assert list(position.as_dataset().data_vars) == ["position"]
+```
+
+The spec is a complete declaration: default fields remove source role and
+optional-coordinate metadata. `AnalysisObject.from_data(...)` instead treats
+its defaults as an overlay. Selection on an existing AO retains its subtype
+only when the selected schema still satisfies that subtype; it does not
+silently downgrade. Neither path infers roles or registers frame providers.
+
 ## Dataset exposure
 
 - `ao.as_dataset()` returns a mutation-safe deep snapshot.

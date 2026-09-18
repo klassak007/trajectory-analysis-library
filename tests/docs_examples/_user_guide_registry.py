@@ -13,7 +13,7 @@ EXAMPLE_ID_RE = re.compile(r"<!--\s*example-id:\s*([A-Z0-9-]+)\s*-->")
 USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
     "overview": ("UG-OVERVIEW-BASIC-WORKFLOW",),
     "core_concepts": ("UG-CORE-CONCEPTS-ROLES",),
-    "creating_trajectory_objects": ("UG-CREATING-SEQUENCE-AO",),
+    "creating_trajectory_objects": ("UG-CREATING-SEQUENCE-AO", "UG-CREATING-REUSABLE-LAYOUT"),
     "indexing": ("UG-INDEXING-PARAM-QUERY",),
     "time": ("UG-TIME-SYNCHRONIZE",),
     "events": ("UG-EVENTS-WINDOWS",),

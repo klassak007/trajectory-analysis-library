@@ -321,7 +321,7 @@ def test_orch_array_005_resolve_dataset_context_matches_array_plan_operand_conte
     assert left_ctx.sequence_size_coord == plan.operands[0].sequence_size_coord
 
 
-def test_orch_array_008_dataset_context_always_validates_schema_values() -> None:
+def test_orch_array_008_dataset_context_always_validates_schema_values(unsafe_from_data) -> None:
     """ID: ORCH_ARRAY_008_dataset_context_always_validates_schema_values."""
     ds = xr.Dataset(
         {"value": (("trial", "sample"), [[1.0, 2.0]])},
@@ -331,7 +331,7 @@ def test_orch_array_008_dataset_context_always_validates_schema_values() -> None
             "sequence_size": ("trial", [np.nan]),
         },
     )
-    ao = AnalysisObject.from_data(
+    ao = unsafe_from_data(
         ds,
         sequence_dim="sample",
         batch_dims=("trial",),
@@ -817,7 +817,7 @@ def test_bcast_core_012_nary_optin_path_uses_shared_topology_touchpoint() -> Non
     assert "trial" in realized[2].dims
 
 
-def test_bcast_hard_003_semantic_mode_rejects_core_dim_broadcast_attempts() -> None:
+def test_bcast_hard_003_semantic_mode_rejects_core_dim_broadcast_attempts(unsafe_from_data) -> None:
     """ID: BCAST_HARD_003_semantic_mode_rejects_core_dim_broadcast_attempts."""
     left = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="mid")
     right_ds = xr.Dataset(
@@ -828,7 +828,7 @@ def test_bcast_hard_003_semantic_mode_rejects_core_dim_broadcast_attempts() -> N
             "row": np.arange(3, dtype=np.int64),
         },
     )
-    right = AnalysisObject.from_data(
+    right = unsafe_from_data(
         right_ds,
         sequence_dim="sample",
         batch_dims=("trial",),
@@ -1074,7 +1074,11 @@ def test_topo_hard_002_strict_mode_rejects_extra_unmatched_non_core_dims() -> No
 def test_topo_hard_003_topology_resolution_failures_owner_prefixed() -> None:
     """ID: TOPO_HARD_003_topology_resolution_failures_owner_prefixed."""
     left = _matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="mid")
-    right_ds = left.as_dataset(copy="none").rename({"sample": "step"})
+    from tal.core.schema import repair_schema_after_structure
+
+    right_ds = repair_schema_after_structure(
+        left.as_dataset(copy="none").rename({"sample": "step"}), validate=False
+    )
     right = AnalysisObject.from_data(
         right_ds,
         sequence_dim="step",

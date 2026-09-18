@@ -17,7 +17,9 @@ __all__ = ["SCHEMA_VERSION", "validate_schema", "validate_schema_structure"]
 
 
 @dataclass(frozen=True)
-class _SchemaStructure:
+class PreparedSchemaValidation:
+    """Copy-neutral result of the complete schema validation phases."""
+
     tal: Mapping[str, Any]
     sequence_dim: str | None
     sequence_size_coord: str | None
@@ -40,7 +42,7 @@ def _validate_schema_envelope(ds: xr.Dataset) -> None:
     phase_extension_envelope(tal)
 
 
-def _resolve_schema_structure(ds: xr.Dataset) -> _SchemaStructure:
+def _resolve_schema_structure(ds: xr.Dataset) -> PreparedSchemaValidation:
     tal, core = _resolve_schema_root(ds)
     sequence_dim, batch_dims, core_dims = phase_roles_structure(core)
     phase_roles_vs_dims(
@@ -61,7 +63,7 @@ def _resolve_schema_structure(ds: xr.Dataset) -> _SchemaStructure:
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
     )
-    return _SchemaStructure(
+    return PreparedSchemaValidation(
         tal=tal,
         sequence_dim=sequence_dim,
         sequence_size_coord=size_name,
@@ -80,8 +82,8 @@ def validate_schema_structure(ds: xr.Dataset) -> str | None:
     return None if name is None else str.__str__(name)
 
 
-def validate_schema(ds: xr.Dataset) -> xr.Dataset:
-    """Validate TAL schema and return a dataset carrying canonical schema."""
+def prepare_schema_validation(ds: xr.Dataset) -> PreparedSchemaValidation:
+    """Validate source schema without copying its payload or metadata graph."""
     structure = _resolve_schema_structure(ds)
     if structure.sequence_size_coord is not None:
         if structure.sequence_dim is None:  # pragma: no cover - structural invariant.
@@ -92,4 +94,10 @@ def validate_schema(ds: xr.Dataset) -> xr.Dataset:
             sequence_dim=structure.sequence_dim,
         )
     phase_extension_envelope(structure.tal)
-    return finalize_validated_schema(ds, structure.tal)
+    return structure
+
+
+def validate_schema(ds: xr.Dataset) -> xr.Dataset:
+    """Validate TAL schema and return a dataset carrying canonical schema."""
+    prepared = prepare_schema_validation(ds)
+    return finalize_validated_schema(ds, prepared.tal)

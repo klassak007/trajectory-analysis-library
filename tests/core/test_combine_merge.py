@@ -339,7 +339,7 @@ def test_combine_merge_012_override_preserves_right_only_same_name_vars() -> Non
     np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="a").values, [0.0, 1.0, 2.0])
 
 
-def test_combine_merge_013_invalid_sequence_size_prunes_validity_metadata() -> None:
+def test_combine_merge_013_invalid_sequence_size_prunes_validity_metadata(unsafe_from_data) -> None:
     """ID: COMBINE_MERGE_013_invalid_sequence_size_prunes_validity_metadata."""
     left = _ao_grouped(
         trial_labels=("a",),
@@ -356,7 +356,7 @@ def test_combine_merge_013_invalid_sequence_size_prunes_validity_metadata() -> N
             "group_size": ("trial", [np.nan]),
         },
     )
-    right = AnalysisObject.from_data(
+    right = unsafe_from_data(
         right_ds,
         sequence_dim="sample",
         batch_dims=("trial",),

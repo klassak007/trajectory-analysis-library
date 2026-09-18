@@ -15,7 +15,13 @@ from tal.astro import (
     TopocentricDirection,
 )
 from tal.astro.sun import SunDirectionOptions, direction_to_sun
-from tal.core import AnalysisObject, ParamEvalOptions, ParamSyncOptions, synchronize
+from tal.core import (
+    AnalysisLayoutSpec,
+    AnalysisObject,
+    ParamEvalOptions,
+    ParamSyncOptions,
+    synchronize,
+)
 from tal.core.event_ops import (
     AtBoundariesOptions,
     Condition,
@@ -777,10 +783,27 @@ def example_guide_viewing_schema() -> None:
     assert after_schema["core"]["param_coord"]["name"] == "time_s"
 
 
+def example_guide_creating_reusable_layout() -> None:
+    layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
+    dataset = xr.Dataset(
+        {
+            "position": (("sample", "axis"), [[1.0, 2.0, 3.0]]),
+            "quality": ("sample", [1]),
+        },
+        coords={"sample": [0], "axis": ["x", "y", "z"]},
+    )
+    selected = layout.wrap(dataset, data_vars="position")
+    position = Position(selected)
+    ordered = layout.wrap(dataset).select_vars(("quality", "position"))
+    assert list(ordered.as_dataset().data_vars) == ["quality", "position"]
+    assert list(position.as_dataset().data_vars) == ["position"]
+
+
 USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-OVERVIEW-BASIC-WORKFLOW": example_guide_overview_basic_workflow,
     "UG-CORE-CONCEPTS-ROLES": example_guide_core_concepts_roles,
     "UG-CREATING-SEQUENCE-AO": example_guide_creating_sequence_ao,
+    "UG-CREATING-REUSABLE-LAYOUT": example_guide_creating_reusable_layout,
     "UG-INDEXING-PARAM-QUERY": example_guide_indexing_param_query,
     "UG-TIME-SYNCHRONIZE": example_guide_time_synchronize,
     "UG-EVENTS-WINDOWS": example_guide_events_windows,

@@ -23,49 +23,6 @@ from .schema_errors import schema_error
 from .validity_finalize import reconcile_sequence_validity_after_structure
 
 
-def _require_sequence_dim_for_schema_fields(
-    *,
-    sequence_dim: str | None,
-    param_coord: str | None,
-    sequence_size_coord: str | None,
-) -> None:
-    required = [
-        name
-        for name, value in (
-            ("param_coord", param_coord),
-            ("sequence_size_coord", sequence_size_coord),
-        )
-        if value is not None
-    ]
-    if sequence_dim is not None or not required:
-        return
-    needed = ", ".join(required)
-    raise ValueError(
-        "from_data requires sequence_dim when schema-bearing arguments are provided. "
-        f"Missing sequence_dim with: {needed}."
-    )
-
-
-def _from_data_schema_plan(
-    *,
-    sequence_dim: str | None,
-    batch_dims: Sequence[str],
-    core_dims: Sequence[str],
-    param_coord: str | None,
-    sequence_size_coord: str | None,
-    layout: Literal["left_packed"],
-) -> _SchemaUpdatePlan:
-    roles_declared = sequence_dim is not None or bool(batch_dims) or bool(core_dims)
-    return _SchemaUpdatePlan(
-        sequence_dim=sequence_dim if sequence_dim is not None else UNSET,
-        batch_dims=batch_dims if roles_declared else UNSET,
-        core_dims=core_dims if roles_declared else UNSET,
-        param_coord=param_coord if param_coord is not None else UNSET,
-        sequence_size_coord=sequence_size_coord if sequence_size_coord is not None else UNSET,
-        layout=layout,
-    )
-
-
 class AnalysisObject:
     """Dataset-backed core TAL container.
 
@@ -623,6 +580,7 @@ class AnalysisObject:
         *,
         validate: bool,
         rename_map: Mapping[str, str] | None = None,
+        validated_registry: Mapping[str, Any] | None = None,
     ) -> AnalysisObject:
         from .component_ops.rewrite import rewrite_component_registry_after_structure
 
@@ -638,6 +596,7 @@ class AnalysisObject:
             reconciled,
             rename_map=rename_map,
             owner="components.rewrite",
+            validated_registry=validated_registry,
         )
         if validate:
             payload = rewritten.attrs.get("tal")
@@ -713,27 +672,61 @@ class AnalysisObject:
         tal.core.schema.set_param_coord
         tal.core.schema.set_validity
         """
-        _require_sequence_dim_for_schema_fields(
-            sequence_dim=sequence_dim,
-            param_coord=param_coord,
-            sequence_size_coord=sequence_size_coord,
-        )
-        candidate = cls._normalized_ingress_dataset(data)
-        if "tal" in data.attrs:
-            candidate = _validate_existing_schema_envelope(candidate)
-        plan = _from_data_schema_plan(
+        from .layout_ingress import overlay_ingress
+
+        return overlay_ingress(
+            cls,
+            data,
             sequence_dim=sequence_dim,
             batch_dims=batch_dims,
             core_dims=core_dims,
             param_coord=param_coord,
             sequence_size_coord=sequence_size_coord,
             layout=layout,
+            validate=validate,
         )
-        candidate = _apply_schema_update(candidate, plan, validate=validate)
-        owned = _dataset_ownership.isolate_external_dataset(candidate)
-        if validate:
-            return cls._from_validated(owned)
-        return cls._from_unvalidated(owned, schema_prepared=True)
+
+    def select_vars(self, names: str | Sequence[str], *, validate: bool = True) -> Self:
+        """Select ordered data variables without discarding TAL semantics.
+
+        Parameters
+        ----------
+        names
+            One data-variable name or an ordered sequence of unique names.
+        validate
+            Whether to run optional full output schema validation.
+
+        Returns
+        -------
+        AnalysisObject
+            Same-subtype owning alias with selected variables in caller order.
+
+        Raises
+        ------
+        TypeError
+            If ``names`` is not a supported ordered selection.
+        ValueError
+            If a name is absent, repeated, or incompatible with the subtype.
+
+        Notes
+        -----
+        Selected results share eligible eager buffers and Dask graphs while
+        isolating xarray wrappers and nested metadata. Existing lazy resources
+        are coupled to the new owning alias only after selection succeeds.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> ds = xr.Dataset({"x": ("sample", [1.0]), "y": ("sample", [2.0])})
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample")
+        >>> list(ao.select_vars(("y", "x")).as_dataset().data_vars)
+        ['y', 'x']
+
+        """
+        from .layout_ingress import select_owned_variables
+
+        return select_owned_variables(self, names, validate=validate)
 
     def isel(
         self,
