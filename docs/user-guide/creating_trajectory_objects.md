@@ -155,6 +155,44 @@ and `rotation` variables intentionally have empty ordinary attributes and
 storage encodings, so per-channel units or storage settings are never chosen
 implicitly.
 
+## Build from CSV and ROS reader results
+
+CSV and ROS readers already return schema-bearing AOs, so their declared batch,
+sequence, parameter, and validity layout is inherited directly. Do not pass
+`source_layout` for a reader result.
+
+<!-- example-id: UG-CREATING-SPATIAL-FIELDS-FROM-READERS -->
+```python
+from tal.io import CsvIngestOptions, RosIngestOptions, read_csv_logs, read_ros_logs
+from tal.spatial import Pose
+
+csv_source = read_csv_logs(
+    "camera.csv",
+    opts=CsvIngestOptions(time_col="time"),
+)
+csv_pose = Pose.from_fields(
+    csv_source,
+    position="camera.position.{x,y,z}",
+    rotation="camera.rotation.{x,y,z,w}",
+)
+
+ros_source = read_ros_logs(
+    "camera.mcap",
+    opts=RosIngestOptions(topic="/camera/pose"),
+)
+ros_pose = Pose.from_fields(
+    ros_source,
+    position="translation_{x,y,z}",
+    rotation="quaternion_{x,y,z,w}",
+)
+```
+
+Field factories consume the returned AO, not a path, bag, or DataFrame. They do
+not reopen the reader, widen a CSV `value_columns` selection, push projection
+into ingestion, or infer frames from ROS field names. Install the `ros` extra to
+read ROS recordings; ordinary Dataset/AO field construction does not require
+that optional dependency.
+
 ## Reuse a complete layout and select variables
 
 <!-- example-id: UG-CREATING-REUSABLE-LAYOUT -->

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -48,6 +50,10 @@ from tal.geo import (
     ProjectedPosition,
     transform_crs,
 )
+from tal.io import CsvIngestOptions, RosIngestOptions, read_csv_logs, read_ros_logs
+from tal.io import ros_logs as ros_logs_module
+from tal.io import ros_payload as ros_payload_module
+from tal.io import ros_reader as ros_reader_module
 from tal.linalg import (
     Matrix,
     Vector,
@@ -826,6 +832,69 @@ def example_guide_creating_spatial_fields() -> None:
         assert position.as_dataset(copy="none")["position"].attrs == {}
 
 
+def example_guide_creating_spatial_fields_from_readers() -> None:
+    csv_text = (
+        "time,camera.position.x,camera.position.y,camera.position.z,"
+        "camera.rotation.x,camera.rotation.y,camera.rotation.z,camera.rotation.w\n"
+        "0.0,1.0,2.0,3.0,0.0,0.0,0.0,1.0\n"
+    )
+    msgtype = "geometry_msgs/msg/PoseStamped"
+    message = ros_reader_module.RosMessage(
+        topic="/camera/pose",
+        msgtype=msgtype,
+        family=ros_payload_module.require_message_family(msgtype, owner="example"),
+        msg=SimpleNamespace(
+            header=SimpleNamespace(
+                stamp=SimpleNamespace(sec=1, nanosec=0),
+                frame_id="map",
+            ),
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+                orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+            ),
+        ),
+        receive_ns=1_000_000_000,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        csv_path = Path(directory) / "camera.csv"
+        ros_path = Path(directory) / "camera.mcap"
+        csv_path.write_text(csv_text, encoding="utf-8")
+        ros_path.write_text("fixture", encoding="utf-8")
+        csv_source = read_csv_logs(
+            str(csv_path),
+            opts=CsvIngestOptions(time_col="time"),
+        )
+        csv_pose = Pose.from_fields(
+            csv_source,
+            position="camera.position.{x,y,z}",
+            rotation="camera.rotation.{x,y,z,w}",
+        )
+        with patch.object(
+            ros_logs_module,
+            "_iter_ros_messages",
+            return_value=iter((message,)),
+        ):
+            ros_source = read_ros_logs(
+                str(ros_path),
+                opts=RosIngestOptions(topic="/camera/pose"),
+            )
+        ros_pose = Pose.from_fields(
+            ros_source,
+            position="translation_{x,y,z}",
+            rotation="quaternion_{x,y,z,w}",
+        )
+    for pose in (csv_pose, ros_pose):
+        position, rotation = pose.decompose()
+        np.testing.assert_array_equal(
+            position.as_dataset(copy="none")["position"],
+            [[[1.0, 2.0, 3.0]]],
+        )
+        np.testing.assert_array_equal(
+            rotation.as_dataset(copy="none")["rotation"],
+            [[[0.0, 0.0, 0.0, 1.0]]],
+        )
+
+
 def example_guide_creating_reusable_layout() -> None:
     layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
     dataset = xr.Dataset(
@@ -847,6 +916,9 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-CORE-CONCEPTS-ROLES": example_guide_core_concepts_roles,
     "UG-CREATING-SEQUENCE-AO": example_guide_creating_sequence_ao,
     "UG-CREATING-SPATIAL-FIELDS": example_guide_creating_spatial_fields,
+    "UG-CREATING-SPATIAL-FIELDS-FROM-READERS": (
+        example_guide_creating_spatial_fields_from_readers
+    ),
     "UG-CREATING-REUSABLE-LAYOUT": example_guide_creating_reusable_layout,
     "UG-INDEXING-PARAM-QUERY": example_guide_indexing_param_query,
     "UG-TIME-SYNCHRONIZE": example_guide_time_synchronize,

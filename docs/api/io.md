@@ -61,6 +61,11 @@ is available through `write_csv_logs(...)` when grouped AOs should be written
 back to per-run tabular files. ROS readers use message timestamps when
 available before falling back to receive/log time.
 
+Reader results are schema-bearing AOs and may be passed to the explicit spatial
+field factories described in {doc}`../user-guide/creating_trajectory_objects`.
+Construction occurs after reading: factories do not accept paths or bags,
+reread inputs, widen CSV column selection, or infer frames from ROS field names.
+
 `read_csv_logs(...)` and `write_csv_logs(...)` are deliberately lossy and are
 not inverse operations. CSV output contains tabular observation columns only: there is
 no sidecar and no promise to preserve TAL schema, subclass identity, exact dtype,

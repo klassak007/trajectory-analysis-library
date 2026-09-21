@@ -15,6 +15,7 @@ USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
     "creating_trajectory_objects": (
         "UG-CREATING-SEQUENCE-AO",
         "UG-CREATING-SPATIAL-FIELDS",
+        "UG-CREATING-SPATIAL-FIELDS-FROM-READERS",
         "UG-CREATING-REUSABLE-LAYOUT",
     ),
     "indexing": ("UG-INDEXING-PARAM-QUERY",),
