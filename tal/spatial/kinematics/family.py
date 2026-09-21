@@ -42,6 +42,7 @@ from ..construction import (
 from ..metadata import normalize_kinematic_relation_semantics
 from .paired_components import (
     PairAssemblyOptions,
+    PairedDatasetAssemblyPlan,
     align_paired_component_payloads,
     build_paired_components_dataset,
     clear_component_registry,
@@ -291,14 +292,16 @@ def build_family_dataset(
     return build_paired_components_dataset(
         left_ds=aligned_linear_ds,
         right_ds=aligned_angular_ds,
-        sequence_dim=seq_linear,
-        batch_dims=batch_linear,
-        left_dim=left_dim,
-        right_dim=right_dim,
-        left_var=left_var,
-        right_var=right_var,
+        plan=PairedDatasetAssemblyPlan(
+            sequence_dim=seq_linear,
+            batch_dims=batch_linear,
+            left_dim=left_dim,
+            right_dim=right_dim,
+            left_var=left_var,
+            right_var=right_var,
+            validate=validate,
+        ),
         owner=owner,
-        validate=validate,
         opts=cfg.pair_opts,
         policy=policy,
     )

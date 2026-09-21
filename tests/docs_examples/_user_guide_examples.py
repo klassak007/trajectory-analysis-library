@@ -783,6 +783,49 @@ def example_guide_viewing_schema() -> None:
     assert after_schema["core"]["param_coord"]["name"] == "time_s"
 
 
+def example_guide_creating_spatial_fields() -> None:
+    source = xr.Dataset(
+        {
+            "camera.position.x": ("sample", [1.0]),
+            "camera.position.y": ("sample", [2.0]),
+            "camera.position.z": ("sample", [3.0]),
+            "camera.rotation.x": ("sample", [0.0]),
+            "camera.rotation.y": ("sample", [0.0]),
+            "camera.rotation.z": ("sample", [0.0]),
+            "camera.rotation.w": ("sample", [1.0]),
+        },
+        coords={"sample": [0]},
+    )
+    layout = AnalysisLayoutSpec(sequence_dim="sample")
+    declared = layout.wrap(source)
+    camera = Pose.from_fields(
+        declared,
+        position="camera.position.{x,y,z}",
+        rotation="camera.rotation.{x,y,z,w}",
+    )
+    recipe = Pose.fields(
+        position="position.{x,y,z}",
+        rotation="rotation.{x,y,z,w}",
+    )
+    camera_again = recipe.build(declared, prefix="camera.")
+    camera_from_raw = recipe.build(
+        source,
+        prefix="camera.",
+        source_layout=layout,
+    )
+    expected_position = np.asarray([[1.0, 2.0, 3.0]])
+    for pose in (camera, camera_again, camera_from_raw):
+        position, rotation = pose.decompose()
+        np.testing.assert_array_equal(
+            position.as_dataset(copy="none")["position"], expected_position
+        )
+        np.testing.assert_array_equal(
+            rotation.as_dataset(copy="none")["rotation"],
+            [[0.0, 0.0, 0.0, 1.0]],
+        )
+        assert position.as_dataset(copy="none")["position"].attrs == {}
+
+
 def example_guide_creating_reusable_layout() -> None:
     layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
     dataset = xr.Dataset(
@@ -803,6 +846,7 @@ USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-OVERVIEW-BASIC-WORKFLOW": example_guide_overview_basic_workflow,
     "UG-CORE-CONCEPTS-ROLES": example_guide_core_concepts_roles,
     "UG-CREATING-SEQUENCE-AO": example_guide_creating_sequence_ao,
+    "UG-CREATING-SPATIAL-FIELDS": example_guide_creating_spatial_fields,
     "UG-CREATING-REUSABLE-LAYOUT": example_guide_creating_reusable_layout,
     "UG-INDEXING-PARAM-QUERY": example_guide_indexing_param_query,
     "UG-TIME-SYNCHRONIZE": example_guide_time_synchronize,

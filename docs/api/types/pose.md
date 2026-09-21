@@ -19,6 +19,7 @@ parameter evaluation.
 ```python
 Pose.from_components(rotation, position, ...)
 Pose.from_matrix(matrix, ...)
+Pose.from_fields(source, position=..., rotation=...)
 pose.decompose()
 ```
 
@@ -29,6 +30,11 @@ matrix-style pose payload. Decomposition returns typed `Position` and
 Constructors accept `parent=`, `child=`, `expressed_in=`, and `graph=`.
 Association is passive and does not register the pose. Inspect `pose.graph` or
 return a distinct associated alias with `pose.with_graph(...)`.
+
+`Pose.fields(position=..., rotation=...)` declares a reusable immutable
+component-Pose recipe. Field construction prepares the selected source union
+once and gives the generated `position` and `rotation` variables empty ordinary
+attributes and encodings.
 
 Use `pose.register()` after associating a canonical parent/child Pose with a
 graph. It accepts static and parameterized native-rate providers, returns the
@@ -93,6 +99,8 @@ coordinates; shared source batch dimensions remain intact.
    :nosignatures:
 
    tal.spatial.Pose
+   tal.spatial.Pose.fields
+   tal.spatial.Pose.from_fields
    tal.spatial.Pose.graph
    tal.spatial.Pose.with_graph
    tal.spatial.Pose.register

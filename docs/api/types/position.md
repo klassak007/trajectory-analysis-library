@@ -31,6 +31,13 @@ metadata, optional frame tags, and temporal operations at the typed boundary.
 `position.with_graph(graph)` creates a distinct metadata-isolated owning alias;
 it shares eligible payload buffers and lazy graphs.
 
+## Scalar-field construction
+
+Use `Position.from_fields(...)` to assemble xyz scalar data variables from a
+Dataset or existing AO. `Position.fields(...)` returns a reusable immutable
+recipe. Field attributes and storage encodings are deliberately not copied to
+the new `position` variable.
+
 ## Spatial Methods
 
 ```python
@@ -74,6 +81,8 @@ unambiguous. Unframed addition requires exactly one operand to be marked with
    :nosignatures:
 
    tal.spatial.Position
+   tal.spatial.Position.fields
+   tal.spatial.Position.from_fields
    tal.spatial.Position.graph
    tal.spatial.Position.with_graph
    tal.spatial.Position.as_delta

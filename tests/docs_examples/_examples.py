@@ -21,6 +21,7 @@ from tal.astro import (
 )
 from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
 from tal.core import (
+    AnalysisLayoutSpec,
     AnalysisObject,
     BatchGroupReduceOptions,
     SequenceConcatOptions,
@@ -193,6 +194,45 @@ def _identity_pose() -> Pose:
     rotation = _make_rotation(np.asarray([[0.0, 0.0, 0.0, 1.0]], dtype=float))
     translation = _make_position(np.asarray([[0.0, 0.0, 0.0]], dtype=float))
     return Pose.from_components(rotation, translation, validate=True)
+
+
+def example_spatial_field_build() -> None:
+    source = xr.Dataset(
+        {
+            "camera.position.x": ("sample", [1.0]),
+            "camera.position.y": ("sample", [2.0]),
+            "camera.position.z": ("sample", [3.0]),
+            "camera.rotation.x": ("sample", [0.0]),
+            "camera.rotation.y": ("sample", [0.0]),
+            "camera.rotation.z": ("sample", [0.0]),
+            "camera.rotation.w": ("sample", [1.0]),
+        },
+        coords={"sample": [0]},
+    )
+    layout = AnalysisLayoutSpec(sequence_dim="sample")
+    declared = layout.wrap(source)
+    one_shot = Pose.from_fields(
+        declared,
+        position="camera.position.{x,y,z}",
+        rotation="camera.rotation.{x,y,z,w}",
+    )
+    recipe = Pose.fields(
+        position="position.{x,y,z}",
+        rotation="rotation.{x,y,z,w}",
+    )
+    reused = recipe.build(declared, prefix="camera.")
+    raw = recipe.build(source, prefix="camera.", source_layout=layout)
+    for result in (one_shot, reused, raw):
+        position, rotation = result.decompose()
+        np.testing.assert_array_equal(
+            position.as_dataset(copy="none")["position"],
+            [[1.0, 2.0, 3.0]],
+        )
+        np.testing.assert_array_equal(
+            rotation.as_dataset(copy="none")["rotation"],
+            [[0.0, 0.0, 0.0, 1.0]],
+        )
+        assert position.as_dataset(copy="none")["position"].attrs == {}
 
 
 def example_core_ao_from_data() -> None:
@@ -1719,6 +1759,7 @@ EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "LINALG-ARRAY-CORE-DIMS": example_linalg_array_core_dims,
     "LINALG-LAYOUT-SURFACE": example_linalg_layout_surface,
     "SPATIAL-BIND-POSE": example_spatial_bind_pose,
+    "SPATIAL-FIELD-BUILD": example_spatial_field_build,
     "SPATIAL-POSITION-TO-FRAME": example_spatial_position_to_frame,
     "SPATIAL-POSITION-BASIC": example_spatial_position_basic,
     "SPATIAL-ROTATION-FROM-DATA": example_spatial_rotation_from_data,

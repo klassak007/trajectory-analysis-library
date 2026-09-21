@@ -46,6 +46,7 @@ from .conversion.finalize import (
     dataset_dim_names,
     finalize_conversion_dataset,
 )
+from .field_recipes import SingleSpatialFieldFactoryMixin
 from .metadata import (
     get_rotation_rep,
     normalize_configuration_relation_semantics,
@@ -383,7 +384,11 @@ def _rotation_inverse_with_owner(
     return rotation._rewrap_dataset(result, validate=validate)
 
 
-class Rotation(SpatialConfigurationConstructionMixin, AnalysisObject):
+class Rotation(
+    SingleSpatialFieldFactoryMixin,
+    SpatialConfigurationConstructionMixin,
+    AnalysisObject,
+):
     """3D orientation type with quaternion/matrix representations.
 
     Parameters
@@ -404,6 +409,7 @@ class Rotation(SpatialConfigurationConstructionMixin, AnalysisObject):
     CANONICAL_REP: str = "quat"
     QUAT_LABELS: tuple[str, str, str, str] = _QUAT_LABELS
     MATRIX_LABELS: tuple[str, str, str] = _MATRIX_LABELS
+    SPATIAL_FIELD_TARGET = "rotation"
     SPATIAL_CONSTRUCTION_OWNER = "spatial.rotation.__init__"
     SPATIAL_SOURCE_COERCER = staticmethod(_coerce_rotation_source)
     SPATIAL_PRE_ENFORCE = staticmethod(require_rotation_ingress_core_roles)

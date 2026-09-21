@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 from tests.docs_examples._user_guide_examples import USER_GUIDE_EXECUTABLE_EXAMPLES
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 USER_GUIDE_DIR = REPO_ROOT / "docs" / "user-guide"
@@ -13,7 +12,11 @@ EXAMPLE_ID_RE = re.compile(r"<!--\s*example-id:\s*([A-Z0-9-]+)\s*-->")
 USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
     "overview": ("UG-OVERVIEW-BASIC-WORKFLOW",),
     "core_concepts": ("UG-CORE-CONCEPTS-ROLES",),
-    "creating_trajectory_objects": ("UG-CREATING-SEQUENCE-AO", "UG-CREATING-REUSABLE-LAYOUT"),
+    "creating_trajectory_objects": (
+        "UG-CREATING-SEQUENCE-AO",
+        "UG-CREATING-SPATIAL-FIELDS",
+        "UG-CREATING-REUSABLE-LAYOUT",
+    ),
     "indexing": ("UG-INDEXING-PARAM-QUERY",),
     "time": ("UG-TIME-SYNCHRONIZE",),
     "events": ("UG-EVENTS-WINDOWS",),

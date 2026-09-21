@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_DIR = REPO_ROOT / "docs" / "api"
@@ -31,6 +30,7 @@ USER_API_PAGES = (
     "types/position.md",
     "types/rotation.md",
     "types/pose.md",
+    "types/field-recipes.md",
     "types/velocity.md",
     "types/acceleration.md",
     "types/path_solve.md",

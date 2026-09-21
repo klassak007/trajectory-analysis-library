@@ -116,14 +116,18 @@ nitpick_ignore_regex = [
     ("py:class", r"pandas\._libs\.tslibs\.timedeltas\.Timedelta"),
     ("py:class", r"tal\.core\..*types\..*"),
     ("py:class", r"tal\.core\.schema\.UnsetType"),
+    ("py:class", r"tal\.core\.SchemaError"),
     ("py:class", r"tal\.io\.options\..*"),
     ("py:class", r"tal\.spatial\.path_solve\..*"),
     ("py:class", r"tal\.spatial\.construction\.Spatial.*Mixin"),
+    ("py:class", r"tal\.spatial\.field_recipes\..*Mixin"),
+    ("py:class", r"tal\.spatial\.ops\.field_selectors\.FieldSelectorDeclaration"),
     ("py:class", r"UnsetType"),
     ("py:class", r"VizKind"),
     ("py:class", r"WeightInput"),
     ("py:class", r"xr\..*"),
     ("py:data", r"typing\.Union"),
+    ("py:exc", r"tal\.core\.SchemaError"),
     ("py:meth", r"Array\.set_core_dims"),
     ("py:meth", r"Array\.set_matrix_axes"),
     ("py:meth", r"Array\.set_vector_axis"),
@@ -139,6 +143,7 @@ nitpick_ignore_regex = [
     ("py:obj", r"tal\.core\.schema\.set_roles"),
     ("py:obj", r"tal\.core\.schema\.set_validity"),
     ("py:obj", r"tal\.ufuncs\..*"),
+    ("py:obj", r"tal\.spatial\.field_recipes\.T"),
 ]
 
 suppress_warnings = [

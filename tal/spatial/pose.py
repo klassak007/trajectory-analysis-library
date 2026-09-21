@@ -40,18 +40,17 @@ from tal.utils.topology_operation_families import (
 
 from .association import (
     attach_spatial_association,
-    finalize_spatial_as,
     finalize_spatial_from_source,
 )
 from .construction import (
     SpatialConfigurationConstructionMixin,
-    SpatialConstructionPlan,
     apply_spatial_construction,
     finish_spatial_factory_promotion,
     preflight_spatial_construction,
     prepare_spatial_construction,
     prepare_spatial_factory_dataset,
 )
+from .field_recipes import PoseSpatialFieldFactoryMixin
 from .kernels.pose_kernels import _matrix3_to_quat_prevalidated_kernel
 from .kinematics.paired_components import clear_component_registry
 from .metadata import (
@@ -66,6 +65,7 @@ from .ops.frame_api_ops import pose_class_solve_path_transform
 from .ops.pose_apply_ops import pose_apply
 from .ops.pose_component_ops import (
     build_components_pose_dataset,
+    finalize_components_pose_output,
     resolve_pose_component_specs,
 )
 from .ops.pose_matrix_validation import (
@@ -288,23 +288,12 @@ def _build_matrix_component_outputs(
         **base_kwargs,
     )
     return pos_ao, rot_ao
-def _finalize_components_pose_output(
-    ds: xr.Dataset,
-    *,
-    plan: SpatialConstructionPlan,
-    validate: bool,
-    owner: str,
-) -> "Pose":
-    ds = set_pose_rep(ds, rep="components", validate=False, owner=owner)
-    ds = apply_spatial_construction(ds, plan=plan, owner=owner)
-    return finalize_spatial_as(
-        Pose,
-        ds,
-        validate=validate,
-        association=plan.association,
-    )
 
-class Pose(SpatialConfigurationConstructionMixin, AnalysisObject):
+class Pose(
+    PoseSpatialFieldFactoryMixin,
+    SpatialConfigurationConstructionMixin,
+    AnalysisObject,
+):
     """Rigid-body pose type (rotation + translation).
 
     Parameters
@@ -471,7 +460,7 @@ class Pose(SpatialConfigurationConstructionMixin, AnalysisObject):
             validate=validate,
             policy=selection.policy,
         )
-        return _finalize_components_pose_output(
+        return finalize_components_pose_output(
             ds,
             plan=plan,
             validate=validate,

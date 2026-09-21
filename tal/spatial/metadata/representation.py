@@ -78,6 +78,18 @@ _ACCELERATION_REP_SPEC = _RepresentationMetadataSpec(
     default="components",
 )
 
+_KNOWN_SPATIAL_REPRESENTATIONS = frozenset().union(
+    _POSITION_REP_SPEC.allowed,
+    _ROTATION_REP_SPEC.allowed,
+    _POSE_REP_SPEC.allowed,
+    _LINEAR_VELOCITY_REP_SPEC.allowed,
+    _ANGULAR_VELOCITY_REP_SPEC.allowed,
+    _VELOCITY_REP_SPEC.allowed,
+    _LINEAR_ACCELERATION_REP_SPEC.allowed,
+    _ANGULAR_ACCELERATION_REP_SPEC.allowed,
+    _ACCELERATION_REP_SPEC.allowed,
+)
+
 
 def _normalize_non_empty_rep(rep: object, *, owner: str) -> str:
     if not isinstance(rep, str) or not rep.strip():
@@ -117,6 +129,25 @@ def _read_required_rep(ds: xr.Dataset, *, allowed: frozenset[str], what: str, ow
             f"{owner}: tal.ext.spatial.representation.rep must be explicitly set for {what} ({sorted(allowed)!r})."
         )
     return _normalize_rep(block["rep"], allowed=allowed, what=what, owner=owner)
+
+
+def _validate_spatial_representation(ds: xr.Dataset, *, owner: str) -> None:
+    """Validate one stored representation without assuming a source subtype."""
+    ds = _require_dataset(ds, owner=owner)
+    block = _read_rep_block(ds, owner=owner)
+    if block is None:
+        return
+    if "rep" not in block:
+        raise ValueError(
+            f"{owner}: tal.ext.spatial.representation.rep must be set when "
+            "representation block exists."
+        )
+    _normalize_rep(
+        block["rep"],
+        allowed=_KNOWN_SPATIAL_REPRESENTATIONS,
+        what="spatial",
+        owner=owner,
+    )
 
 
 def _set_rep(

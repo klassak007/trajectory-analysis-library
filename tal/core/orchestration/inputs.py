@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from ..dataset_ownership import analysis_object_dataset
-from ..schema_errors import SchemaError, schema_error
+from ..schema_errors import SchemaError, _schema_error_with_context
 from .alignment_intent import read_alignment_intent
 from .broadcast_intent import read_broadcast_intent
 
@@ -25,13 +25,7 @@ def _coerce_external_analysis_object(
         return AnalysisObject(value)
     except SchemaError as exc:
         context = _external_input_context(owner=owner, item=item)
-        raise schema_error(
-            code=exc.code,
-            path=exc.path,
-            expected=exc.expected,
-            actual=exc.actual,
-            hint=f"{context}. {exc.hint}",
-        ) from exc
+        raise _schema_error_with_context(exc, context=context) from exc
     except Exception as exc:
         context = _external_input_context(owner=owner, item=item)
         raise ValueError(f"{context}.") from exc

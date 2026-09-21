@@ -14,6 +14,7 @@ from tal.utils.frame_schema import get_frames, set_frames
 
 from .association import finalize_spatial_as, resolve_passive_association
 from .construction import SpatialConfigurationConstructionMixin
+from .field_recipes import SingleSpatialFieldFactoryMixin
 from .metadata import (
     get_position_intent,
     get_position_rep,
@@ -116,7 +117,11 @@ def _add_positions(left_input: object, right_input: object, *, owner: str) -> "P
     )
 
 
-class Position(SpatialConfigurationConstructionMixin, AnalysisObject):
+class Position(
+    SingleSpatialFieldFactoryMixin,
+    SpatialConfigurationConstructionMixin,
+    AnalysisObject,
+):
     """Cartesian 3D position with frame-aware spatial operations.
 
     Parameters
@@ -136,6 +141,7 @@ class Position(SpatialConfigurationConstructionMixin, AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
+    SPATIAL_FIELD_TARGET = "position"
     SPATIAL_CONSTRUCTION_OWNER = "spatial.position.__init__"
     SPATIAL_SOURCE_COERCER = staticmethod(_coerce_position_source)
 

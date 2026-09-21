@@ -36,6 +36,13 @@ Inspect the remembered graph through `rotation.graph`. Use
 `rotation.with_graph(graph)` to associate a `Rotation.from_data(...)` result or
 to create a distinct metadata-isolated alias from any Rotation.
 
+## Scalar-field construction
+
+`Rotation.from_fields(...)` assembles explicit quaternion scalar fields in
+canonical xyzw order. `Rotation.fields(...)` creates a reusable immutable
+recipe. Selectors name source fields explicitly; TAL does not infer quaternion
+order, Euler conventions, or matrix layouts.
+
 ## Representation
 
 ```python
@@ -102,6 +109,8 @@ coordinates; shared source batch dimensions remain intact.
    :nosignatures:
 
    tal.spatial.Rotation
+   tal.spatial.Rotation.fields
+   tal.spatial.Rotation.from_fields
    tal.spatial.Rotation.graph
    tal.spatial.Rotation.with_graph
    tal.spatial.Rotation.from_data

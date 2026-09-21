@@ -1379,14 +1379,16 @@ def test_arch_spatial_100_public_spatial_entrypoints_remain_flat() -> None:
 
 def test_arch_spatial_101_spatial_init_public_exports_stable() -> None:
     """ID: ARCH_SPATIAL_101_spatial_init_public_exports_stable."""
-    text = Path("tal/spatial/__init__.py").read_text(encoding="utf-8")
-    assert "from .position import Position" in text
-    assert "from .rotation import Rotation" in text
-    assert "from .pose import Pose" in text
-    assert "from .velocity import AngularVelocity, LinearVelocity, Velocity" in text
-    assert "from .acceleration import Acceleration, AngularAcceleration, LinearAcceleration" in text
-    assert "from .path_solve import PathSolveOptions, solve_pose_path_transform, solve_rotation_path_transform" in text
-    assert "__all__ = [" in text
+    from tal import spatial
+
+    expected = {
+        "Acceleration", "AngularAcceleration", "AngularVelocity",
+        "LinearAcceleration", "LinearVelocity", "PathSolveOptions", "Pose",
+        "Position", "Rotation", "SpatialFieldRecipe", "Velocity", "bind_pose",
+        "solve_pose_path_transform", "solve_rotation_path_transform",
+    }
+    assert expected <= set(spatial.__all__)
+    assert all(getattr(spatial, name, None) is not None for name in expected)
 
 
 def test_arch_spatial_104_metadata_owner_recomposed_under_subpackage() -> None:

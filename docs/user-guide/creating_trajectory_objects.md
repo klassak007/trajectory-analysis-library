@@ -95,6 +95,66 @@ metadata after loading.
 Delayed schema writes are still explicit and validated. They return new AOs
 rather than mutating the source object in place.
 
+## Build spatial objects from named scalar fields
+
+Start from a schema-bearing AO when possible. The one-shot form is the shortest
+workflow, while a recipe is useful when several sources expose the same field
+suffixes.
+
+<!-- example-id: UG-CREATING-SPATIAL-FIELDS -->
+```python
+import xarray as xr
+from tal.core import AnalysisLayoutSpec
+from tal.spatial import Pose
+
+source = xr.Dataset(
+    {
+        "camera.position.x": ("sample", [1.0]),
+        "camera.position.y": ("sample", [2.0]),
+        "camera.position.z": ("sample", [3.0]),
+        "camera.rotation.x": ("sample", [0.0]),
+        "camera.rotation.y": ("sample", [0.0]),
+        "camera.rotation.z": ("sample", [0.0]),
+        "camera.rotation.w": ("sample", [1.0]),
+    },
+    coords={"sample": [0]},
+)
+layout = AnalysisLayoutSpec(sequence_dim="sample")
+declared = layout.wrap(source)
+
+# Shortest AO one-shot workflow.
+camera = Pose.from_fields(
+    declared,
+    position="camera.position.{x,y,z}",
+    rotation="camera.rotation.{x,y,z,w}",
+)
+
+# Reuse one immutable selector recipe with a literal source-name prefix.
+pose_fields = Pose.fields(
+    position="position.{x,y,z}",
+    rotation="rotation.{x,y,z,w}",
+)
+camera_again = pose_fields.build(declared, prefix="camera.")
+
+# An untagged Dataset supplies exactly one explicit layout authority.
+camera_from_raw = pose_fields.build(
+    source,
+    prefix="camera.",
+    source_layout=layout,
+)
+```
+
+Brace selectors expand exact field names; dots and `prefix=` are literal. A
+mapping from target labels to exact source names is the alternative when names
+do not share a compact pattern. TAL does not infer a layout, representation,
+quaternion order, or frame from field spelling.
+
+Field assembly preserves applicable Dataset and coordinate metadata, parameter
+and validity declarations, and native indexes. The newly assembled `position`
+and `rotation` variables intentionally have empty ordinary attributes and
+storage encodings, so per-channel units or storage settings are never chosen
+implicitly.
+
 ## Reuse a complete layout and select variables
 
 <!-- example-id: UG-CREATING-REUSABLE-LAYOUT -->
