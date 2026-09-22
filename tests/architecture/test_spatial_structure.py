@@ -257,25 +257,6 @@ def test_arch_spatial_013_slice_a3_pose_owner_split_and_budget() -> None:
         _assert_agents_budget(path)
 
 
-def test_arch_spatial_014_pose_canonical_kernel_path_no_pairwise_rep_matrix() -> None:
-    """ID: ARCH_SPATIAL_014_pose_canonical_kernel_path_no_pairwise_rep_matrix."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "def apply_to(" not in pose_text
-    assert "CANONICAL_POSITION_REP" in pose_text
-    assert "CANONICAL_ROTATION_REP" in pose_text
-    assert "set_position_rep(" in pose_text
-    assert "set_rotation_rep(" in pose_text
-    assert "_matrix3_to_quat_prevalidated_kernel" in pose_text
-
-
-def test_arch_spatial_016_pose_constructor_validates_roles_via_metadata_owner() -> None:
-    """ID: ARCH_SPATIAL_016_pose_constructor_validates_roles_via_metadata_owner."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "validate_spatial_roles" in pose_text
-    assert "validate_spatial_roles(candidate, owner=owner)" in pose_text
-    assert "tal.ext.spatial.roles" not in pose_text
-
-
 def test_arch_spatial_018_runtime_checks_owner_reused_across_position_rotation_pose() -> None:
     """ID: ARCH_SPATIAL_018_runtime_checks_owner_reused_across_position_rotation_pose."""
     runtime_text = Path("tal/spatial/policies/runtime_checks.py").read_text(encoding="utf-8")
@@ -682,42 +663,11 @@ def test_spatial_doc_008_phase8_slice_b4_local_transform_apply_docs_and_api_entr
     assert "pose apply kernels" not in user_spatial
 
 
-def test_arch_spatial_043_slice_b3_components_layout_requires_component_vars_include_declared_non_core_dims() -> None:
-    """ID: ARCH_SPATIAL_043_slice_b3_components_layout_requires_component_vars_include_declared_non_core_dims."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "required_non_core_dims = (sequence_dim, *batch_dims)" in pose_text
-    assert "required_dims=required_non_core_dims + (pos_dim,)" in pose_text
-    assert "required_dims=required_non_core_dims + (rot_dim,)" in pose_text
-
-
 def test_arch_spatial_044_slice_b3_operation_owner_wraps_pose_kernel_valueerror_boundaries() -> None:
     """ID: ARCH_SPATIAL_044_slice_b3_operation_owner_wraps_pose_kernel_valueerror_boundaries."""
     pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
     assert "pose components->matrix conversion kernel failed." in pose_ops_text
     assert "pose compose translation kernel failed." in pose_ops_text
-
-
-def test_arch_spatial_046_pose_matrix_decompose_reuses_single_matrix_to_quat_kernel_owner() -> None:
-    """ID: ARCH_SPATIAL_046_pose_matrix_decompose_reuses_single_matrix_to_quat_kernel_owner."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    kernels_text = Path("tal/spatial/kernels/pose_kernels.py").read_text(encoding="utf-8")
-    assert "from .kernels.pose_kernels import _matrix3_to_quat_prevalidated_kernel" in pose_text
-    assert "return _matrix3_to_quat_prevalidated_kernel(values)" in pose_text
-    assert "_matrix3_to_quat_decompose_kernel," in pose_text
-    assert "def _matrix_to_quat_kernel(" not in pose_text
-    assert "def matrix3_to_quat_kernel(" in kernels_text
-    assert "def _matrix3_to_quat_prevalidated_kernel(" in kernels_text
-
-
-def test_arch_spatial_047_slice_b3_pose_decompose_uses_owner_wrapped_kernel_callable_for_lazy_errors() -> None:
-    """ID: ARCH_SPATIAL_047_slice_b3_pose_decompose_uses_owner_wrapped_kernel_callable_for_lazy_errors."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "def _matrix3_to_quat_decompose_kernel(" in pose_text
-    assert 'owner = "spatial.pose.decompose"' in pose_text
-    assert "return _matrix3_to_quat_prevalidated_kernel(values)" in pose_text
-    assert "matrix decomposition quaternion kernel failed." in pose_text
-    assert "_matrix3_to_quat_decompose_kernel," in pose_text
-    assert "_matrix3_to_quat_prevalidated_kernel," not in pose_text.split("_matrix3_to_quat_decompose_kernel,")[0]
 
 
 def test_arch_spatial_048_slice_b4_apply_owner_split_and_budget() -> None:
@@ -1780,7 +1730,6 @@ def test_spatial_arch_192_rigid_matrix_validation_has_single_spatial_owner() -> 
     orchestration = Path("tal/spatial/ops/pose_matrix_validation.py")
     pose_kernels = Path("tal/spatial/kernels/pose_kernels.py")
     pose_ops = Path("tal/spatial/ops/pose_ops.py")
-    pose = Path("tal/spatial/pose.py")
     _assert_agents_budget(owner)
     _assert_agents_budget(orchestration)
 
@@ -1821,7 +1770,6 @@ def test_spatial_arch_192_rigid_matrix_validation_has_single_spatial_owner() -> 
     assert "_run_scipy_kernel(_matrix_to_quat_prevalidated_kernel, values)" in fixed_backend_text
     assert fixed_backend_text.count("validate_rotation_matrix_rows(") == 1
     assert "_matrix_to_components_prevalidated_kernel" in pose_ops.read_text(encoding="utf-8")
-    assert "_matrix3_to_quat_prevalidated_kernel" in pose.read_text(encoding="utf-8")
     assert 'current == target == "matrix"' not in pose_ops.read_text(encoding="utf-8")
 
 
@@ -2033,25 +1981,6 @@ def test_spatial_arch_172_topology_scan_backends_are_schema_free() -> None:
     assert "parallel=True" not in numba_text
     assert "fastmath=True" not in numba_text
     assert "from scipy" not in numba_text
-
-
-def test_arch_spatial_147_pose_temporal_matrix_payload_resolution_uses_matrix_candidate_filter_not_global_single_var_selector() -> None:
-    """ID: ARCH_SPATIAL_147_pose_temporal_matrix_payload_resolution_uses_matrix_candidate_filter_not_global_single_var_selector."""
-    text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "_resolve_matrix_payload_var(" in text
-    assert "containing core dims" in text
-    assert "select_single_numeric_var(source_ds" not in text
-
-
-def test_arch_spatial_148_pose_temporal_matrix_aux_rebind_is_single_guarded_helper_boundary() -> None:
-    """ID: ARCH_SPATIAL_148_pose_temporal_matrix_aux_rebind_is_single_guarded_helper_boundary."""
-    text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "def _needs_matrix_aux_rebind(" in text
-    assert "def _rewrap_matrix_aux_unvalidated(" in text
-    assert "if _needs_matrix_aux_rebind(" in text
-    assert "_rewrap_matrix_aux_unvalidated(" in text
-    assert "def _rewrap_pose_temporal_output(" in text
-    assert text.count("_bind_dataset(") == 1
 
 
 def test_arch_spatial_146_rotation_temporal_single_payload_guard_prevents_silent_drop() -> None:

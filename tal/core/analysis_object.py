@@ -446,6 +446,18 @@ class AnalysisObject:
             schema_prepared=schema_prepared,
         )
 
+    @classmethod
+    def _from_composite_committed(
+        cls,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+    ) -> AnalysisObject:
+        """Construct one wrapper after a composite owner finalized metadata."""
+        if validate:
+            return cls._from_validated(ds)
+        return cls._from_unvalidated(ds, schema_prepared=True)
+
     def _prepare_result_rewrap_context(self, values: tuple[object, ...], *, owner: str) -> object | None:
         """Prepare an opaque domain result context for a multi-input operation."""
         _ = (values, owner)

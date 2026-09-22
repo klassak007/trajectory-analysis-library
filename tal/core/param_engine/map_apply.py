@@ -9,6 +9,7 @@ from ..orchestration.indexing import (
     sequence_dependent_coordinate_names,
     without_index_topology,
 )
+from ..orchestration.lazy import payload_chunks_for_dim
 from ..schema_validate.finalize import transfer_dataarray_metadata
 from .blocking import (
     LogicalRowBlock,
@@ -419,7 +420,12 @@ def empty_mapped_value(
         sources = (values, param_map.valid)
         chunks = tuple(
             next(
-                (source.chunksizes[dim] for source in sources if source.chunks is not None and dim in source.dims),
+                (
+                    source_chunks
+                    for source in sources
+                    if (source_chunks := payload_chunks_for_dim(source, dim=dim))
+                    is not None
+                ),
                 (sizes[dim],),
             )
             for dim in order

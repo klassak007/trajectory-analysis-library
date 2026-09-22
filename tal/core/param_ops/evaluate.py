@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -17,7 +17,11 @@ from ..param_engine.query_topology import (
     generated_query_coordinate_names,
     preflight_query_output_namespace,
 )
-from .finalize import assign_sampled_query_coordinate, finalize_param_output
+from .finalize import (
+    _finalize_prepared_param_output,
+    _prepare_param_output_dataset,
+    assign_sampled_query_coordinate,
+)
 from .guards import (
     assert_query_dim_safe,
     assert_reserved_metadata_safe,
@@ -29,6 +33,16 @@ if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
 
 
+@dataclass(frozen=True)
+class _ParamDatasetPart:
+    """One mapped Dataset and its already prepared output declarations."""
+
+    dataset: xr.Dataset
+    evaluation: PreparedParamEvaluation
+    output_plan: QueryOutputPlan
+    trajectory: bool
+
+
 def _apply_map_dataset(
     ds: xr.Dataset,
     *,
@@ -36,9 +50,12 @@ def _apply_map_dataset(
     batch_dims: tuple[str, ...],
     sequence_size_coord: str | None,
     param_map,
+    data_vars: tuple[str, ...] | None = None,
 ) -> xr.Dataset:
     out_vars: dict[str, xr.DataArray] = {}
-    for name, var in ds.data_vars.items():
+    names = tuple(ds.data_vars) if data_vars is None else data_vars
+    for name in names:
+        var = ds[name]
         if sequence_dim not in var.dims:
             out_vars[str(name)] = var
             continue
@@ -68,18 +85,19 @@ def _preflight_evaluation_request(
     query: xr.DataArray | np.ndarray | Sequence[float] | float,
     opts: ParamEvalOptions,
     output_intent: Literal["grid", "trajectory"],
+    owner: str,
 ) -> QueryOutputPlan:
     assert_query_dim_safe(
         context.ds,
         sequence_dim=context.sequence_dim,
         query_dim=opts.query_dim,
-        owner="param at/resample",
+        owner=owner,
     )
     assert_reserved_metadata_safe(
         context.ds,
         reserved=("valid", "sample_index"),
         param_name=context.spec.name,
-        owner="param at/resample",
+        owner=owner,
     )
     trajectory = output_intent == "trajectory" or not isinstance(query, xr.DataArray) or (
         len(set(query.dims) - set(context.batch_dims)) <= 1
@@ -89,7 +107,7 @@ def _preflight_evaluation_request(
         query,
         sequence_dim=context.sequence_dim,
         batch_dims=context.batch_dims,
-        owner="param at/resample",
+        owner=owner,
         intent=output_intent,
         generated_names=generated_query_coordinate_names(
             operation="evaluate",
@@ -101,38 +119,36 @@ def _preflight_evaluation_request(
     )
 
 
-def evaluate_param(
+def _mapped_param_dataset(
+    context: ParamRuntimeContext,
+    *,
+    evaluation: PreparedParamEvaluation,
+    data_vars: tuple[str, ...] | None,
+) -> xr.Dataset:
+    return _apply_map_dataset(
+        context.ds,
+        sequence_dim=context.sequence_dim,
+        batch_dims=context.batch_dims,
+        sequence_size_coord=context.sequence_size_coord,
+        param_map=evaluation.param_map,
+        data_vars=data_vars,
+    )
+
+
+def _prepare_param_dataset_part(
     context: ParamRuntimeContext,
     *,
     query: xr.DataArray | np.ndarray | Sequence[float] | float,
     opts: ParamEvalOptions,
-    validate: bool,
     prepared: PreparedParamEvaluation | None = None,
     output_intent: Literal["grid", "trajectory"] = "grid",
-) -> AnalysisObject:
-    """Evaluate AO data on a parameter query grid.
-
-    Parameters
-    ----------
-    context : ParamRuntimeContext
-        Resolved runtime context/payload used by this orchestration boundary.
-    query : xr.DataArray | np.ndarray | Sequence[float] | float, optional
-        Query coordinate/grid used for parameter evaluation.
-    opts : ParamEvalOptions, optional
-        Optional options controlling policy and numeric behavior for this operation.
-    validate : bool, optional
-        When ``True``, validate output schema/layout invariants before returning.
-
-    Returns
-    -------
-    AnalysisObject
-        Result of applying this operation with TAL semantic constraints preserved.
-
-    Notes
-    -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
-    """
-    output_plan = _preflight_evaluation_request(context, query, opts, output_intent)
+    data_vars: tuple[str, ...] | None = None,
+    owner: str = "param at/resample",
+    copy_schema: bool = True,
+) -> _ParamDatasetPart:
+    output_plan = _preflight_evaluation_request(
+        context, query, opts, output_intent, owner
+    )
     evaluation = prepare_runtime_param_evaluation(
         context,
         query=query,
@@ -142,30 +158,56 @@ def evaluate_param(
         reuse=() if prepared is None else (prepared,),
     )
     grid = evaluation.grid
-    pmap = evaluation.param_map
     output_plan = replace(output_plan, topology=evaluation.query_topology)
-    ds_out = _apply_map_dataset(
-        context.ds,
-        sequence_dim=context.sequence_dim,
-        batch_dims=context.batch_dims,
-        sequence_size_coord=context.sequence_size_coord,
-        param_map=pmap,
+    ds_out = _mapped_param_dataset(
+        context,
+        evaluation=evaluation,
+        data_vars=data_vars,
     )
     if output_intent == "grid" and grid.stacked_dims is not None:
         ds_out = assign_sampled_query_coordinate(
             ds_out, query=grid.values, query_dim=grid.query_dim, name=context.spec.name,
         )
-    return finalize_param_output(
+    trajectory = output_intent == "trajectory" or grid.stacked_dims is None
+    ds_out = _prepare_param_output_dataset(
         context,
         ds_out,
         query=grid.values,
         query_dim=opts.query_dim,
-        valid_query=pmap.valid,
+        valid_query=evaluation.param_map.valid,
         query_topology=evaluation.query_topology,
-        validate=validate,
-        trajectory=(output_intent == "trajectory" or grid.stacked_dims is None),
-        owner="param at/resample",
+        trajectory=trajectory,
+        owner=owner,
         output_plan=output_plan,
+        copy_schema=copy_schema,
+    )
+    return _ParamDatasetPart(ds_out, evaluation, output_plan, trajectory)
+
+
+def evaluate_param(
+    context: ParamRuntimeContext,
+    *,
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    opts: ParamEvalOptions,
+    validate: bool,
+    prepared: PreparedParamEvaluation | None = None,
+    output_intent: Literal["grid", "trajectory"] = "grid",
+) -> AnalysisObject:
+    """Evaluate AO data on a parameter query grid."""
+    part = _prepare_param_dataset_part(
+        context,
+        query=query,
+        opts=opts,
+        prepared=prepared,
+        output_intent=output_intent,
+    )
+    return _finalize_prepared_param_output(
+        context,
+        part.dataset,
+        validate=validate,
+        trajectory=part.trajectory,
+        output_plan=part.output_plan,
+        query_topology=part.evaluation.query_topology,
     )
 
 

@@ -13,6 +13,7 @@ from ..orchestration.indexing import (
     restore_result_coordinates,
     without_index_topology,
 )
+from ..orchestration.lazy import payload_chunks_for_dim
 
 PARAM_LOGICAL_ROW_LIMIT = 65_536
 
@@ -161,9 +162,9 @@ def logical_output_chunks(
     return tuple(
         next(
             (
-                value.chunksizes[dim]
+                chunks
                 for value in values
-                if value.chunks is not None and dim in value.dims
+                if (chunks := payload_chunks_for_dim(value, dim=dim)) is not None
             ),
             (size,),
         )

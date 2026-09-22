@@ -3,19 +3,23 @@ from __future__ import annotations
 """Shared schema/role context assembly for combine and param orchestration."""
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
+from ..combine_ops.types import CombineContext
 from ..dataset_ownership import analysis_object_dataset
 from ..ordered_dtypes import is_ordered_real_numeric_dtype
-from ..combine_ops.types import CombineContext
-from .context import DatasetContextOptions, resolve_dataset_contexts
 from ..param_engine.schema_resolve import _resolve_schema_context_validated
 from ..param_engine.types import ParamCoordSpec
 from ..param_engine.validity_mask import _resolve_param_valid_mask_validated
 from ..param_ops.axis_coords import batch_coord
 from ..param_ops.types import ParamKind, ParamRuntimeContext
+from .context import DatasetContextOptions, resolve_dataset_contexts
+
+if TYPE_CHECKING:
+    from ..analysis_object import AnalysisObject
 
 
 def _resolve_param_kind(coord: xr.DataArray, *, name: str) -> ParamKind:
@@ -32,12 +36,13 @@ def _resolve_param_kind(coord: xr.DataArray, *, name: str) -> ParamKind:
 
 
 def resolve_param_runtime_context(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     *,
     on: str | None = None,
     sequence_dim: str | None = None,
     batch_dims: Sequence[str] | None = None,
     sequence_size_coord: str | None = None,
+    allow_declared_param_override: bool = False,
 ) -> ParamRuntimeContext:
     """Resolve schema, param coordinate, and validity context for param ops.
 
@@ -53,6 +58,9 @@ def resolve_param_runtime_context(
         Optional override for batch dimensions used by temporal semantics.
     sequence_size_coord : str | None, optional
         Optional sequence-size coordinate used for ragged validity handling.
+    allow_declared_param_override : bool, optional
+        Permit ``on`` to replace an existing parameter declaration for an
+        operation that explicitly owns that override policy.
 
     Returns
     -------
@@ -69,6 +77,7 @@ def resolve_param_runtime_context(
         explicit_batch_dims=batch_dims,
         explicit_param_name=on,
         explicit_sequence_size_coord=sequence_size_coord,
+        allow_declared_param_override=allow_declared_param_override,
     )
     if schema_ctx.param_name is None:
         raise ValueError("param operations require a resolved param_coord; set it in schema or pass explicit on=...")
@@ -83,6 +92,7 @@ def resolve_param_runtime_context(
         schema_ctx.ds,
         spec=spec,
         sequence_size_coord=sequence_size_coord,
+        allow_declared_param_override=allow_declared_param_override,
     )
     coords = {dim: batch_coord(schema_ctx.ds, dim=dim) for dim in schema_ctx.batch_dims}
     return ParamRuntimeContext(
@@ -129,7 +139,7 @@ def _sequence_dim_from_contexts(
 
 
 def resolve_combine_contexts(
-    aos: Sequence["AnalysisObject"],
+    aos: Sequence[AnalysisObject],
     *,
     require_sequence: bool,
     owner: str,

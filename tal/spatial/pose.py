@@ -11,13 +11,10 @@ from tal.core.component_ops import (
     ComponentExtractOptions,
     extract_components,
 )
-from tal.core.component_ops.runtime_checks import require_component_numeric_var
 from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import (
-    require_exact_labels,
-    require_explicit_unique_dim_labels,
     require_var_contains_dims,
     select_single_numeric_var,
 )
@@ -51,7 +48,6 @@ from .construction import (
     prepare_spatial_factory_dataset,
 )
 from .field_recipes import PoseSpatialFieldFactoryMixin
-from .kernels.pose_kernels import _matrix3_to_quat_prevalidated_kernel
 from .kinematics.paired_components import clear_component_registry
 from .metadata import (
     get_pose_rep,
@@ -59,15 +55,15 @@ from .metadata import (
     set_pose_rep,
     set_position_rep,
     set_rotation_rep,
-    validate_spatial_roles,
 )
 from .ops.frame_api_ops import pose_class_solve_path_transform
 from .ops.pose_apply_ops import pose_apply
 from .ops.pose_component_ops import (
     build_components_pose_dataset,
     finalize_components_pose_output,
-    resolve_pose_component_specs,
 )
+from .ops.pose_kernel_adapters import apply_matrix_to_components_kernel
+from .ops.pose_layout import enforce_matrix_layout, enforce_pose_layout
 from .ops.pose_matrix_validation import (
     prepare_pose_matrix_for_conversion,
     validate_pose_matrix_dataset,
@@ -88,9 +84,6 @@ if TYPE_CHECKING:
     from .path_solve import PathSolveOptions
 
 _COMPONENT_NAMES = {"position", "rotation"}
-_XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
-_QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
-_MATRIX_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
 
 
 def _coerce_pose_source(value: object, *, owner: str) -> AnalysisObject:
@@ -117,94 +110,6 @@ def _coerce_position_operand(value: object, *, owner: str) -> Position:
         raise TypeError(f"{owner}: position operand must be Position, AnalysisObject, xr.Dataset, or xr.DataArray.") from exc
     except ValueError as exc:
         raise ValueError(f"{owner}: position operand is not a valid Position: {exc}") from exc
-
-
-def _required_non_core_dims(sequence_dim: str | None, batch_dims: tuple[str, ...]) -> tuple[str, ...]:
-    if sequence_dim is None:
-        required_non_core_dims = tuple(batch_dims)
-    else:
-        required_non_core_dims = (sequence_dim, *batch_dims)
-    return required_non_core_dims
-
-
-def _resolve_pose_component_specs(
-    ds: xr.Dataset,
-    *,
-    owner: str,
-    core_dims: tuple[str, ...],
-) -> tuple[tuple[str, str], tuple[str, str]]:
-    return resolve_pose_component_specs(ds, owner=owner, core_dims=core_dims)
-
-
-def _enforce_components_layout_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ds)
-    if not declared:
-        raise ValueError(f"{owner}: Pose requires declared roles.")
-    if len(core_dims) != 2:
-        raise ValueError(f"{owner}: Pose components layout requires exactly two core dims; got {core_dims!r}.")
-    required_non_core_dims = _required_non_core_dims(sequence_dim, batch_dims)
-    (pos_dim, pos_var), (rot_dim, rot_var) = _resolve_pose_component_specs(ds, owner=owner, core_dims=core_dims)
-    if pos_dim == rot_dim:
-        raise ValueError(f"{owner}: Pose position/rotation components must use distinct core dims.")
-    require_component_numeric_var(
-        ds,
-        component_name="position",
-        var_name=pos_var,
-        required_dims=required_non_core_dims + (pos_dim,),
-        owner=owner,
-        operand="Pose",
-    )
-    require_component_numeric_var(
-        ds,
-        component_name="rotation",
-        var_name=rot_var,
-        required_dims=required_non_core_dims + (rot_dim,),
-        owner=owner,
-        operand="Pose",
-    )
-    pos_labels = require_explicit_unique_dim_labels(ds, dim=pos_dim, owner=owner, what="Pose position")
-    rot_labels = require_explicit_unique_dim_labels(ds, dim=rot_dim, owner=owner, what="Pose rotation")
-    require_exact_labels(pos_labels, expected=_XYZ_LABELS, owner=owner, what=f"Pose position core dim {pos_dim!r}")
-    require_exact_labels(rot_labels, expected=_QUAT_LABELS, owner=owner, what=f"Pose rotation core dim {rot_dim!r}")
-
-
-def _enforce_matrix_layout_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    declared, _, _, core_dims = read_roles(ds)
-    if not declared:
-        raise ValueError(f"{owner}: Pose requires declared roles.")
-    if len(core_dims) != 2:
-        raise ValueError(f"{owner}: Pose matrix layout requires exactly two core dims; got {core_dims!r}.")
-    row_dim, col_dim = core_dims
-    if row_dim == col_dim:
-        raise ValueError(f"{owner}: Pose matrix core dims must be distinct; got {core_dims!r}.")
-    var_name = select_single_numeric_var(ds, owner=owner, what="Pose matrix layout")
-    require_var_contains_dims(
-        ds,
-        var_name=var_name,
-        required_dims=(row_dim, col_dim),
-        owner=owner,
-        what="Pose matrix layout",
-    )
-    if int(ds.sizes.get(row_dim, -1)) != 4 or int(ds.sizes.get(col_dim, -1)) != 4:
-        raise ValueError(f"{owner}: Pose matrix core dims must both have length 4.")
-    row_labels = require_explicit_unique_dim_labels(ds, dim=row_dim, owner=owner, what="Pose matrix")
-    col_labels = require_explicit_unique_dim_labels(ds, dim=col_dim, owner=owner, what="Pose matrix")
-    require_exact_labels(row_labels, expected=_MATRIX_LABELS, owner=owner, what=f"Pose matrix row dim {row_dim!r}")
-    require_exact_labels(col_labels, expected=_MATRIX_LABELS, owner=owner, what=f"Pose matrix col dim {col_dim!r}")
-
-
-def _enforce_pose_dataset_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    candidate = validate_schema_if_needed(ds)
-    validate_spatial_roles(candidate, owner=owner)
-    _ = get_frames(candidate)
-    rep = get_pose_rep(candidate, owner=owner)
-    if rep == "components":
-        _enforce_components_layout_invariants(candidate, owner=owner)
-        return
-    if rep == "matrix":
-        _enforce_matrix_layout_invariants(candidate, owner=owner)
-        return
-    raise ValueError(f"{owner}: unsupported pose representation {rep!r}.")
 
 
 def _normalize_pose_metadata(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
@@ -236,14 +141,6 @@ def _resolve_quat_dim_name(ds: xr.Dataset) -> str:
         if candidate not in ds.dims:
             return candidate
     raise ValueError("spatial.pose.decompose: unable to allocate quaternion output dim name.")
-
-
-def _matrix3_to_quat_decompose_kernel(values: np.ndarray) -> np.ndarray:
-    owner = "spatial.pose.decompose"
-    try:
-        return _matrix3_to_quat_prevalidated_kernel(values)
-    except ValueError as exc:
-        raise ValueError(f"{owner}: matrix decomposition quaternion kernel failed.") from exc
 
 
 def _build_matrix_component_outputs(
@@ -333,7 +230,11 @@ class Pose(
         """Wrap data whose matrix payload has already passed rigid validation."""
         obj = super()._from_validated(ds)
         obj._normalize_metadata(owner=owner)
-        obj._enforce_invariants(owner=owner)
+        enforce_pose_layout(
+            analysis_object_dataset(obj),
+            owner=owner,
+            schema_prepared=True,
+        )
         return obj
     @classmethod
     def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> "Pose":
@@ -341,11 +242,35 @@ class Pose(
         obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
         return obj
+    @classmethod
+    def _from_composite_committed(
+        cls,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+    ) -> Self:
+        owner = f"{cls.__name__}._from_composite_committed"
+        if validate:
+            obj = super()._from_validated(ds)
+        else:
+            obj = super()._from_unvalidated(ds, schema_prepared=True)
+        enforce_pose_layout(
+            analysis_object_dataset(obj),
+            owner=owner,
+            schema_prepared=True,
+            allow_matrix_auxiliary=not validate,
+        )
+        if validate:
+            validated = _validate_pose_matrix_if_needed(
+                analysis_object_dataset(obj), owner=owner
+            )
+            obj._bind_dataset(validated)
+        return obj
     def _normalize_metadata(self, *, owner: str) -> None:
         normalized = _normalize_pose_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_pose_dataset_invariants(analysis_object_dataset(self), owner=owner)
+        enforce_pose_layout(analysis_object_dataset(self), owner=owner)
     @property
     def preferred_interpolator(self) -> str:
         """Return the default temporal interpolation strategy for poses.
@@ -457,7 +382,6 @@ class Pose(
             rot_ds,
             pos_ds,
             owner=owner,
-            validate=validate,
             policy=selection.policy,
         )
         return finalize_components_pose_output(
@@ -465,6 +389,8 @@ class Pose(
             plan=plan,
             validate=validate,
             owner=owner,
+            prototype=cls,
+            resource_sources=(rot_ds, pos_ds),
         )
     @classmethod
     def from_matrix(
@@ -545,7 +471,7 @@ class Pose(
         ds = set_pose_rep(ds, rep="matrix", validate=False, owner=owner)
         ds = apply_spatial_construction(ds, plan=plan, owner=owner)
         if validate:
-            _enforce_matrix_layout_invariants(ds, owner=owner)
+            enforce_matrix_layout(ds, owner=owner)
             ds = validate_pose_matrix_dataset(ds, owner=owner)
             result = cls._from_rigid_validated(ds, owner=owner)
         else:
@@ -967,24 +893,21 @@ class Pose(
         if not declared:
             raise ValueError(f"{owner}: Pose requires declared roles.")
         row_dim, col_dim = core_dims
-        var_name = select_single_numeric_var(candidate, owner=owner, what="Pose matrix layout")
+        var_name = select_single_numeric_var(
+            candidate,
+            owner=owner,
+            what="Pose matrix layout",
+        )
         require_var_contains_dims(candidate, var_name=var_name, required_dims=(row_dim, col_dim), owner=owner, what="Pose matrix layout")
         matrix = prepare_pose_matrix_for_conversion(candidate, owner=owner)
-        rot_matrix = matrix.sel({row_dim: list(_XYZ_LABELS), col_dim: list(_XYZ_LABELS)})
-        translation = matrix.sel({row_dim: list(_XYZ_LABELS), col_dim: "w"})
-
         quat_dim = _resolve_quat_dim_name(candidate)
-        quat = xr.apply_ufunc(
-            _matrix3_to_quat_decompose_kernel,
-            rot_matrix,
-            input_core_dims=[[row_dim, col_dim]],
-            output_core_dims=[[quat_dim]],
-            vectorize=False,
-            dask="parallelized",
-            output_dtypes=[np.float64],
-            dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}},
+        translation, quat = apply_matrix_to_components_kernel(
+            matrix,
+            row_dim=row_dim,
+            col_dim=col_dim,
+            pos_dim=row_dim,
+            quat_dim=quat_dim,
         )
-        quat = quat.assign_coords({quat_dim: list(_QUAT_LABELS)})
 
         param_name = read_param_coord_name(candidate)
         size_name = read_sequence_size_coord_name(candidate)

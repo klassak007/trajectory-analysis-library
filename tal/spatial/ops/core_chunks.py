@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import xarray as xr
 
+from tal.core.orchestration.lazy import payload_chunks_for_dim
+
 
 def single_core_chunk(values: xr.DataArray, *, dim: str) -> xr.DataArray:
     """Coalesce one fixed-size core axis without changing outer chunks."""
-    if values.chunks is None or len(values.chunksizes[dim]) <= 1:
+    chunks = payload_chunks_for_dim(values, dim=dim)
+    if chunks is None or len(chunks) <= 1:
         return values
     return values.chunk({dim: -1})
 

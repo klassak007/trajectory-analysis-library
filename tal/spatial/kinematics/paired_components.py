@@ -11,28 +11,24 @@ from tal.core.component_ops import (
     ComponentSpec,
     define_components,
 )
-from tal.core.component_ops.registry import (
-    _encode_registry_payload,
-    _read_registry_from_dataset,
-)
+from tal.core.component_ops.registry import _read_registry_from_dataset
 from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
-from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.orchestration.runtime_checks import require_exact_labels
+from tal.core.orchestration.schema_finalize import CoreSchemaFinalizeSpec
 from tal.core.orchestration.topology import (
     STRICT_NON_CORE_POLICY,
     TopologyOperand,
     TopologyPolicy,
     resolve_binary_topology,
 )
-from tal.core.schema import _SchemaUpdatePlan, validate_schema
 from tal.core.schema_read import (
     read_param_coord_name,
     read_roles,
     read_sequence_size_coord_name,
 )
-from tal.core.schema_update import commit_ingress_target
+from tal.core.schema_update import source_schema_view
 
 
 @dataclass(frozen=True)
@@ -56,8 +52,17 @@ class PairedDatasetAssemblyPlan:
     right_dim: str
     left_var: str
     right_var: str
-    validate: bool
     metadata_source: xr.Dataset | None = None
+
+
+@dataclass(frozen=True)
+class PairedCompositeAssembly:
+    """One assembled pair plus its final core/component declarations."""
+
+    candidate: xr.Dataset
+    schema: CoreSchemaFinalizeSpec
+    components: tuple[tuple[str, ComponentSpec], ...]
+    metadata_sources: tuple[xr.Dataset, ...]
 
 
 def shared_optional_name(
@@ -209,7 +214,7 @@ def _rewrap_aligned_component_dataset(
     var_name: str,
 ) -> xr.Dataset:
     out = aligned.to_dataset(name=var_name)
-    return transfer_dataset_attrs(source_ds, out, validate=False)
+    return source_schema_view(source_ds, out)
 
 
 def align_paired_component_payloads(
@@ -262,48 +267,19 @@ def align_paired_component_payloads(
     )
 
 
-def _paired_schema_plan(
+def _paired_schema_spec(
     plan: PairedDatasetAssemblyPlan,
     *,
     param_coord: str | None,
     sequence_size_coord: str | None,
-) -> _SchemaUpdatePlan:
-    return _SchemaUpdatePlan(
+) -> CoreSchemaFinalizeSpec:
+    return CoreSchemaFinalizeSpec(
         sequence_dim=plan.sequence_dim,
         batch_dims=plan.batch_dims,
         core_dims=(plan.left_dim, plan.right_dim),
-        param_coord=param_coord,
-        sequence_size_coord=sequence_size_coord,
-        complete_target=True,
+        param_name=param_coord,
+        size_name=sequence_size_coord,
     )
-
-
-def build_base_analysis_object(
-    merged: xr.Dataset,
-    *,
-    plan: PairedDatasetAssemblyPlan,
-    param_coord: str | None,
-    sequence_size_coord: str | None,
-    registry: Mapping[str, ComponentSpec],
-    owner: str,
-) -> AnalysisObject:
-    schema_plan = _paired_schema_plan(
-        plan,
-        param_coord=param_coord if plan.sequence_dim is not None else None,
-        sequence_size_coord=(
-            sequence_size_coord if plan.sequence_dim is not None else None
-        ),
-    )
-    candidate = commit_ingress_target(
-        merged,
-        merged,
-        schema_plan,
-        component_update=_encode_registry_payload(registry),
-    )
-    _read_registry_from_dataset(candidate, owner=owner)
-    if plan.validate:
-        return AnalysisObject._from_validated(validate_schema(candidate))
-    return AnalysisObject._from_unvalidated(candidate, schema_prepared=True)
 
 
 def resolve_paired_optional_coord_names(
@@ -338,7 +314,7 @@ def build_paired_components_dataset(
     owner: str,
     opts: PairAssemblyOptions,
     policy: TopologyPolicy | None = None,
-) -> xr.Dataset:
+) -> PairedCompositeAssembly:
     allow_one_sided_inherit = policy is not None and policy.mode == "semantic_broadcast"
     param_name, size_name = resolve_paired_optional_coord_names(
         left_ds,
@@ -354,28 +330,30 @@ def build_paired_components_dataset(
         owner=owner,
     )
     if plan.metadata_source is not None:
-        merged = transfer_dataset_attrs(plan.metadata_source, merged, validate=False)
-    registry: Mapping[str, ComponentSpec] = {
-        opts.left_component_name: ComponentSpec(
+        merged = source_schema_view(plan.metadata_source, merged)
+    registry = (
+        (opts.left_component_name, ComponentSpec(
             core_dim=plan.left_dim,
             labels=opts.left_expected_labels,
             var=plan.left_var,
-        ),
-        opts.right_component_name: ComponentSpec(
+        )),
+        (opts.right_component_name, ComponentSpec(
             core_dim=plan.right_dim,
             labels=opts.right_expected_labels,
             var=plan.right_var,
-        ),
-    }
-    base = build_base_analysis_object(
-        merged,
-        plan=plan,
-        param_coord=param_name,
-        sequence_size_coord=size_name,
-        registry=registry,
-        owner=owner,
+        )),
     )
-    return analysis_object_dataset(base)
+    metadata_sources = (plan.metadata_source,) if plan.metadata_source is not None else (left_ds, right_ds)
+    return PairedCompositeAssembly(
+        candidate=merged,
+        schema=_paired_schema_spec(
+            plan,
+            param_coord=param_name if plan.sequence_dim is not None else None,
+            sequence_size_coord=size_name if plan.sequence_dim is not None else None,
+        ),
+        components=registry,
+        metadata_sources=metadata_sources,
+    )
 
 
 def clear_component_registry(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
@@ -393,6 +371,7 @@ def clear_component_registry(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
 
 __all__ = [
     "PairAssemblyOptions",
+    "PairedCompositeAssembly",
     "PairedDatasetAssemblyPlan",
     "align_paired_component_payloads",
     "build_paired_components_dataset",

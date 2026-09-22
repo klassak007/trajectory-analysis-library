@@ -10,6 +10,7 @@ from ..kernels.fixed_size_backends import (
     pose_compose_translation_block_backend,
     pose_inverse_translation_block_backend,
 )
+from ..kernels.pose_kernels import _matrix_to_components_prevalidated_kernel
 from .core_chunks import single_core_chunk
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
@@ -77,6 +78,33 @@ def apply_components_to_matrix_kernel(
         dask_gufunc_kwargs={"output_sizes": {row_dim: 4, col_dim: 4}},
     )
     return matrix.assign_coords({row_dim: list(_MATRIX_LABELS), col_dim: list(_MATRIX_LABELS)})
+
+
+def apply_matrix_to_components_kernel(
+    matrix: xr.DataArray,
+    *,
+    row_dim: str,
+    col_dim: str,
+    pos_dim: str,
+    quat_dim: str,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Split validated homogeneous matrices without constructing typed wrappers."""
+    matrix = single_core_chunk(single_core_chunk(matrix, dim=row_dim), dim=col_dim)
+    position, quaternion = xr.apply_ufunc(
+        _matrix_to_components_prevalidated_kernel,
+        matrix,
+        input_core_dims=[[row_dim, col_dim]],
+        output_core_dims=[[pos_dim], [quat_dim]],
+        exclude_dims={row_dim} if pos_dim == row_dim else set(),
+        vectorize=False,
+        dask="parallelized",
+        output_dtypes=[np.float64, np.float64],
+        dask_gufunc_kwargs={"output_sizes": {pos_dim: 3, quat_dim: 4}},
+    )
+    return (
+        position.assign_coords({pos_dim: list(_XYZ_LABELS)}),
+        quaternion.assign_coords({quat_dim: ["x", "y", "z", "w"]}),
+    )
 
 
 def apply_pose_compose_translation_kernel(

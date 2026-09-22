@@ -9,6 +9,7 @@ import xarray as xr
 from ..analysis_object import AnalysisObject
 from ..dataset_ownership import analysis_object_dataset
 from ..schema_read import (
+    prepare_schema_if_needed,
     read_param_coord_name,
     read_roles,
     read_sequence_size_coord_name,
@@ -420,13 +421,13 @@ def resolve_semantic_topology_from_dataset(
     allow_missing_sequence_dim: bool = False,
     allow_missing_batch_dims: bool = False,
 ) -> SemanticTopology:
-    candidate = validate_schema_if_needed(ds)
-    if var_name not in candidate.data_vars:
+    prepare_schema_if_needed(ds)
+    if var_name not in ds.data_vars:
         raise ValueError(f"{owner}: {what} variable {var_name!r} was not found in dataset.")
-    declared, sequence_dim, batch_dims, _ = read_roles(candidate)
+    declared, sequence_dim, batch_dims, _ = read_roles(ds)
     if not declared:
         raise ValueError(f"{owner}: {what} requires declared roles.")
-    dims = candidate[var_name].dims
+    dims = ds[var_name].dims
     missing: list[str] = []
     if sequence_dim is not None and sequence_dim not in dims and not allow_missing_sequence_dim:
         missing.append(sequence_dim)
@@ -448,7 +449,7 @@ def resolve_semantic_topology_from_dataset(
 __all__ = [
     "DatasetContext",
     "DatasetContextOptions",
-    "resolve_semantic_topology_from_dataset",
     "resolve_dataset_context",
     "resolve_dataset_contexts",
+    "resolve_semantic_topology_from_dataset",
 ]

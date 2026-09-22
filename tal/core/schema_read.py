@@ -7,8 +7,13 @@ import xarray as xr
 
 from .schema import _is_bootstrap_schema
 from .schema_errors import schema_error
+from .schema_validate import prepare_schema_validation
 from .schema_validate import validate_schema as _validate_schema
-from .schema_validate.common import sorted_mapping_keys, unknown_key_actual, unknown_key_path
+from .schema_validate.common import (
+    sorted_mapping_keys,
+    unknown_key_actual,
+    unknown_key_path,
+)
 
 _ALLOWED_ROLE_KEYS = {"sequence_dim", "batch_dims", "core_dims"}
 _ALLOWED_PARAM_KEYS = {"name"}
@@ -32,6 +37,16 @@ def validate_schema_if_needed(ds: xr.Dataset) -> xr.Dataset:
     if isinstance(payload, Mapping) and _is_bootstrap_schema(payload):
         return ds
     return _validate_schema(ds)
+
+
+def prepare_schema_if_needed(ds: xr.Dataset) -> None:
+    """Validate non-bootstrap schema without copying its metadata graph."""
+    had_tal, payload = _tal_payload(ds)
+    if not had_tal:
+        return
+    if isinstance(payload, Mapping) and _is_bootstrap_schema(payload):
+        return
+    prepare_schema_validation(ds)
 
 
 def _core_mapping(ds: xr.Dataset) -> Mapping[str, Any] | None:
@@ -283,7 +298,7 @@ __all__ = [
     "read_param_coord",
     "read_param_coord_name",
     "read_roles",
-    "read_validity",
     "read_sequence_size_coord_name",
+    "read_validity",
     "validate_schema_if_needed",
 ]

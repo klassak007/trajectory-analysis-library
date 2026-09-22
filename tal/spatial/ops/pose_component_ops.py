@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import xarray as xr
 
+from tal.core.analysis_object import AnalysisObject
 from tal.core.orchestration.topology import TopologyPolicy
 
-from ..association import finalize_spatial_as
-from ..construction import SpatialConstructionPlan, apply_spatial_construction
+from ..construction import SpatialConstructionPlan
 from ..kinematics.paired_components import (
     PairAssemblyOptions,
+    PairedCompositeAssembly,
     PairedDatasetAssemblyPlan,
     align_paired_component_payloads,
     build_paired_components_dataset,
@@ -16,7 +19,10 @@ from ..kinematics.paired_components import (
     resolve_pair_registry,
     resolve_paired_roles,
 )
-from ..metadata import set_pose_rep
+from .composite_finalize import (
+    commit_spatial_composite,
+    project_paired_spatial_metadata,
+)
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 _QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
@@ -69,10 +75,9 @@ def build_components_pose_dataset(
     position_ds: xr.Dataset,
     *,
     owner: str,
-    validate: bool,
     policy: TopologyPolicy,
     metadata_source: xr.Dataset | None = None,
-) -> xr.Dataset:
+) -> PairedCompositeAssembly:
     """Align and assemble one component-representation Pose Dataset."""
     pos_dim, rot_dim = resolve_paired_roles(
         position_ds,
@@ -108,7 +113,6 @@ def build_components_pose_dataset(
             right_dim=rot_dim,
             left_var=pos_var,
             right_var=rot_var,
-            validate=validate,
             metadata_source=metadata_source,
         ),
         owner=owner,
@@ -118,22 +122,36 @@ def build_components_pose_dataset(
 
 
 def finalize_components_pose_output(
-    ds: xr.Dataset,
+    assembly: PairedCompositeAssembly,
     *,
     plan: SpatialConstructionPlan,
     validate: bool,
     owner: str,
+    prototype: AnalysisObject | type[AnalysisObject] | None = None,
+    resource_sources: Sequence[xr.Dataset] = (),
+    metadata_isolated: bool = False,
 ):
     """Finalize one component-layout Pose through shared spatial owners."""
     from ..pose import Pose
 
-    prepared = set_pose_rep(ds, rep="components", validate=False, owner=owner)
-    prepared = apply_spatial_construction(prepared, plan=plan, owner=owner)
-    return finalize_spatial_as(
-        Pose,
-        prepared,
-        validate=validate,
+    candidate = project_paired_spatial_metadata(
+        assembly.candidate,
+        sources=assembly.metadata_sources,
+        representation="components",
+        construction=plan,
+        kinematics_kind=None,
+        owner=owner,
+    )
+    return commit_spatial_composite(
+        candidate,
+        schema=assembly.schema,
+        components=assembly.components,
+        prototype=Pose if prototype is None else prototype,
         association=plan.association,
+        resource_sources=resource_sources,
+        validate=validate,
+        owner=owner,
+        metadata_isolated=metadata_isolated,
     )
 
 

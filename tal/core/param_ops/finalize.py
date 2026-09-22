@@ -19,6 +19,7 @@ from ..param_engine.query_topology import (
     attach_trajectory_query_coordinates,
     restore_query_topology,
 )
+from ..schema_update import source_schema_view
 from ..validity_finalize import assign_sequence_size_from_valid_mask
 from .guards import mark_generated_size_coord, mark_reserved_coord
 from .types import ParamRuntimeContext
@@ -124,7 +125,7 @@ def _finalize_trajectory_coordinates(
     return ds_out
 
 
-def finalize_param_output(
+def _prepare_param_output_dataset(
     context: ParamRuntimeContext,
     ds: xr.Dataset,
     *,
@@ -132,12 +133,16 @@ def finalize_param_output(
     query_dim: str,
     valid_query: xr.DataArray | None,
     query_topology: QueryTopologyPlan | None,
-    validate: bool,
     trajectory: bool,
     owner: str = "finalize_param_output",
     output_plan: QueryOutputPlan | None = None,
-) -> AnalysisObject:
-    ds_out = transfer_dataset_attrs(context.ds, ds, validate=False)
+    copy_schema: bool = True,
+) -> xr.Dataset:
+    ds_out = (
+        transfer_dataset_attrs(context.ds, ds, validate=False)
+        if copy_schema
+        else source_schema_view(context.ds, ds)
+    )
     if valid_query is not None and output_plan is not None and "valid" in output_plan.generated_names:
         ds_out = ds_out.assign_coords({
             "valid": mark_reserved_coord(valid_query, name="valid"),
@@ -156,6 +161,52 @@ def finalize_param_output(
             valid_query=valid_query, query_topology=query_topology,
             output_plan=output_plan, owner=owner,
         )
+    return ds_out
+
+
+def finalize_param_output(
+    context: ParamRuntimeContext,
+    ds: xr.Dataset,
+    *,
+    query: xr.DataArray | None,
+    query_dim: str,
+    valid_query: xr.DataArray | None,
+    query_topology: QueryTopologyPlan | None,
+    validate: bool,
+    trajectory: bool,
+    owner: str = "finalize_param_output",
+    output_plan: QueryOutputPlan | None = None,
+) -> AnalysisObject:
+    ds_out = _prepare_param_output_dataset(
+        context,
+        ds,
+        query=query,
+        query_dim=query_dim,
+        valid_query=valid_query,
+        query_topology=query_topology,
+        trajectory=trajectory,
+        owner=owner,
+        output_plan=output_plan,
+    )
+    return _finalize_prepared_param_output(
+        context,
+        ds_out,
+        validate=validate,
+        trajectory=trajectory,
+        output_plan=output_plan,
+        query_topology=query_topology,
+    )
+
+
+def _finalize_prepared_param_output(
+    context: ParamRuntimeContext,
+    ds_out: xr.Dataset,
+    *,
+    validate: bool,
+    trajectory: bool,
+    output_plan: QueryOutputPlan | None,
+    query_topology: QueryTopologyPlan | None,
+) -> AnalysisObject:
     out = finalize_structural(context.ao, ds_out, validate=validate)
     if not trajectory:
         core = analysis_object_dataset(out).attrs.get("tal", {}).get("core", {})

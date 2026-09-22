@@ -438,23 +438,42 @@ def _evaluate_rotation_request(
     var_name: str,
     prepared: PreparedParamEvaluation,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, str]:
-    quat_dim = context.core_dims[0]
-    method = resolve_rotation_method(request.opts)
+    return _evaluate_quat_temporal_part(
+        context,
+        var_name=var_name,
+        quat_dim=context.core_dims[0],
+        query=request.query,
+        opts=request.opts,
+        prepared=prepared,
+    )
+
+
+def _evaluate_quat_temporal_part(
+    context: ParamRuntimeContext,
+    *,
+    var_name: str,
+    quat_dim: str,
+    query: xr.DataArray | np.ndarray | Sequence[float] | float,
+    opts: RotationTemporalOptions,
+    prepared: PreparedParamEvaluation | None,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, str]:
+    """Evaluate one quaternion part without constructing a typed wrapper."""
+    method = resolve_rotation_method(opts)
     if method == "slerp":
         return _evaluate_quat_slerp(
             context,
             var_name=var_name,
             quat_dim=quat_dim,
-            query=request.query,
-            opts=request.opts,
+            query=query,
+            opts=opts,
             prepared=prepared,
         )
     return _evaluate_quat_nearest_linear(
         context,
         var_name=var_name,
         quat_dim=quat_dim,
-        query=request.query,
-        opts=request.opts,
+        query=query,
+        opts=opts,
         method=method,
         prepared=prepared,
     )

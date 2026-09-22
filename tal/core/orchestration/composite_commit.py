@@ -15,7 +15,10 @@ from ..component_ops.registry import (
     _read_registry_from_dataset,
 )
 from ..component_ops.types import ComponentRegistryOptions, ComponentSpec
-from ..dataset_ownership import analysis_object_dataset
+from ..dataset_ownership import (
+    _isolate_non_schema_metadata,
+    analysis_object_dataset,
+)
 from ..schema import UNSET, _SchemaUpdatePlan
 from ..schema_errors import SchemaError, _schema_error_with_context
 from ..schema_read import (
@@ -29,6 +32,7 @@ from .schema_finalize import CoreSchemaFinalizeSpec
 
 _ComponentAction = Literal["preserve", "replace", "prune"]
 _ResourceAction = Callable[[AnalysisObject], None]
+_ResultBoundary = AnalysisObject | type[AnalysisObject]
 
 
 @dataclass(frozen=True)
@@ -58,17 +62,26 @@ class _CompositeCommitSpec:
     validate: bool
     schema: CoreSchemaFinalizeSpec
     components: _ComponentRegistryCommit
-    prototype: AnalysisObject
+    prototype: _ResultBoundary
     result_context: object | None = None
     resource_action: _ResourceAction | None = None
+    isolate_non_schema_metadata: bool = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.owner, str) or not self.owner:
             raise TypeError("composite commit owner must be a non-empty string.")
-        if not isinstance(self.prototype, AnalysisObject):
-            raise TypeError("composite commit prototype must be an AnalysisObject.")
+        valid_type = isinstance(self.prototype, type) and issubclass(
+            self.prototype, AnalysisObject
+        )
+        if not isinstance(self.prototype, AnalysisObject) and not valid_type:
+            raise TypeError(
+                "composite commit prototype must be an AnalysisObject or "
+                "AnalysisObject subtype."
+            )
         if self.resource_action is not None and not callable(self.resource_action):
             raise TypeError("composite commit resource action must be callable.")
+        if not isinstance(self.isolate_non_schema_metadata, bool):
+            raise TypeError("composite metadata-isolation intent must be boolean.")
         if self.schema.sequence_dim is None and (
             self.schema.param_name is not None or self.schema.size_name is not None
         ):
@@ -86,6 +99,21 @@ def _schema_update_plan(spec: CoreSchemaFinalizeSpec) -> _SchemaUpdatePlan:
         param_coord=spec.param_name if sequence_dim is not None else None,
         sequence_size_coord=spec.size_name if sequence_dim is not None else None,
         complete_target=True,
+    )
+
+
+def _prepare_composite_schema_target(
+    candidate: xr.Dataset,
+    *,
+    schema: CoreSchemaFinalizeSpec,
+    validate: bool,
+) -> xr.Dataset:
+    """Project and validate one composite core schema without copying metadata."""
+    return prepare_commit_target(
+        candidate,
+        candidate,
+        _schema_update_plan(schema),
+        validate=validate,
     )
 
 
@@ -165,7 +193,7 @@ def _verify_result(result: AnalysisObject, spec: _CompositeCommitSpec) -> None:
 
 
 def _apply_result_context(result: AnalysisObject, spec: _CompositeCommitSpec) -> AnalysisObject:
-    applied = spec.prototype._apply_result_rewrap_context(
+    applied = result._apply_result_rewrap_context(
         result,
         context=spec.result_context,
     )
@@ -195,10 +223,9 @@ def _prepare_commit(
 ) -> tuple[_SchemaUpdatePlan, Mapping[str, ComponentSpec]]:
     schema_plan = _schema_update_plan(spec.schema)
     try:
-        provisional = prepare_commit_target(
+        provisional = _prepare_composite_schema_target(
             candidate,
-            candidate,
-            schema_plan,
+            schema=spec.schema,
             validate=spec.validate,
         )
         registry = _validate_planned_registry(
@@ -211,6 +238,21 @@ def _prepare_commit(
     return schema_plan, registry
 
 
+def _rewrap_committed_result(
+    committed: xr.Dataset,
+    spec: _CompositeCommitSpec,
+) -> AnalysisObject:
+    result_type = (
+        type(spec.prototype)
+        if isinstance(spec.prototype, AnalysisObject)
+        else spec.prototype
+    )
+    return result_type._from_composite_committed(
+        committed,
+        validate=spec.validate,
+    )
+
+
 def _commit_result(candidate: xr.Dataset, spec: _CompositeCommitSpec) -> AnalysisObject:
     schema_plan, registry = _prepare_commit(candidate, spec)
     committed = commit_ingress_target(
@@ -219,11 +261,9 @@ def _commit_result(candidate: xr.Dataset, spec: _CompositeCommitSpec) -> Analysi
         schema_plan,
         component_update=_component_update(spec.components, registry),
     )
-    result = spec.prototype._rewrap_dataset(
-        committed,
-        validate=spec.validate,
-        schema_prepared=True,
-    )
+    if spec.isolate_non_schema_metadata:
+        committed = _isolate_non_schema_metadata(committed)
+    result = _rewrap_committed_result(committed, spec)
     _verify_result(result, spec)
     result = _apply_result_context(result, spec)
     if spec.resource_action is not None:

@@ -119,6 +119,7 @@ def _resolve_param_valid_mask_validated(
     *,
     spec: ParamCoordSpec,
     sequence_size_coord: str | None = None,
+    allow_declared_param_override: bool = False,
 ) -> xr.DataArray:
     context = _resolve_schema_context_validated(
         ds,
@@ -126,6 +127,7 @@ def _resolve_param_valid_mask_validated(
         explicit_batch_dims=spec.batch_dims,
         explicit_param_name=spec.name,
         explicit_sequence_size_coord=sequence_size_coord,
+        allow_declared_param_override=allow_declared_param_override,
     )
     return _mask_from_context(context, spec)
 

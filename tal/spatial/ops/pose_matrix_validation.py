@@ -5,11 +5,36 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from tal.core.orchestration.runtime_checks import require_var_contains_dims, select_single_numeric_var
+from tal.core.orchestration.runtime_checks import (
+    require_var_contains_dims,
+    select_single_numeric_var,
+)
 from tal.core.schema_read import read_roles, read_sequence_size_coord_name
 from tal.core.validity_mask import resolve_structural_valid_mask_base
 
 from ..kernels.rigid_matrix_validation import validate_pose_matrix_block
+
+
+def select_pose_matrix_payload(
+    ds: xr.Dataset,
+    *,
+    core_dims: tuple[str, str],
+    owner: str,
+) -> str:
+    """Select one numeric matrix candidate while permitting auxiliaries."""
+    candidates = tuple(
+        str(name)
+        for name, var in ds.data_vars.items()
+        if np.issubdtype(np.dtype(var.dtype), np.number)
+        and all(dim in var.dims for dim in core_dims)
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise ValueError(f"{owner}: Pose matrix layout requires one matrix payload.")
+    raise ValueError(
+        f"{owner}: Pose matrix layout is ambiguous; found {candidates!r}."
+    )
 
 
 def _matrix_spec(ds: xr.Dataset, *, owner: str) -> tuple[str, str, str, xr.DataArray]:

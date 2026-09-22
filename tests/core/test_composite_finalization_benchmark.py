@@ -4,10 +4,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from benchmarks._composite_measurement import _validate
 from benchmarks.bench_composite_finalization import (
     DEFAULT_CONFIG,
     CompositeBenchmarkConfig,
-    _validate,
     benchmark_report,
     composite_fixture,
 )
@@ -30,6 +30,7 @@ def test_composite_benchmark_protocol_validates_routes_and_task_growth() -> None
         "pose_components",
         "paired_kinematics",
     }
+    assert all(report["dask"]["expected_topology_parity"].values())
     for evidence in report["partition_scaling"].values():
         assert evidence["one_partition"] > 0
         assert evidence["four_partitions"] <= 5 * evidence["one_partition"]

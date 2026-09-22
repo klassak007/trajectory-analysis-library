@@ -51,6 +51,18 @@ def is_chunked_variable(var: xr.Variable | xr.DataArray) -> bool:
     return getattr(var.data, "chunks", None) is not None
 
 
+def payload_chunks_for_dim(
+    value: xr.DataArray,
+    *,
+    dim: str,
+) -> tuple[int, ...] | None:
+    """Return one payload dimension's chunks without inspecting coordinates."""
+    chunks = getattr(value.data, "chunks", None)
+    if chunks is None or dim not in value.dims:
+        return None
+    return tuple(int(size) for size in chunks[value.dims.index(dim)])
+
+
 def fail_if_chunked_boundary(
     condition: bool,
     *,
@@ -168,6 +180,7 @@ __all__ = [
     "fail_if_chunked_boundary",
     "is_chunked_dataarray",
     "is_chunked_variable",
+    "payload_chunks_for_dim",
     "require_unchunked_auto_grid_sources",
     "require_unchunked_dataarray",
 ]

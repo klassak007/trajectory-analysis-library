@@ -236,6 +236,8 @@ class TypedLifecycleSpec:
         Hook that adds or normalizes subtype metadata.
     enforce : EnforceHook, optional
         Hook that checks subtype invariants.
+    enforce_prepared : EnforceHook | None, optional
+        Copy-neutral invariant hook for an already committed core schema.
 
     Raises
     ------
@@ -265,6 +267,7 @@ class TypedLifecycleSpec:
     apply_init_options: DatasetHook = identity_init_options
     normalize: DatasetHook = identity_normalize
     enforce: EnforceHook = no_op_enforce
+    enforce_prepared: EnforceHook | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.type_name, field="type_name")
@@ -273,6 +276,8 @@ class TypedLifecycleSpec:
         _require_callable(self.apply_init_options, field="apply_init_options")
         _require_callable(self.normalize, field="normalize")
         _require_callable(self.enforce, field="enforce")
+        if self.enforce_prepared is not None:
+            _require_callable(self.enforce_prepared, field="enforce_prepared")
 
 
 class TypedAnalysisObject(AnalysisObject):
@@ -497,6 +502,24 @@ class TypedAnalysisObject(AnalysisObject):
         """
         obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._run_typed_lifecycle(cls._lifecycle_context(phase="from_unvalidated"))
+        return obj
+
+    @classmethod
+    def _from_composite_committed(
+        cls,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+    ) -> Self:
+        """Bind an already normalized composite and enforce typed invariants."""
+        if validate:
+            obj = super()._from_validated(ds)
+        else:
+            obj = super()._from_unvalidated(ds, schema_prepared=True)
+        ctx = cls._lifecycle_context(phase="from_unvalidated")
+        spec = cls._lifecycle_spec()
+        enforce = spec.enforce_prepared or spec.enforce
+        enforce(analysis_object_dataset(obj), ctx)
         return obj
 
     def _normalize_metadata(self, *, owner: str) -> None:

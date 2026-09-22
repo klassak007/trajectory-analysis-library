@@ -40,8 +40,13 @@ from ..construction import (
     prepare_spatial_factory_dataset,
 )
 from ..metadata import normalize_kinematic_relation_semantics
+from ..ops.composite_finalize import (
+    commit_spatial_composite,
+    project_paired_spatial_metadata,
+)
 from .paired_components import (
     PairAssemblyOptions,
+    PairedCompositeAssembly,
     PairedDatasetAssemblyPlan,
     align_paired_component_payloads,
     build_paired_components_dataset,
@@ -257,8 +262,14 @@ def _enforce_components_layout_invariants(ds: xr.Dataset, *, cfg: KinematicsFami
     _validate_family_component_axis_labels(ds, left_dim=left_dim, right_dim=right_dim, cfg=cfg, owner=owner)
 
 
-def enforce_family_invariants(ds: xr.Dataset, *, cfg: KinematicsFamilyConfig, owner: str) -> None:
-    candidate = validate_schema_if_needed(ds)
+def enforce_family_invariants(
+    ds: xr.Dataset,
+    *,
+    cfg: KinematicsFamilyConfig,
+    owner: str,
+    schema_prepared: bool = False,
+) -> None:
+    candidate = ds if schema_prepared else validate_schema_if_needed(ds)
     cfg.validate_spatial_roles(candidate, owner=owner)
     _ = get_frames(candidate)
     rep = cfg.get_family_rep(candidate, owner)
@@ -277,9 +288,8 @@ def build_family_dataset(
     *,
     cfg: KinematicsFamilyConfig,
     owner: str,
-    validate: bool,
     policy: TopologyPolicy,
-) -> xr.Dataset:
+) -> PairedCompositeAssembly:
     seq_linear, batch_linear, left_dim, right_dim, left_var, right_var, aligned_linear_ds, aligned_angular_ds = (
         _resolve_aligned_family_component_payloads(
             linear_ds,
@@ -299,7 +309,6 @@ def build_family_dataset(
             right_dim=right_dim,
             left_var=left_var,
             right_var=right_var,
-            validate=validate,
         ),
         owner=owner,
         opts=cfg.pair_opts,
@@ -351,6 +360,36 @@ def _resolve_aligned_family_component_payloads(
     )
 
 
+def _finalize_family_assembly(
+    assembly: PairedCompositeAssembly,
+    *,
+    construction,
+    sources: tuple[xr.Dataset, xr.Dataset],
+    cfg: KinematicsFamilyConfig,
+    classes: KinematicsClasses,
+    owner: str,
+    validate: bool,
+):
+    candidate = project_paired_spatial_metadata(
+        assembly.candidate,
+        sources=assembly.metadata_sources,
+        representation="components",
+        construction=construction,
+        kinematics_kind=cfg.family_kind,
+        owner=owner,
+    )
+    return commit_spatial_composite(
+        candidate,
+        schema=assembly.schema,
+        components=assembly.components,
+        prototype=classes.family_cls,
+        association=construction.association,
+        resource_sources=sources,
+        validate=validate,
+        owner=owner,
+    )
+
+
 def family_from_linear_angular(
     linear: object,
     angular: object,
@@ -380,18 +419,21 @@ def family_from_linear_angular(
         strict_policy=STRICT_NON_CORE_POLICY,
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
-    ds = build_family_dataset(
+    assembly = build_family_dataset(
         linear_ds,
         angular_ds,
         cfg=cfg,
         owner=owner,
-        validate=validate,
         policy=selection.policy,
     )
-    ds = normalize_typed_metadata(ds, rep_getter=cfg.get_family_rep, rep_setter=cfg.set_family_rep, expected_kind=cfg.family_kind, cfg=cfg, owner=owner)
-    ds = apply_spatial_construction(ds, plan=plan, owner=owner)
-    return finalize_spatial_as(
-        classes.family_cls, ds, validate=validate, association=plan.association
+    return _finalize_family_assembly(
+        assembly,
+        construction=plan,
+        sources=(linear_ds, angular_ds),
+        cfg=cfg,
+        classes=classes,
+        owner=owner,
+        validate=validate,
     )
 
 
@@ -544,21 +586,3 @@ def family_angular(value, *, cfg: KinematicsFamilyConfig, classes: KinematicsCla
     parent, child = get_frames(value_ds)
     ds = set_frames(ds, parent=parent, child=child, validate=False)
     return finalize_spatial_from_source(value, classes.angular_cls, ds, validate=validate)
-
-
-__all__ = [
-    "KinematicsClasses",
-    "KinematicsFamilyConfig",
-    "coerce_source",
-    "enforce_angular_invariants",
-    "enforce_family_invariants",
-    "enforce_linear_invariants",
-    "family_angular",
-    "family_as_components",
-    "family_as_vector6",
-    "family_from_linear_angular",
-    "family_from_vector6",
-    "family_linear",
-    "family_to_rep",
-    "normalize_typed_metadata",
-]

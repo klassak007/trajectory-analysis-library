@@ -93,10 +93,28 @@ def _schema_view(source: xr.Dataset, output: xr.Dataset, tal: Mapping[str, Any])
     )
 
 
+def _schema_projection_view(
+    source: xr.Dataset,
+    output: xr.Dataset,
+    *,
+    extensions: Mapping[str, object] | None | object = UNSET,
+) -> xr.Dataset:
+    """Project one schema view without invoking opaque copy protocols."""
+    current = source.attrs.get("tal")
+    tal = dict(current) if isinstance(current, Mapping) else {}
+    if extensions is not UNSET:
+        if extensions is None:
+            tal.pop("ext", None)
+        elif isinstance(extensions, Mapping):
+            tal["ext"] = dict(extensions)
+        else:
+            raise TypeError("schema projection extensions must be a mapping or None.")
+    return _schema_view(source, output, tal)
+
+
 def source_schema_view(source: xr.Dataset, output: xr.Dataset) -> xr.Dataset:
     """Attach source schema to a projection without invoking copy protocols."""
-    tal = source.attrs.get("tal")
-    return _schema_view(source, output, tal if isinstance(tal, Mapping) else {})
+    return _schema_projection_view(source, output)
 
 
 def _provisional_schema_target(

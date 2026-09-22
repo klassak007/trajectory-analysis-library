@@ -450,15 +450,15 @@ def _finalize_pose(
             analysis_object_dataset(rotation),
             analysis_object_dataset(position),
             owner=owner,
-            validate=True,
             policy=STRICT_NON_CORE_POLICY,
             metadata_source=analysis_object_dataset(source.selected),
         )
         return finalize_components_pose_output(
-            _project_target_spatial_metadata(combined),
+            combined,
             plan=plan,
             validate=True,
             owner=owner,
+            metadata_isolated=True,
         )
     except SchemaError:
         raise

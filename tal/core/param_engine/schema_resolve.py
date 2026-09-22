@@ -7,13 +7,13 @@ from typing import Any
 
 import xarray as xr
 
+from ..schema_errors import schema_error
+from ..schema_read import read_param_coord as _read_param_coord
+from ..schema_read import read_roles as _read_roles_raw
+from ..schema_read import read_validity as _read_validity
 from ..schema_read import (
-    read_param_coord as _read_param_coord,
-    read_roles as _read_roles_raw,
-    read_validity as _read_validity,
     validate_schema_if_needed as _validate_schema_if_needed_raw,
 )
-from ..schema_errors import schema_error
 from .types import ParamCoordSpec, ParamSchemaContext
 
 # Internal compatibility alias used by tests and fast-path monkeypatching.
@@ -171,14 +171,16 @@ def _resolve_param_name(
     explicit_param_name: str | None,
     sequence_dim: str,
     batch_dims: tuple[str, ...],
+    allow_declared_override: bool = False,
 ) -> tuple[str | None, bool]:
     declared, declared_name = _read_param_coord(ds)
-    _check_name_conflict(
-        label="resolve_param_coord",
-        explicit=explicit_param_name,
-        declared=declared_name,
-        declared_present=declared,
-    )
+    if not allow_declared_override:
+        _check_name_conflict(
+            label="resolve_param_coord",
+            explicit=explicit_param_name,
+            declared=declared_name,
+            declared_present=declared,
+        )
     param_name = explicit_param_name or declared_name
     _validate_param_target(ds, name=param_name, sequence_dim=sequence_dim, batch_dims=batch_dims, declared=declared)
     return param_name, declared
@@ -228,6 +230,7 @@ def _resolve_schema_context(
     explicit_param_name: str | None = None,
     explicit_sequence_size_coord: str | None = None,
     assume_validated: bool = False,
+    allow_declared_param_override: bool = False,
 ) -> ParamSchemaContext:
     """Resolve effective schema context from explicit overrides and declared schema."""
     ds_checked = _validate_schema_if_needed(ds, assume_validated=assume_validated)
@@ -252,6 +255,7 @@ def _resolve_schema_context(
         explicit_param_name=explicit_param_name,
         sequence_dim=seq,
         batch_dims=batch,
+        allow_declared_override=allow_declared_param_override,
     )
     size_name, val_declared = _resolve_sequence_size_name(
         ds_checked,
@@ -277,6 +281,7 @@ def _resolve_schema_context_validated(
     explicit_batch_dims: Sequence[str] | None = None,
     explicit_param_name: str | None = None,
     explicit_sequence_size_coord: str | None = None,
+    allow_declared_param_override: bool = False,
 ) -> ParamSchemaContext:
     return _resolve_schema_context(
         ds,
@@ -285,6 +290,7 @@ def _resolve_schema_context_validated(
         explicit_param_name=explicit_param_name,
         explicit_sequence_size_coord=explicit_sequence_size_coord,
         assume_validated=True,
+        allow_declared_param_override=allow_declared_param_override,
     )
 
 

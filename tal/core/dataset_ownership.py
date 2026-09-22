@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Hashable, Mapping, MutableMapping
+from collections.abc import Callable, Hashable, Mapping, MutableMapping, Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -134,6 +134,20 @@ def metadata_isolated_dataset(source: xr.Dataset, *, owner: str) -> xr.Dataset:
     return dataset_view(source, copy="shallow", owner=owner)
 
 
+def _isolate_non_schema_metadata(source: xr.Dataset) -> xr.Dataset:
+    """Detach non-schema metadata after the schema owner has copied ``tal``."""
+    target = source.copy(deep=False)
+    target = _copy_index_coordinates(target, deep=False)
+    _deepcopy_shared_mapping_values(source.attrs, target.attrs, excluded_key="tal")
+    _deepcopy_shared_mapping_values(source.encoding, target.encoding)
+    for name, source_var in source.variables.items():
+        target_var = target.variables[name]
+        _deepcopy_shared_mapping_values(source_var.attrs, target_var.attrs)
+        _deepcopy_shared_mapping_values(source_var.encoding, target_var.encoding)
+    target.set_close(None)
+    return target
+
+
 def _capture_close_failure(
     callback: Callable[[], None],
     failure: BaseException | None,
@@ -199,6 +213,36 @@ def couple_dataset_resource(source: xr.Dataset, target: xr.Dataset) -> xr.Datase
         close = _compose_close_callbacks(target_close, source_close)
     target.set_close(close)
     return target
+
+
+def _prepare_ordered_resource_action(
+    sources: Sequence[xr.Dataset],
+) -> Callable[[AnalysisObject], None] | None:
+    """Resolve one deferred coupling action for ordered source lifetimes."""
+    selected: list[tuple[Callable[[], None], list[xr.Dataset]]] = []
+    by_identity: dict[int, int] = {}
+    for source in sources:
+        callback = getattr(source, "_close", None)
+        if callback is None:
+            continue
+        callback_id = id(callback)
+        if callback_id in by_identity:
+            selected[by_identity[callback_id]][1].append(source)
+            continue
+        by_identity[callback_id] = len(selected)
+        selected.append((callback, [source]))
+    if not selected:
+        return None
+
+    def couple(result: AnalysisObject) -> None:
+        target = analysis_object_dataset(result)
+        for callback, participants in selected:
+            close_once = _idempotent_close(callback)
+            for participant in participants:
+                participant.set_close(close_once)
+            couple_dataset_resource(participants[0], target)
+
+    return couple
 
 
 def analysis_object_dataset(source: AnalysisObject) -> xr.Dataset:

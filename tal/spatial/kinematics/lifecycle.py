@@ -98,11 +98,23 @@ def make_kinematics_lifecycle_spec(
     def enforce(ds: xr.Dataset, ctx: TypedLifecycleContext) -> None:
         _enforce_kinematics_invariants(ds, ctx, cfg=cfg, role=normalized_role)
 
+    def enforce_prepared(ds: xr.Dataset, ctx: TypedLifecycleContext) -> None:
+        if normalized_role != "family":
+            enforce(ds, ctx)
+            return
+        enforce_family_invariants(
+            ds,
+            cfg=cfg,
+            owner=ctx.owner,
+            schema_prepared=True,
+        )
+
     return TypedLifecycleSpec(
         type_name=type_name,
         owner_prefix=owner_prefix,
         normalize=normalize,
         enforce=enforce,
+        enforce_prepared=enforce_prepared,
     )
 
 
