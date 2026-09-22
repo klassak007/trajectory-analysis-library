@@ -64,6 +64,12 @@ from .pose_matrix_validation import (
     prepare_pose_matrix_for_conversion,
     validate_pose_matrix_dataset,
 )
+from .pose_rotation_ops import (
+    compose_rotation,
+    inverse_rotation,
+    safe_pose_components,
+    safe_pose_operands,
+)
 
 if TYPE_CHECKING:
     from ..pose import Pose
@@ -478,20 +484,6 @@ def _pose_compose_policy(*, pose: "Pose", right: "Pose", owner: str) -> Topology
     return selection.policy
 
 
-def _compose_rotation(left: Rotation, right: Rotation, *, owner: str) -> Rotation:
-    try:
-        return left.compose(right, validate=False)
-    except ValueError as exc:
-        raise ValueError(f"{owner}: pose rotation compose failed: {exc}") from exc
-
-
-def _inverse_rotation(rotation: Rotation, *, owner: str) -> Rotation:
-    try:
-        return rotation.inverse(validate=False)
-    except ValueError as exc:
-        raise ValueError(f"{owner}: pose inverse rotation failed: {exc}") from exc
-
-
 def _pose_compose_with_owner(
     pose: "Pose",
     right: "Pose",
@@ -504,7 +496,8 @@ def _pose_compose_with_owner(
     right._enforce_invariants(owner=owner)
     left_rep = get_pose_rep(source := analysis_object_dataset(pose), owner=owner)
     parent, child = resolve_compose_output_frames(source, analysis_object_dataset(right), owner=owner)
-    (left_pos, left_rot), (right_pos, right_rot) = _canonical_components(pose, owner=owner), _canonical_components(right, owner=owner)
+    left_pos, left_rot = safe_pose_components(*_canonical_components(pose, owner=owner), owner=owner)
+    right_pos, right_rot = safe_pose_components(*_canonical_components(right, owner=owner), owner=owner)
     policy = _pose_compose_policy(pose=pose, right=right, owner=owner)
     prepared = _prepare_pose_compose_inputs(
         left_pos,
@@ -523,7 +516,7 @@ def _pose_compose_with_owner(
         right_quat_dim=prepared.specs.right_quat_dim,
         owner=owner,
     )
-    out_rot = _compose_rotation(left_rot, right_rot, owner=owner)
+    out_rot = compose_rotation(left_rot, right_rot, owner=owner)
     out_pos_ds = pose_context.build_composed_position_dataset(
         prepared,
         out_t,
@@ -563,14 +556,22 @@ def _pose_inverse_with_owner(
     rotation_ds = analysis_object_dataset(rotation)
     pos_var, pos_dim = resolve_single_numeric_var_single_core_dim(position_ds, owner=owner, what="Pose translation")
     quat_var, quat_dim = resolve_single_numeric_var_single_core_dim(rotation_ds, owner=owner, what="Pose rotation")
+    translation, safe_rotation = safe_pose_operands(
+        position_ds,
+        rotation_ds,
+        pos_var=pos_var,
+        quat_var=quat_var,
+        quat_dim=quat_dim,
+    )
+    safe_rotation_ds = analysis_object_dataset(safe_rotation)
     out_t = apply_pose_inverse_translation_kernel(
-        position_ds[pos_var],
-        rotation_ds[quat_var],
+        translation,
+        safe_rotation_ds[quat_var],
         pos_dim=pos_dim,
         quat_dim=quat_dim,
         owner=owner,
     )
-    out_rot = _inverse_rotation(rotation, owner=owner)
+    out_rot = inverse_rotation(safe_rotation, owner=owner)
     declared, seq_dim, batch_dims, _ = read_roles(position_ds)
     if not declared:
         raise ValueError(f"{owner}: Pose inverse requires declared roles.")

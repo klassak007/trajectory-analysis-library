@@ -39,6 +39,7 @@ from ..policies.wrap import wrap_like
 from ..position import Position
 from ..velocity import AngularVelocity, LinearVelocity, Velocity
 from .core_chunks import single_core_chunk
+from .pose_rotation_ops import safe_pose_operands
 from .rotation_apply_ops import _rotation_apply_with_owner
 
 if TYPE_CHECKING:
@@ -172,6 +173,15 @@ def _resolve_pose_position_input_specs(
         what="Pose translation",
     )
     quat_var, quat_dim = resolve_single_numeric_var_single_core_dim(quat_ds, owner=owner, what="Pose rotation")
+    translation_da, safe_rotation = safe_pose_operands(
+        translation_ds,
+        quat_ds,
+        pos_var=translation_var,
+        quat_var=quat_var,
+        quat_dim=quat_dim,
+    )
+    translation_ds = translation_ds.assign({translation_var: translation_da})
+    quat_ds = analysis_object_dataset(safe_rotation)
     return PoseApplyOperandSpecs(
         target_ds=target_ds,
         target_var=target_var,
