@@ -15,7 +15,7 @@ from .schema import (
     _require_dataset,
     _SchemaUpdatePlan,
 )
-from .schema_validate import prepare_schema_validation
+from .schema_validate import prepare_schema_validation, validate_schema_structure
 from .schema_validate.finalize import _replace_dataset_attrs_with_tal
 
 
@@ -99,15 +99,38 @@ def source_schema_view(source: xr.Dataset, output: xr.Dataset) -> xr.Dataset:
     return _schema_view(source, output, tal if isinstance(tal, Mapping) else {})
 
 
+def _provisional_schema_target(
+    source: xr.Dataset, output: xr.Dataset, plan: _SchemaUpdatePlan
+) -> xr.Dataset:
+    """Apply a provisional target schema without copying extension metadata."""
+    tal = source.attrs.get("tal")
+    provisional = dict(tal) if isinstance(tal, Mapping) else {}
+    _apply_to_tal(provisional, plan, owned=False)
+    return _schema_view(source, output, provisional)
+
+
 def prepare_ingress_target(
     source: xr.Dataset, output: xr.Dataset, plan: _SchemaUpdatePlan
 ) -> xr.Dataset:
     """Validate an output target without copying the source extension graph."""
-    tal = source.attrs.get("tal")
-    provisional = dict(tal) if isinstance(tal, Mapping) else {}
-    _apply_to_tal(provisional, plan, owned=False)
-    candidate = _schema_view(source, output, provisional)
+    candidate = _provisional_schema_target(source, output, plan)
     prepare_schema_validation(candidate)
+    return candidate
+
+
+def prepare_commit_target(
+    source: xr.Dataset,
+    output: xr.Dataset,
+    plan: _SchemaUpdatePlan,
+    *,
+    validate: bool,
+) -> xr.Dataset:
+    """Preflight one final commit without invoking metadata copy protocols."""
+    candidate = _provisional_schema_target(source, output, plan)
+    if validate:
+        prepare_schema_validation(candidate)
+    else:
+        validate_schema_structure(candidate)
     return candidate
 
 

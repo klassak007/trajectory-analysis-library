@@ -209,8 +209,18 @@ class SpatialAssociationMixin:
         couple_dataset_resource(source_ds, analysis_object_dataset(result))
         return result
 
-    def _rewrap_dataset(self, ds: xr.Dataset, *, validate: bool) -> AnalysisObject:
-        result = super()._rewrap_dataset(ds, validate=validate)
+    def _rewrap_dataset(
+        self,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+        schema_prepared: bool = False,
+    ) -> AnalysisObject:
+        result = super()._rewrap_dataset(
+            ds,
+            validate=validate,
+            schema_prepared=schema_prepared,
+        )
         return attach_spatial_association(
             result,
             SpatialAssociationPlan(self.graph),

@@ -432,10 +432,19 @@ class AnalysisObject:
         """
         self._data.close()
 
-    def _rewrap_dataset(self, ds: xr.Dataset, *, validate: bool) -> AnalysisObject:
+    def _rewrap_dataset(
+        self,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+        schema_prepared: bool = False,
+    ) -> AnalysisObject:
         if validate:
             return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self.__class__._from_unvalidated(
+            ds,
+            schema_prepared=schema_prepared,
+        )
 
     def _prepare_result_rewrap_context(self, values: tuple[object, ...], *, owner: str) -> object | None:
         """Prepare an opaque domain result context for a multi-input operation."""
