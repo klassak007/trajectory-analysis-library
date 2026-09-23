@@ -63,6 +63,7 @@ def _transform_position_to_frame(
     owner: str,
 ) -> Position:
     from ..path_solve import _solve_pose_path_transform_with_owner
+    from .path_query_plan import PathOutputRequest
     from .pose_apply_ops import _pose_apply_with_owner
 
     selected = select_path_graph(configuration, src=source_parent, dst=dst, owner=owner)
@@ -72,9 +73,11 @@ def _transform_position_to_frame(
         dst,
         edge_pose_fn=edge_pose_fn,
         configuration=selected,
-        caller=position,
+        caller=PathOutputRequest(position, position, validate),
         owner=owner,
     )
+    if isinstance(solved, type(position)):
+        return solved
     result = _pose_apply_with_owner(
         solved,
         position,
@@ -169,6 +172,7 @@ def pose_class_solve_path_transform(
 ) -> Pose:
     owner = "spatial.pose.solve_path_transform"
     from ..path_solve import _solve_pose_path_transform_with_owner
+    from .path_query_plan import PathOutputRequest
 
     solved = _solve_pose_path_transform_with_owner(
         src,
@@ -177,8 +181,11 @@ def pose_class_solve_path_transform(
         graph=graph,
         query=query,
         opts=opts,
+        caller=PathOutputRequest(None, cls, validate),
         owner=owner,
     )
+    if isinstance(solved, cls):
+        return solved
     return finalize_spatial_from_source(
         solved,
         cls,

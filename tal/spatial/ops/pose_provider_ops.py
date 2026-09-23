@@ -19,6 +19,7 @@ from .edge_resolver_ops import (
     call_prepared_edge_resolver,
     prepare_edge_resolver,
 )
+from .provider_topology import ProviderTopology, classify_provider_topology
 
 if TYPE_CHECKING:
     from ..pose import Pose
@@ -30,6 +31,8 @@ POSE_PROVIDER_KEY = "spatial.pose_provider"
 class BoundPoseProvider:
     value: object
     signature_checked: bool | None
+    representation: str | None = None
+    topology: ProviderTopology | None = None
 
 
 def _require_edge_metadata(
@@ -105,7 +108,8 @@ def prepare_pose_provider(value: object, *, child_id: str, parent_id: str, owner
         prepared = prepare_edge_resolver(value, owner=owner, arg="provider")
         return BoundPoseProvider(prepared.resolver, prepared.signature_checked)
     pose = normalize_pose_provider(value, child_id=child_id, parent_id=parent_id, owner=owner, components=False)
-    return BoundPoseProvider(pose, None)
+    representation = get_pose_rep(analysis_object_dataset(pose), owner=owner)
+    return BoundPoseProvider(pose, None, representation, classify_provider_topology(pose))
 
 
 def require_bound_pose_provider(child: Frame, parent: Frame, *, owner: str) -> BoundPoseProvider:
@@ -118,8 +122,14 @@ def require_bound_pose_provider(child: Frame, parent: Frame, *, owner: str) -> B
     return provider
 
 
-def _bound_pose_payload(child: Frame, parent: Frame, *, owner: str) -> object:
-    provider = require_bound_pose_provider(child, parent, owner=owner)
+def _bound_pose_payload(
+    child: Frame,
+    parent: Frame,
+    *,
+    owner: str,
+    provider: BoundPoseProvider | None = None,
+) -> object:
+    provider = provider or require_bound_pose_provider(child, parent, owner=owner)
     value = provider.value
     if provider.signature_checked is not None:
         prepared = PreparedEdgeResolver(value, "provider", provider.signature_checked)
@@ -141,7 +151,14 @@ def resolve_bound_pose_with_representation(
     """Resolve one provider while retaining its declared source representation."""
     from ..pose import Pose
 
-    value = _bound_pose_payload(child, parent, owner=owner)
+    provider = require_bound_pose_provider(child, parent, owner=owner)
+    value = _bound_pose_payload(child, parent, owner=owner, provider=provider)
+    if (
+        provider.signature_checked is None
+        and provider.representation == "components"
+        and provider.topology == "dynamic"
+    ):
+        return value, provider.representation
     try:
         pose = value if isinstance(value, Pose) else Pose(value)
         representation = get_pose_rep(analysis_object_dataset(pose), owner=owner)
@@ -157,7 +174,8 @@ def resolve_bound_pose_with_representation(
 
 
 def resolve_bound_pose(child: Frame, parent: Frame, *, owner: str) -> Pose:
-    value = _bound_pose_payload(child, parent, owner=owner)
+    provider = require_bound_pose_provider(child, parent, owner=owner)
+    value = _bound_pose_payload(child, parent, owner=owner, provider=provider)
     return normalize_pose_provider(
         value, child_id=child.id, parent_id=parent.id, owner=owner,
     )

@@ -7,6 +7,11 @@ import pytest
 import xarray as xr
 from scipy.spatial.transform import Rotation as SciRotation
 
+from benchmarks._batched_path_direct_executor import execute_direct_packed
+from benchmarks._batched_path_process_protocol import (
+    measure_batched_rss,
+    measure_cold_public,
+)
 from benchmarks._spatial_path_execution_routes import _public_case
 from benchmarks.bench_batched_fused_path_reference import (
     _public_position,
@@ -24,6 +29,7 @@ from tal.core.param_ops.types import ParamEvalOptions
 from tal.core.schema import set_validity
 from tal.frames import find_path
 from tal.spatial import PathSolveOptions, Pose, solve_pose_path_transform
+from tal.spatial.ops.batched_path_inputs import pack_batched_path_inputs
 from tal.spatial.ops.path_execution import prepare_pose_path_execution
 from tal.spatial.ops.path_query_plan import prepare_path_query
 from tal.spatial.ops.pose_provider_ops import resolve_bound_pose
@@ -45,14 +51,62 @@ def test_spatial_bench_batched_path_reference_001_reduced_protocol_reports_separ
     config = CapstoneConfig(trials=2, ship_samples=5, drone_samples=9, trial_chunk=1, sample_chunk=4)
     report = benchmark_report(config, warmups=0, repeats=1)
     assert set(report["routes"]) == {
-        "planning", "packing", "reference", "public_generic", "direct_xarray",
+        "planning",
+        "production_packing",
+        "production_executor",
+        "production_finalization",
+        "production_dispatch",
+        "direct_packed_executor",
+        "independent_scipy_reference",
+        "public_transform",
+        "direct_transform",
+        "public_eager",
+        "direct_xarray",
     }
-    reference = report["routes"]["reference"]
+    reference = report["routes"]["production_executor"]
     assert len(reference["seconds"]) == 1
     assert len(reference["peak_bytes"]) == 1
     assert reference["median_seconds"] > 0.0
     assert reference["median_peak_bytes"] > 0
     assert report["public_result_shape"] == report["direct_result_shape"] == (2, 9)
+    environment = report["environment"]
+    assert environment["selected_backend"] in {"numba", "scipy"}
+    if environment["selected_backend"] == "numba":
+        assert int(environment["numba_threads"]) > 0
+        assert environment["numba_threading_layer"] != "not-selected"
+    else:
+        assert environment["numba_threads"] == "not-selected"
+        assert environment["numba_threading_layer"] == "not-selected"
+
+
+def test_spatial_bench_batched_path_execution_001_isolated_rss_protocol() -> None:
+    """ID: SPATIAL_BENCH_BATCHED_PATH_EXECUTION_001_isolated_rss_protocol."""
+    pytest.importorskip("psutil")
+    config = CapstoneConfig(trials=2, ship_samples=5, drone_samples=9, trial_chunk=1, sample_chunk=4)
+    result = measure_batched_rss(config)
+    assert result.config == config
+    assert result.backend in {"numba", "scipy"}
+    assert result.sample_count >= 20
+    assert result.peak_bytes >= result.baseline_bytes
+
+
+def test_spatial_bench_batched_path_execution_001_cold_protocol_reports_boundaries() -> None:
+    config = CapstoneConfig(trials=2, ship_samples=5, drone_samples=9, trial_chunk=1, sample_chunk=4)
+    result = measure_cold_public(config)
+
+    assert result.config == config
+    assert result.backend in {"numba", "scipy"}
+    assert result.process_seconds > 0.0
+    assert result.import_seconds > 0.0
+    assert result.setup_seconds > 0.0
+    assert result.first_call_seconds > 0.0
+    assert result.validation_seconds > 0.0
+    assert result.process_seconds >= (
+        result.import_seconds
+        + result.setup_seconds
+        + result.first_call_seconds
+        + result.validation_seconds
+    )
 
 
 def test_spatial_bench_batched_path_reference_001_validator_rejects_metadata_drift() -> None:
@@ -138,12 +192,30 @@ def test_spatial_bench_batched_path_reference_001_path_directions_and_depth(
     execution = prepare_pose_path_execution(path, prepared)
     assert execution.batched is not None
     result = execute_batched_reference(execution.batched)
+    direct_t, direct_q = execute_direct_packed(
+        execution.batched,
+        pack_batched_path_inputs(execution.batched),
+        backend="scipy",
+    )
+    public = solve_pose_path_transform(
+        fixture.source,
+        fixture.destination,
+        graph=graph,
+        query=query,
+    ).as_dataset(copy="none")
     expected_t, expected_q = scipy_direct_path(fixture)
 
     np.testing.assert_allclose(result.translation, np.tile(expected_t, (2, 1, 1)), rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(public["position"], result.translation, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(direct_t, result.translation, rtol=1e-12, atol=1e-12)
+    assert direct_q is not None
     expected_matrix = SciRotation.from_quat(np.tile(expected_q, (2, 1, 1)).reshape(-1, 4)).as_matrix()
     actual_matrix = SciRotation.from_quat(result.quaternion.reshape(-1, 4)).as_matrix()
+    public_matrix = SciRotation.from_quat(np.asarray(public["rotation"]).reshape(-1, 4)).as_matrix()
+    direct_matrix = SciRotation.from_quat(direct_q.reshape(-1, 4)).as_matrix()
     np.testing.assert_allclose(actual_matrix, expected_matrix, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(public_matrix, expected_matrix, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(direct_matrix, expected_matrix, rtol=1e-12, atol=1e-12)
     for provider, source in zip(providers, sources, strict=True):
         xr.testing.assert_identical(provider.as_dataset(copy="none"), source)
 

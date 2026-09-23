@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -18,18 +18,33 @@ from ..pose import Pose
 from ..position import Position
 from ..rotation import Rotation
 from ..temporal.options import PoseTemporalOptions, resolve_rotation_method
+from .path_direct_topology import build_direct_topology
+from .path_query_output import prepare_path_query_output_plan
 from .path_query_topology import (
     OutputTopology,
     _ProviderBatchProjection,
     align_projected_provider_batches,
     batch_coordinates,
-    build_direct_topology,
     project_provider_batches,
     without_batch_coordinates,
 )
 from .provider_topology import ProviderTopology, classify_provider_topology
 
+if TYPE_CHECKING:
+    from tal.core.param_engine.query_topology import QueryOutputPlan
+
+    from .batched_path_plan import BatchedPathMetadataClassification
+
 PathOutputIntent = Literal["pose", "position", "unsupported"]
+
+
+@dataclass(frozen=True)
+class PathOutputRequest:
+    """Private result boundary carried through path planning."""
+
+    caller: object | None
+    prototype: object | type | None
+    validate: bool
 
 
 @dataclass(frozen=True)
@@ -50,6 +65,7 @@ class PreparedProviderQuery:
     context: ParamRuntimeContext | None
     temporal: PoseTemporalOptions
     evaluations: tuple[PreparedParamEvaluation, ...] = ()
+    native_projection: _ProviderBatchProjection | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +77,10 @@ class PreparedPathQuery:
     topology: OutputTopology | None
     output_intent: PathOutputIntent
     result_context: object | None = None
+    result_prototype: object | type | None = None
+    result_validate: bool = True
+    batched_classification: BatchedPathMetadataClassification | None = None
+    output_plan: QueryOutputPlan | None = None
 
 
 def provider_context(
@@ -136,7 +156,11 @@ def _object_topology(
         param_on=temporal.on,
         owner=owner,
     )
-    return replace(topology, provider_values=align_projected_provider_batches(projected, topology, owner=owner))
+    return replace(
+        topology,
+        provider_values=align_projected_provider_batches(projected, topology, owner=owner),
+        native_provider_values=projected,
+    )
 
 
 def _direct_topology(
@@ -193,6 +217,7 @@ def _effective_temporal(
 def _prepare_provider_context(
     required: RequiredProvider,
     projection: _ProviderBatchProjection,
+    native_projection: _ProviderBatchProjection,
     topology: OutputTopology,
     temporal: PoseTemporalOptions,
     *,
@@ -200,9 +225,13 @@ def _prepare_provider_context(
 ) -> PreparedProviderQuery:
     effective = _effective_temporal(temporal, projection, query_dim=topology.query_dim)
     if required.topology != "dynamic":
-        return PreparedProviderQuery(required, projection, None, effective)
+        return PreparedProviderQuery(
+            required, projection, None, effective, native_projection=native_projection,
+        )
     context = provider_context(projection.value, effective, owner=owner)
-    return PreparedProviderQuery(required, projection, context, effective)
+    return PreparedProviderQuery(
+        required, projection, context, effective, native_projection=native_projection,
+    )
 
 
 def _prepare_provider_evaluations(
@@ -231,14 +260,36 @@ def _prepare_provider_evaluations(
     return replace(item, evaluations=tuple(evaluations))
 
 
-def _preflight_batched_metadata(plan: PreparedPathQuery) -> bool:
+def _preflight_batched_metadata(
+    plan: PreparedPathQuery,
+) -> BatchedPathMetadataClassification | None:
     topology = plan.topology
     if topology is None or not topology.batch_dims:
-        return False
+        return None
     from .batched_path_plan import classify_batched_path_metadata
 
-    classification = classify_batched_path_metadata(plan)
-    return classification.map_is_lazy
+    return classify_batched_path_metadata(plan)
+
+
+def _prepare_output_plan(
+    result: PathOutputRequest,
+    items: tuple[PreparedProviderQuery, ...],
+    topology: OutputTopology,
+    *,
+    owner: str,
+) -> QueryOutputPlan:
+    if result.caller is not None:
+        source = result.caller
+    elif items and items[0].projection is not None:
+        source = items[0].projection.value
+    else:
+        raise ValueError(f"{owner}: path output planning requires a projected source.")
+    return prepare_path_query_output_plan(
+        topology,
+        source=source,
+        retain_sequence_coords=result.caller is not None,
+        owner=owner,
+    )
 
 
 def _required_providers(
@@ -271,6 +322,82 @@ def _evaluate_providers(
     )
 
 
+def _output_intent(caller: object | None) -> PathOutputIntent:
+    if isinstance(caller, Position):
+        return "position"
+    if caller is None:
+        return "pose"
+    return "unsupported"
+
+
+def _requires_query_topology(
+    providers: tuple[RequiredProvider, ...],
+    query: object | None,
+    caller: object | None,
+    *,
+    owner: str,
+) -> bool:
+    has_dynamic = any(item.topology == "dynamic" for item in providers)
+    has_exact = any(item.topology == "exact" for item in providers)
+    if has_exact and (has_dynamic or query is not None):
+        raise ValueError(f"{owner}: exact providers cannot be combined with dynamic providers or an explicit query.")
+    if has_dynamic and caller is None and query is None:
+        raise ValueError(f"{owner}: dynamic direct path solving requires explicit query=.")
+    return has_dynamic or (query is not None and not has_exact)
+
+
+def _prepare_dynamic_query(
+    providers: tuple[RequiredProvider, ...],
+    values: Sequence[object],
+    query: object | None,
+    temporal: PoseTemporalOptions,
+    result: PathOutputRequest,
+    result_context: object | None,
+    *,
+    owner: str,
+) -> PreparedPathQuery:
+    contexts = tuple(
+        provider_context(item.value, temporal, owner=owner)
+        for item in providers
+        if item.topology == "dynamic"
+    )
+    topology = (
+        _object_topology(result.caller, temporal, contexts, values, owner=owner)
+        if result.caller is not None
+        else _direct_topology(query, values, contexts, temporal, owner=owner)
+    )
+    items = tuple(
+        _prepare_provider_context(
+            item, projection, native, topology, temporal, owner=owner,
+        )
+        for item, projection, native in zip(
+            providers,
+            topology.provider_values,
+            topology.native_provider_values,
+            strict=True,
+        )
+    )
+    output_plan = _prepare_output_plan(result, items, topology, owner=owner)
+    prepared = PreparedPathQuery(
+        providers,
+        items,
+        topology,
+        _output_intent(result.caller),
+        result_context,
+        result.prototype,
+        result.validate,
+        output_plan=output_plan,
+    )
+    classification = _preflight_batched_metadata(prepared)
+    prepared = replace(prepared, batched_classification=classification)
+    evaluated = _evaluate_providers(
+        items,
+        topology,
+        defer_backend_selection=classification is not None and classification.map_is_lazy,
+    )
+    return replace(prepared, items=evaluated)
+
+
 def prepare_path_query(
     values: Sequence[object],
     *,
@@ -280,6 +407,8 @@ def prepare_path_query(
     owner: str,
     source_representations: Sequence[str | None] | None = None,
     result_context: object | None = None,
+    result_prototype: object | type | None = None,
+    result_validate: bool = True,
 ) -> PreparedPathQuery:
     """Classify topology and prepare reusable maps before payload work."""
     providers = _required_providers(
@@ -287,43 +416,31 @@ def prepare_path_query(
         source_representations,
         owner=owner,
     )
-    output_intent: PathOutputIntent
-    if isinstance(caller, Position):
-        output_intent = "position"
-    elif caller is None:
-        output_intent = "pose"
-    else:
-        output_intent = "unsupported"
-    has_dynamic = any(item.topology == "dynamic" for item in providers)
-    has_exact = any(item.topology == "exact" for item in providers)
-    if has_exact and (has_dynamic or query is not None):
-        raise ValueError(f"{owner}: exact providers cannot be combined with dynamic providers or an explicit query.")
-    if has_dynamic and caller is None and query is None:
-        raise ValueError(f"{owner}: dynamic direct path solving requires explicit query=.")
-    if not (has_dynamic or (query is not None and not has_exact)):
+    result = PathOutputRequest(caller, result_prototype, result_validate)
+    if not _requires_query_topology(providers, query, caller, owner=owner):
         items = tuple(PreparedProviderQuery(item, None, None, temporal) for item in providers)
-        return PreparedPathQuery(providers, items, None, output_intent, result_context)
-    contexts = tuple(provider_context(item.value, temporal, owner=owner) for item in providers if item.topology == "dynamic")
-    topology = (
-        _object_topology(caller, temporal, contexts, values, owner=owner)
-        if caller is not None
-        else _direct_topology(query, values, contexts, temporal, owner=owner)
+        return PreparedPathQuery(
+            providers,
+            items,
+            None,
+            _output_intent(caller),
+            result_context,
+            result_prototype,
+            result_validate,
+        )
+    return _prepare_dynamic_query(
+        providers,
+        values,
+        query,
+        temporal,
+        result,
+        result_context,
+        owner=owner,
     )
-    items = tuple(
-        _prepare_provider_context(item, projection, topology, temporal, owner=owner)
-        for item, projection in zip(providers, topology.provider_values, strict=True)
-    )
-    prepared = PreparedPathQuery(providers, items, topology, output_intent, result_context)
-    defer_backend_selection = _preflight_batched_metadata(prepared)
-    evaluated = _evaluate_providers(
-        items,
-        topology,
-        defer_backend_selection=defer_backend_selection,
-    )
-    return replace(prepared, items=evaluated)
 
 
 __all__ = [
+    "PathOutputRequest",
     "PreparedPathQuery",
     "PreparedProviderQuery",
     "RequiredProvider",

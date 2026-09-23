@@ -103,7 +103,7 @@ def _caller_metadata_case(caller: Position, case: str) -> Position:
     return Position(ds, graph=caller.graph)
 
 
-def test_spatial_core_batched_path_plan_001_direct_query_is_eligible_but_generic() -> None:
+def test_spatial_core_batched_path_plan_001_direct_query_selects_eager_fallback() -> None:
     """ID: SPATIAL_CORE_BATCHED_PATH_PLAN_001_direct_query_candidate."""
     graph, providers = _registered_path(1)
     path = find_path(graph.get_frame("f1"), graph.get_frame("f0"))
@@ -119,10 +119,10 @@ def test_spatial_core_batched_path_plan_001_direct_query_is_eligible_but_generic
         temporal=PoseTemporalOptions(),
         owner="spatial.path_solve.pose",
     )
-    with patch("tal.spatial.ops.path_execution._numba_available", side_effect=AssertionError):
+    with patch("tal.spatial.ops.path_execution._numba_available", return_value=False):
         execution = prepare_pose_path_execution(path, prepared)
 
-    assert execution.kind == "generic"
+    assert execution.kind == "batched-scipy"
     assert execution.batched is not None
     assert execution.batched.eligible
     assert execution.batched.storage == "eager"

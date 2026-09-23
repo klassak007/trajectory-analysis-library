@@ -494,14 +494,14 @@ def _trajectory_caller_coordinate(
     return transfer_dataarray_metadata(coord, projected)
 
 
-def attach_trajectory_query_coordinates(
+def attach_query_coordinates(
     value: xr.Dataset,
     *,
     topology: QueryTopologyPlan,
     plan: QueryOutputPlan,
     owner: str,
 ) -> xr.Dataset:
-    """Attach caller labels after typed output metadata has been generated."""
+    """Attach caller labels after operation-owned metadata has been generated."""
     caller = restore_result_coordinates(xr.Dataset(), topology.coordinates)
     assert isinstance(caller, xr.Dataset)
     _reject_transform_label_projection(caller, plan=plan, owner=owner)
@@ -528,18 +528,28 @@ def _attach_one_trajectory_coordinate(
     plan: QueryOutputPlan,
     owner: str,
 ) -> xr.Dataset:
-    if name in out.data_vars or (name == plan.sequence_dim and name not in plan.batch_dims):
+    positional_sequence_collision = (
+        plan.intent == "trajectory"
+        and name == plan.sequence_dim
+        and name not in plan.batch_dims
+    )
+    if name in out.data_vars or positional_sequence_collision:
         raise ValueError(f"{owner}: query coordinate {name!r} collides with typed output topology.")
     if name in plan.batch_dims and name in out.xindexes and name in caller.xindexes:
         return out  # The source batch index owns labels after the query was reindexed to it.
-    projected = _trajectory_caller_coordinate(caller.coords[name], topology=topology, plan=plan)
+    projected = (
+        caller.coords[name]
+        if plan.intent == "grid"
+        else _trajectory_caller_coordinate(caller.coords[name], topology=topology, plan=plan)
+    )
     if name not in out.coords:
         return out.assign_coords({name: projected})
     if name not in plan.source_coord_names:
         return out  # The current query has already contributed this coordinate.
     candidate = (
         xr.Dataset(coords={name: projected})
-        if set(plan.query_only_dims).intersection(caller.coords.variables[name].dims)
+        if plan.intent == "trajectory"
+        and set(plan.query_only_dims).intersection(caller.coords.variables[name].dims)
         else caller
     )
     if not _coordinates_compatible(out, candidate, name=name):

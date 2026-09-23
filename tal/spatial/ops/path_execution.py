@@ -20,7 +20,9 @@ from ..kernels.fused_pose_path import fuse_pose_path
 from ..kernels.streaming_pose_path import stream_pose_path_blocks
 from ..metadata import get_pose_rep
 from ..pose import Pose
+from ..position import Position
 from ..temporal.options import resolve_rotation_method
+from .batched_path_execution import execute_eager_batched_path
 from .batched_path_plan import (
     PreparedBatchedPathExecution,
     prepare_batched_path_execution,
@@ -35,7 +37,13 @@ from .path_query_ops import (
 from .path_query_plan import PreparedPathQuery, PreparedProviderQuery
 from .pose_component_ops import resolve_pose_component_specs
 
-PathExecutionKind = Literal["generic", "fused-numba", "scipy-stream"]
+PathExecutionKind = Literal[
+    "generic",
+    "fused-numba",
+    "scipy-stream",
+    "batched-numba",
+    "batched-scipy",
+]
 
 
 @dataclass(frozen=True)
@@ -192,7 +200,9 @@ def prepare_pose_path_execution(
     """Classify one prepared Pose request without inspecting payload values."""
     topology = query.topology
     batched = prepare_batched_path_execution(path, query)
-    if batched is not None or topology is None or topology.query.size == 0 or not _streaming_eligible(query):
+    if batched is not None and batched.eligible and batched.storage == "eager":
+        kind = "batched-numba" if _numba_available() else "batched-scipy"
+    elif batched is not None or topology is None or topology.query.size == 0 or not _streaming_eligible(query):
         kind: PathExecutionKind = "generic"
     elif _numba_available():
         kind = "fused-numba"
@@ -275,7 +285,9 @@ def _execute_streaming(plan: PreparedPosePathExecution, *, owner: str) -> Pose:
     except (TypeError, ValueError) as exc:
         _raise_path_query_execution_error(exc, owner=owner)
     value = Pose._from_unvalidated(_streaming_dataset(provider_arrays[0], result, topology.query_dim))
-    return _restore_output_topology(value, topology, owner=owner)  # type: ignore[return-value]
+    return _restore_output_topology(  # type: ignore[return-value]
+        value, topology, owner=owner, output_plan=plan.query.output_plan,
+    )
 
 
 def _execute_fused(plan: PreparedPosePathExecution, *, owner: str) -> Pose:
@@ -298,16 +310,31 @@ def _execute_fused(plan: PreparedPosePathExecution, *, owner: str) -> Pose:
     except (TypeError, ValueError) as exc:
         _raise_path_query_execution_error(exc, owner=owner)
     value = Pose._from_unvalidated(_streaming_dataset(provider_arrays[0], result, topology.query_dim))
-    return _restore_output_topology(value, topology, owner=owner)  # type: ignore[return-value]
+    return _restore_output_topology(  # type: ignore[return-value]
+        value, topology, owner=owner, output_plan=plan.query.output_plan,
+    )
 
 
-def execute_pose_path(plan: PreparedPosePathExecution, *, owner: str) -> CompletePathQuery | Pose:
+def _execute_batched(plan: PreparedPosePathExecution, *, owner: str):
+    if plan.batched is None:
+        raise ValueError(f"{owner}: batched execution plan is missing.")
+    backend = "numba" if plan.kind == "batched-numba" else "scipy"
+    return execute_eager_batched_path(plan.batched, backend=backend, owner=owner)
+
+
+def execute_pose_path(
+    plan: PreparedPosePathExecution,
+    *,
+    owner: str,
+) -> CompletePathQuery | Pose | Position:
     """Dispatch one frozen Pose request to its accepted executor."""
     require_path_query_coverage(plan.query, owner=owner)
     if plan.kind == "fused-numba":
         return _execute_fused(plan, owner=owner)
     if plan.kind == "scipy-stream":
         return _execute_streaming(plan, owner=owner)
+    if plan.kind in {"batched-numba", "batched-scipy"}:
+        return _execute_batched(plan, owner=owner)
     return execute_path_query(plan.query, owner=owner, coverage_checked=True)
 
 

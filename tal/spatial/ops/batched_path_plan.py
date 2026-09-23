@@ -341,7 +341,7 @@ def prepare_batched_path_execution(
         fastest_dim=topology.query_dim,
     )
     physical = prepare_physical_row_partitions(logical, *arrays)
-    classification = classify_batched_path_metadata(query)
+    classification = query.batched_classification or classify_batched_path_metadata(query)
     parent_frame = path.nodes[-1].id
     child_frame = path.nodes[0].id
     if output == "position" and topology.caller is not None:

@@ -22,6 +22,7 @@ from tal.core.orchestration.topology import (
     resolve_nary_topology,
 )
 from tal.core.schema_read import read_param_coord_name, validate_schema_if_needed
+from tal.core.schema_validate.finalize import transfer_dataarray_metadata
 from tal.utils.frame_schema import set_frames
 from tal.utils.topology_operation_families import (
     operation_intent_support_for_operation_family,
@@ -322,6 +323,10 @@ def _apply_pose_to_position(
         translation_dim=resolved.specs.translation_dim,
         quat_dim=resolved.specs.quat_dim,
         owner=owner,
+    )
+    output = transfer_dataarray_metadata(
+        resolved.specs.target_ds[resolved.specs.target_var],
+        output,
     )
     out_ds = output.to_dataset(name=resolved.specs.target_var)
     out_ds = transfer_dataset_attrs(

@@ -7,6 +7,7 @@ import numpy as np
 import xarray as xr
 
 from tal.core.dataset_ownership import analysis_object_dataset
+from tal.core.param_engine.query_topology import QueryOutputPlan
 from tal.core.param_ops.evaluate import evaluate_param
 from tal.core.schema import set_param_coord, set_roles, set_validity
 from tal.core.schema_read import read_roles, read_sequence_size_coord_name
@@ -16,6 +17,10 @@ from ..rotation import Rotation
 from ..temporal.options import (
     PoseTemporalOptions,
     _validate_pose_temporal_options,
+)
+from .path_query_output import (
+    finalize_path_query_output,
+    prepare_path_query_output_plan,
 )
 from .path_query_plan import (
     PreparedPathQuery,
@@ -109,8 +114,13 @@ def _assign_output_coords(ds: xr.Dataset, topology: OutputTopology) -> xr.Datase
     )
 
 
-def _restore_output_dataset(value: object, topology: OutputTopology) -> xr.Dataset:
-    ds = analysis_object_dataset(value)
+def _restore_output_dataset(
+    value: object,
+    topology: OutputTopology,
+    *,
+    output_plan: QueryOutputPlan | None = None,
+) -> xr.Dataset:
+    ds = value if isinstance(value, xr.Dataset) else analysis_object_dataset(value)
     _, sequence_dim, _, core_dims = read_roles(ds)
     if sequence_dim is None:
         ds = ds.expand_dims({topology.sequence_dim: int(topology.query.sizes[topology.query_dim])})
@@ -129,7 +139,7 @@ def _restore_output_dataset(value: object, topology: OutputTopology) -> xr.Datas
     ds = set_param_coord(ds, name=topology.param_name, validate=False)
     size_name = topology.caller.sequence_size_coord if topology.caller is not None else None
     ds = set_validity(ds, sequence_size_coord=size_name, validate=False)
-    return ds
+    return finalize_path_query_output(ds, plan=output_plan)
 
 
 def _restore_output_topology(
@@ -137,9 +147,10 @@ def _restore_output_topology(
     topology: OutputTopology,
     *,
     owner: str,
+    output_plan: QueryOutputPlan | None = None,
 ) -> object:
     try:
-        ds = _restore_output_dataset(value, topology)
+        ds = _restore_output_dataset(value, topology, output_plan=output_plan)
         return value.__class__._from_unvalidated(ds)
     except (KeyError, TypeError, ValueError) as exc:
         text = str(exc)
@@ -155,56 +166,67 @@ def _raise_path_query_execution_error(exc: TypeError | ValueError, *, owner: str
     raise type(exc)(f"{owner}: {exc}") from exc
 
 
+def _evaluate_provider_payload(
+    item: PreparedProviderQuery,
+    topology: OutputTopology,
+    *,
+    owner: str,
+) -> object:
+    context = item.context
+    if item.projection is None or context is None:
+        raise ValueError(f"{owner}: dynamic provider plan is incomplete.")
+    aligned = item.projection.value
+    effective = item.temporal
+    if isinstance(aligned, Pose):
+        return pose_param_at(
+            aligned, query=topology.query, on=effective.on, opts=effective,
+            validate=False, sequence_dim=None, batch_dims=None,
+            sequence_size_coord=None, owner=owner,
+            prepared=PreparedPoseEvaluation(item.evaluations[0], item.evaluations[-1]),
+        )
+    if isinstance(aligned, Rotation):
+        return rotation_param_at(
+            aligned, query=topology.query, on=effective.on,
+            opts=effective.rotation_opts, validate=False, sequence_dim=None,
+            batch_dims=None, sequence_size_coord=None, owner=owner,
+            prepared=item.evaluations[0],
+        )
+    return evaluate_param(
+        context, query=topology.query, opts=effective.position_opts,
+        validate=False, prepared=item.evaluations[0],
+    )
+
+
+def _provider_output_plan(
+    item: PreparedProviderQuery,
+    topology: OutputTopology,
+    *,
+    owner: str,
+) -> QueryOutputPlan:
+    if item.projection is None:
+        raise ValueError(f"{owner}: provider projection is incomplete.")
+    return prepare_path_query_output_plan(
+        topology,
+        source=item.projection.value,
+        retain_sequence_coords=False,
+        owner=owner,
+    )
+
+
 def _evaluate_dynamic(
     item: PreparedProviderQuery,
     topology: OutputTopology,
     *,
     owner: str,
 ) -> object:
-    projection = item.projection
-    context = item.context
-    if projection is None or context is None:
-        raise ValueError(f"{owner}: dynamic provider plan is incomplete.")
-    aligned = projection.value
-    effective = item.temporal
+    output_plan = _provider_output_plan(item, topology, owner=owner)
     try:
-        if isinstance(aligned, Pose):
-            evaluated = pose_param_at(
-                aligned,
-                query=topology.query,
-                on=effective.on,
-                opts=effective,
-                validate=False,
-                sequence_dim=None,
-                batch_dims=None,
-                sequence_size_coord=None,
-                owner=owner,
-                prepared=PreparedPoseEvaluation(item.evaluations[0], item.evaluations[-1]),
-            )
-        elif isinstance(aligned, Rotation):
-            evaluated = rotation_param_at(
-                aligned,
-                query=topology.query,
-                on=effective.on,
-                opts=effective.rotation_opts,
-                validate=False,
-                sequence_dim=None,
-                batch_dims=None,
-                sequence_size_coord=None,
-                owner=owner,
-                prepared=item.evaluations[0],
-            )
-        else:
-            evaluated = evaluate_param(
-                context,
-                query=topology.query,
-                opts=effective.position_opts,
-                validate=False,
-                prepared=item.evaluations[0],
-            )
+        evaluated = _evaluate_provider_payload(item, topology, owner=owner)
     except (TypeError, ValueError) as exc:
         _raise_path_query_execution_error(exc, owner=owner)
-    return _restore_output_topology(evaluated, topology, owner=owner)
+    return _restore_output_topology(
+        evaluated, topology, owner=owner, output_plan=output_plan,
+    )
 
 
 def _broadcast_static(
@@ -215,7 +237,10 @@ def _broadcast_static(
 ) -> object:
     if item.projection is None:
         raise ValueError(f"{owner}: static provider plan is incomplete.")
-    return _restore_output_topology(item.projection.value, topology, owner=owner)
+    output_plan = _provider_output_plan(item, topology, owner=owner)
+    return _restore_output_topology(
+        item.projection.value, topology, owner=owner, output_plan=output_plan,
+    )
 
 
 def require_path_query_coverage(plan: PreparedPathQuery, *, owner: str) -> None:

@@ -7,15 +7,22 @@ import numpy as np
 from tal.utils.numba_support import njit_kernel, require_numba
 
 from . import fixed_size_primitives as _fixed
+from .path_kernel_status import (
+    PATH_STATUS_INVALID_ALPHA,
+    PATH_STATUS_INVALID_BRACKET,
+    PATH_STATUS_INVALID_DIRECTION,
+    PATH_STATUS_OK,
+    PathKernelFailure,
+    raise_path_kernel_failure,
+)
 from .rotation_interp_numba_backends import _compile_slerp_dependencies
 from .rotation_interp_reference import half_turn_tolerance
 from .streaming_pose_path import stream_pose_path_blocks
 
-_OK = 0
-_INVALID_QUATERNION = 1
-_INVALID_ALPHA = 2
-_INVALID_BRACKET = 3
-_INVALID_DIRECTION = 4
+_OK = PATH_STATUS_OK
+_INVALID_ALPHA = PATH_STATUS_INVALID_ALPHA
+_INVALID_BRACKET = PATH_STATUS_INVALID_BRACKET
+_INVALID_DIRECTION = PATH_STATUS_INVALID_DIRECTION
 _AMBIGUOUS_ARC = 3
 _REPAIR_BLOCK_SIZE = 65_536
 _PARALLEL_MIN_ROWS = 100_000
@@ -141,13 +148,7 @@ def _raise_first_failure(status: np.ndarray, edges: np.ndarray) -> None:
     if first is None:
         return
     edge, query = first
-    descriptions = {
-        _INVALID_QUATERNION: "quaternion norm must be finite and > 0",
-        _INVALID_ALPHA: "finite alpha values must be within [0, 1]",
-        _INVALID_BRACKET: "parameter bracket index is out of range",
-        _INVALID_DIRECTION: "path direction must be +1 or -1",
-    }
-    raise ValueError(f"edge {edge}, query {query}: {descriptions[int(status[query])]}")
+    raise_path_kernel_failure(PathKernelFailure(edge, query, int(status[query])))
 
 
 def _repair_principal_arcs(

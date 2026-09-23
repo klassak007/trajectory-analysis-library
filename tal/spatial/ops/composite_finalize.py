@@ -117,11 +117,23 @@ def project_paired_spatial_metadata(
     return _schema_projection_view(candidate, candidate, extensions=ext)
 
 
+def _component_commit(
+    components: tuple[tuple[str, ComponentSpec], ...] | None | object,
+) -> _ComponentRegistryCommit:
+    if components is UNSET:
+        return _ComponentRegistryCommit(action="preserve")
+    if components is None:
+        return _ComponentRegistryCommit(action="prune")
+    if not isinstance(components, tuple):
+        raise TypeError("spatial composite commit: invalid component registry plan.")
+    return _ComponentRegistryCommit(action="replace", entries=components)
+
+
 def commit_spatial_composite(
     candidate: xr.Dataset,
     *,
     schema: CoreSchemaFinalizeSpec,
-    components: tuple[tuple[str, ComponentSpec], ...] | None,
+    components: tuple[tuple[str, ComponentSpec], ...] | None | object,
     prototype: AnalysisObject | type[AnalysisObject],
     association: SpatialAssociationPlan,
     resource_sources: Sequence[xr.Dataset],
@@ -134,11 +146,7 @@ def commit_spatial_composite(
         owner=owner,
         validate=validate,
         schema=schema,
-        components=(
-            _ComponentRegistryCommit(action="prune")
-            if components is None
-            else _ComponentRegistryCommit(action="replace", entries=components)
-        ),
+        components=_component_commit(components),
         prototype=prototype,
         result_context=association,
         resource_action=_prepare_ordered_resource_action(resource_sources),

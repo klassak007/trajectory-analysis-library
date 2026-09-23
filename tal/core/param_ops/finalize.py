@@ -16,7 +16,7 @@ from ..param_engine.query_output_verify import verify_query_output_plan
 from ..param_engine.query_topology import (
     QueryOutputPlan,
     QueryTopologyPlan,
-    attach_trajectory_query_coordinates,
+    attach_query_coordinates,
     restore_query_topology,
 )
 from ..schema_update import source_schema_view
@@ -119,7 +119,7 @@ def _finalize_trajectory_coordinates(
     if output_plan is not None and output_plan.intent == "trajectory" and query_topology is not None:
         if output_plan.topology is not query_topology:
             raise ValueError(f"{owner}: typed output plan does not match the prepared query topology.")
-        ds_out = attach_trajectory_query_coordinates(
+        ds_out = attach_query_coordinates(
             ds_out, topology=query_topology, plan=output_plan, owner=owner,
         )
     return ds_out

@@ -9,7 +9,7 @@ from tal.core.schema_errors import SchemaError
 from tal.frames import Frame, FramePath, find_path, fold_path
 from tal.utils.frame_schema import set_frames
 
-from ..association import attach_spatial_association
+from ..association import attach_spatial_association, finalize_spatial_from_source
 from ..metadata import get_pose_rep, set_expressed_in, set_pose_rep, set_rotation_rep
 from ..pose import Pose
 from ..position import Position
@@ -30,12 +30,19 @@ from .path_configuration import (
     require_strict_path_policy,
     resolve_path_endpoint_plan,
 )
-from .path_execution import execute_pose_path, prepare_pose_path_execution
+from .path_execution import (
+    PreparedPosePathExecution,
+    execute_pose_path,
+    prepare_pose_path_execution,
+)
 from .path_query_ops import (
+    CompletePathQuery,
     execute_path_query,
     prepare_path_query,
     require_path_temporal_options,
 )
+from .path_query_output import finalize_path_query_output
+from .path_query_plan import PathOutputRequest
 from .pose_ops import _pose_compose_with_owner, _pose_inverse_with_owner
 from .pose_provider_ops import (
     normalize_edge_provider_dataset,
@@ -330,7 +337,12 @@ def solve_rotation_path_transform_impl(
     result = _fold_rotation_path(path, complete.values, owner=owner)
     if result is None:
         return _associated_rotation_identity(endpoints, owner=owner)
-    return _finalize_rotation_path(result, endpoints, owner=owner)
+    final = _finalize_rotation_path(result, endpoints, owner=owner)
+    return _verify_completed_query_result(
+        final,
+        output_plan=query_plan.output_plan,
+        validate=query_plan.result_validate,
+    )
 
 
 def _associated_pose_identity(
@@ -385,6 +397,84 @@ def _fold_pose_path(path: FramePath, values: tuple[Rotation | Pose, ...], *, own
     return result
 
 
+def _path_output_request(caller: object | None) -> PathOutputRequest:
+    if isinstance(caller, PathOutputRequest):
+        return caller
+    prototype = caller if isinstance(caller, Position) else Pose
+    return PathOutputRequest(caller, prototype, True)
+
+
+def _verify_completed_query_result(
+    value: Pose | Position | Rotation,
+    *,
+    output_plan,
+    validate: bool,
+):
+    source = analysis_object_dataset(value)
+    completed = finalize_path_query_output(source, plan=output_plan)
+    if completed is source:
+        return value
+    return finalize_spatial_from_source(value, type(value), completed, validate=validate)
+
+
+def _apply_completed_position_path(
+    transform: Pose,
+    execution: PreparedPosePathExecution,
+    endpoints: ResolvedPathEndpointPlan,
+    *,
+    owner: str,
+) -> Position:
+    topology = execution.query.topology
+    if topology is None or topology.caller is None:
+        raise ValueError(f"{owner}: Position path result is missing caller topology.")
+    from ..policies.wrap import wrap_like
+    from .pose_apply_ops import _pose_apply_with_owner
+
+    caller = topology.caller.ao
+    applied = _pose_apply_with_owner(
+        transform, caller, validate=False, owner=owner,
+        association=endpoints.association,
+    )
+    dataset = finalize_path_query_output(
+        analysis_object_dataset(applied),
+        plan=execution.query.output_plan,
+    )
+    result = wrap_like(caller, dataset, validate=execution.query.result_validate)
+    return attach_spatial_association(result, endpoints.association)
+
+
+def _finalize_prepared_pose_path(
+    complete: CompletePathQuery | Pose | Position,
+    execution: PreparedPosePathExecution,
+    path: FramePath,
+    endpoints: ResolvedPathEndpointPlan,
+    *,
+    owner: str,
+) -> Pose | Position:
+    if isinstance(complete, Position):
+        return complete
+    if isinstance(complete, Pose):
+        if execution.kind.startswith("batched-"):
+            return complete
+        return _finalize_pose_path(complete, endpoints, owner=owner)
+    result = _fold_pose_path(path, complete.values, owner=owner)
+    if result is None:
+        return _associated_pose_identity(endpoints, owner=owner)
+    transform = _finalize_pose_path(result, endpoints, owner=owner)
+    if execution.query.output_intent == "position":
+        topology = execution.query.topology
+        if topology is None or topology.caller is None:
+            return transform
+        return _apply_completed_position_path(
+            transform, execution, endpoints, owner=owner,
+        )
+    return _verify_completed_query_result(
+        transform,
+        output_plan=execution.query.output_plan,
+        validate=execution.query.result_validate,
+    )
+
+
 def solve_pose_path_transform_impl(
     src: object,
     dst: object,
@@ -395,7 +485,8 @@ def solve_pose_path_transform_impl(
     caller: object | None = None,
     owner: str = "spatial.path_solve.pose",
     prepared_resolver: PreparedEdgeResolver | None = None,
-) -> Pose:
+) -> Pose | Position:
+    output_request = _path_output_request(caller)
     endpoints = resolve_path_endpoint_plan(
         configuration,
         src=src,
@@ -418,20 +509,19 @@ def solve_pose_path_transform_impl(
     query_plan = prepare_path_query(
         values,
         query=query,
-        caller=caller,
+        caller=output_request.caller,
         temporal=temporal,
         owner=owner,
         source_representations=tuple(item[1] for item in acquired),
         result_context=endpoints.association,
+        result_prototype=output_request.prototype,
+        result_validate=output_request.validate,
     )
     execution = prepare_pose_path_execution(path, query_plan)
     complete = execute_pose_path(execution, owner=owner)
-    if isinstance(complete, Pose):
-        return _finalize_pose_path(complete, endpoints, owner=owner)
-    result = _fold_pose_path(path, complete.values, owner=owner)
-    if result is None:
-        return _associated_pose_identity(endpoints, owner=owner)
-    return _finalize_pose_path(result, endpoints, owner=owner)
+    return _finalize_prepared_pose_path(
+        complete, execution, path, endpoints, owner=owner,
+    )
 
 
 __all__ = [
