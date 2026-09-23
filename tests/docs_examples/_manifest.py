@@ -452,7 +452,7 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "tal.geo.projected.ProjectedPosition.to_crs": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
     "tal.geo.from_ecef": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
     "tal.geo.transform_crs": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.astro.sun.SpiceSunOptions": ("Parameters", "Notes", "Examples"),
+    "tal.astro.sun.SpiceSunOptions": ("Notes", "Examples"),
     "tal.astro.sun.SunDirectionOptions": ("Parameters", "Notes", "Examples"),
     "tal.astro.sun.direction_to_sun": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
     "tal.astro.direction.TopocentricDirection.to_vector3": ("Parameters", "Returns", "Raises", "Notes", "Examples"),

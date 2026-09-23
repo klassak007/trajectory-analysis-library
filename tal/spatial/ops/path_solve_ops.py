@@ -41,7 +41,7 @@ from .path_query_ops import (
     prepare_path_query,
     require_path_temporal_options,
 )
-from .path_query_output import finalize_path_query_output
+from .path_query_output import PathBasisResult, finalize_path_query_output
 from .path_query_plan import PathOutputRequest
 from .pose_ops import _pose_compose_with_owner, _pose_inverse_with_owner
 from .pose_provider_ops import (
@@ -313,7 +313,8 @@ def solve_rotation_path_transform_impl(
     caller: object | None = None,
     owner: str = "spatial.path_solve.rotation",
     prepared_resolver: PreparedEdgeResolver | None = None,
-) -> Rotation:
+) -> Rotation | PathBasisResult:
+    request = _path_output_request(caller)
     endpoints = resolve_path_endpoint_plan(
         configuration,
         src=src,
@@ -321,7 +322,7 @@ def solve_rotation_path_transform_impl(
         owner=owner,
     )
     if endpoints.is_identity:
-        return _associated_rotation_identity(endpoints, owner=owner)
+        return _basis_result(_associated_rotation_identity(endpoints, owner=owner), request)
     require_strict_path_policy(endpoints.configuration.options.strict, owner=owner)
     prepared = prepared_resolver or prepare_edge_resolver(
         edge_rotation_fn,
@@ -332,17 +333,20 @@ def solve_rotation_path_transform_impl(
     temporal = require_path_temporal_options(endpoints.configuration.options.temporal, owner=owner)
     _preflight_bound_path(path, prepared, owner=owner)
     values = _acquire_path_values(path, prepared, kind="rotation", owner=owner)
-    query_plan = prepare_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    query_plan = prepare_path_query(
+        values, query=query, caller=request.caller, temporal=temporal, owner=owner, basis=request.basis,
+    )
     complete = execute_path_query(query_plan, owner=owner)
     result = _fold_rotation_path(path, complete.values, owner=owner)
     if result is None:
-        return _associated_rotation_identity(endpoints, owner=owner)
+        return _basis_result(_associated_rotation_identity(endpoints, owner=owner), request)
     final = _finalize_rotation_path(result, endpoints, owner=owner)
-    return _verify_completed_query_result(
+    final = _verify_completed_query_result(
         final,
         output_plan=query_plan.output_plan,
         validate=query_plan.result_validate,
     )
+    return _basis_result(final, request, query_plan.caller_output_plan)
 
 
 def _associated_pose_identity(
@@ -395,6 +399,12 @@ def _fold_pose_path(path: FramePath, values: tuple[Rotation | Pose, ...], *, own
         identity=lambda: None,
     )
     return result
+
+
+def _basis_result(value, request, output_plan=None):
+    if request.basis:
+        return PathBasisResult(value, request.caller, output_plan)
+    return value
 
 
 def _path_output_request(caller: object | None) -> PathOutputRequest:
@@ -485,7 +495,7 @@ def solve_pose_path_transform_impl(
     caller: object | None = None,
     owner: str = "spatial.path_solve.pose",
     prepared_resolver: PreparedEdgeResolver | None = None,
-) -> Pose | Position:
+) -> Pose | Position | PathBasisResult:
     output_request = _path_output_request(caller)
     endpoints = resolve_path_endpoint_plan(
         configuration,
@@ -494,7 +504,7 @@ def solve_pose_path_transform_impl(
         owner=owner,
     )
     if endpoints.is_identity:
-        return _associated_pose_identity(endpoints, owner=owner)
+        return _basis_result(_associated_pose_identity(endpoints, owner=owner), output_request)
     require_strict_path_policy(endpoints.configuration.options.strict, owner=owner)
     prepared = prepared_resolver or prepare_edge_resolver(
         edge_pose_fn,
@@ -516,12 +526,14 @@ def solve_pose_path_transform_impl(
         result_context=endpoints.association,
         result_prototype=output_request.prototype,
         result_validate=output_request.validate,
+        basis=output_request.basis,
     )
     execution = prepare_pose_path_execution(path, query_plan)
     complete = execute_pose_path(execution, owner=owner)
-    return _finalize_prepared_pose_path(
+    final = _finalize_prepared_pose_path(
         complete, execution, path, endpoints, owner=owner,
     )
+    return _basis_result(final, output_request, query_plan.caller_output_plan)
 
 
 __all__ = [

@@ -16,6 +16,16 @@ from tal.spatial.kernels import rotation_interp_backends as interpolation
 from tal.spatial.kernels import rotation_interp_reference as reference
 
 
+def test_spatial_slerp_equal_endpoints_match_scipy_normalization() -> None:
+    endpoints = np.asarray([[0.0, 0.0, 0.0, 2.0], [1.0, -2.0, 3.0, 4.0], [3.0, 0.0, 0.0, 1.0]])
+    alpha = np.asarray([0.25, 0.75, np.nan])
+    valid = np.asarray([True, True, False])
+    actual = interpolation.slerp_quat_backend(endpoints, endpoints, alpha, valid, backend="scipy")
+    expected = reference.scipy_slerp_rows(endpoints[:2], endpoints[:2], alpha[:2], owner="test")
+    np.testing.assert_allclose(actual[:2], expected, rtol=0.0, atol=1e-15)
+    assert np.isnan(actual[2]).all()
+
+
 def _endpoint_pairs(dtype: np.dtype) -> np.ndarray:
     reported = np.asarray([
         [[1, 1, 1, 3], [-1, 1, -3, 1]],

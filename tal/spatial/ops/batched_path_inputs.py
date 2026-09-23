@@ -148,6 +148,22 @@ def _pack_providers(
     return tuple(providers), tuple(maps)
 
 
+def pack_batched_path_maps(
+    plan: PreparedBatchedPathExecution,
+) -> tuple[tuple[PackedPathMap, ...], tuple[tuple[int, int], ...]]:
+    """Realize compact prepared maps once, without touching numerical payloads."""
+    maps: list[PackedPathMap] = []
+    indexes: dict[int, int] = {}
+    pairs = tuple(
+        (
+            _map_index(item.evaluations[0], plan, indexes, maps),
+            _map_index(item.evaluations[-1], plan, indexes, maps),
+        )
+        for item in plan.query.items
+    )
+    return tuple(maps), pairs
+
+
 def _pack_caller(
     plan: PreparedBatchedPathExecution,
 ) -> tuple[np.ndarray | None, np.ndarray | None, tuple[str, ...], tuple[int, ...]]:
@@ -188,4 +204,5 @@ __all__ = [
     "PackedPathMap",
     "PackedPathProvider",
     "pack_batched_path_inputs",
+    "pack_batched_path_maps",
 ]

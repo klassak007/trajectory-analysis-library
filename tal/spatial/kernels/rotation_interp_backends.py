@@ -16,7 +16,13 @@ def _slerp_valid_rows(block: SlerpBlock, *, owner: str) -> np.ndarray:
     alpha = block.alpha.astype(np.float64, copy=False)
     active = block.valid.astype(bool, copy=False) & np.isfinite(alpha)
     alpha_error = active & ((alpha < 0.0) | (alpha > 1.0))
-    quat_error = active & (invalid_quaternion_rows(block.left) | invalid_quaternion_rows(block.right))
+    equal_endpoints = np.array_equal(block.left[active], block.right[active])
+    if equal_endpoints:
+        with np.errstate(invalid="ignore", over="ignore"):
+            norms = np.linalg.norm(block.left.astype(np.float64), axis=-1)
+        quat_error = active & (~np.isfinite(norms) | (norms <= 0.0))
+    else:
+        quat_error = active & (invalid_quaternion_rows(block.left) | invalid_quaternion_rows(block.right))
     failures = np.flatnonzero(alpha_error | quat_error)
     if failures.size and alpha_error[failures[0]]:
         raise ValueError(f"{owner}: finite alpha values must be within [0, 1].")
@@ -24,7 +30,12 @@ def _slerp_valid_rows(block: SlerpBlock, *, owner: str) -> np.ndarray:
         raise ValueError(f"{owner}: quaternion norm must be finite and > 0.")
     out = np.full(block.left.shape, np.nan, dtype=np.float64)
     if np.any(active):
-        out[active] = scipy_slerp_rows(block.left[active], block.right[active], alpha[active], owner=owner)
+        left = block.left[active]
+        right = block.right[active]
+        if equal_endpoints:
+            out[active] = left / norms[active, None]
+        else:
+            out[active] = scipy_slerp_rows(left, right, alpha[active], owner=owner)
     return out
 
 

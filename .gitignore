@@ -22,3 +22,6 @@ docs/api/types/_generated/
 *.log
 *.tmp
 .pytest_cache/
+
+# Local benchmark measurements
+/benchmarks/results/

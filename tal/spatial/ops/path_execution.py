@@ -43,6 +43,7 @@ PathExecutionKind = Literal[
     "scipy-stream",
     "batched-numba",
     "batched-scipy",
+    "batched-dask",
 ]
 
 
@@ -202,6 +203,8 @@ def prepare_pose_path_execution(
     batched = prepare_batched_path_execution(path, query)
     if batched is not None and batched.eligible and batched.storage == "eager":
         kind = "batched-numba" if _numba_available() else "batched-scipy"
+    elif batched is not None and batched.eligible and batched.storage == "dask":
+        kind = "batched-dask"
     elif batched is not None or topology is None or topology.query.size == 0 or not _streaming_eligible(query):
         kind: PathExecutionKind = "generic"
     elif _numba_available():
@@ -318,6 +321,10 @@ def _execute_fused(plan: PreparedPosePathExecution, *, owner: str) -> Pose:
 def _execute_batched(plan: PreparedPosePathExecution, *, owner: str):
     if plan.batched is None:
         raise ValueError(f"{owner}: batched execution plan is missing.")
+    if plan.kind == "batched-dask":
+        from .batched_path_dask import execute_dask_batched_path
+
+        return execute_dask_batched_path(plan.batched, owner=owner)
     backend = "numba" if plan.kind == "batched-numba" else "scipy"
     return execute_eager_batched_path(plan.batched, backend=backend, owner=owner)
 
@@ -333,7 +340,7 @@ def execute_pose_path(
         return _execute_fused(plan, owner=owner)
     if plan.kind == "scipy-stream":
         return _execute_streaming(plan, owner=owner)
-    if plan.kind in {"batched-numba", "batched-scipy"}:
+    if plan.kind in {"batched-numba", "batched-scipy", "batched-dask"}:
         return _execute_batched(plan, owner=owner)
     return execute_path_query(plan.query, owner=owner, coverage_checked=True)
 

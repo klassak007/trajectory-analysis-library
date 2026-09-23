@@ -332,29 +332,37 @@ def _interpolate_param_block(
     param_map: ParamMap,
     sequence_dim: str,
 ) -> xr.DataArray:
-    max_index = int(values.sizes[sequence_dim] - 1)
-    param_map = ParamMap(
-        i0=param_map.i0.clip(min=0, max=max_index),
-        i1=param_map.i1.clip(min=0, max=max_index),
-        alpha=param_map.alpha,
-        valid=param_map.valid,
-        query_dim=param_map.query_dim,
-    )
     query_dim = param_map.query_dim
-    left = gather_sequence_block(
+    out = xr.apply_ufunc(
+        _interpolate_param_values,
         values,
         param_map.i0,
-        sequence_dim=sequence_dim,
-        query_dim=query_dim,
-    )
-    right = gather_sequence_block(
-        values,
         param_map.i1,
-        sequence_dim=sequence_dim,
-        query_dim=query_dim,
+        param_map.alpha,
+        param_map.valid,
+        input_core_dims=[[sequence_dim], *([[query_dim]] * 4)],
+        output_core_dims=[[query_dim]],
+        vectorize=False,
+        dask="parallelized",
+        dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[_mapped_output_dtype(values)],
     )
-    blended = ((1.0 - param_map.alpha) * left + param_map.alpha * right).transpose(*left.dims)
-    return blended.where(param_map.valid, np.nan)
+    outer = [dim for dim in values.dims if dim != sequence_dim]
+    outer.extend(dim for dim in param_map.i0.dims if dim != query_dim and dim not in outer)
+    return out.transpose(*(outer + [query_dim]))
+
+
+def _interpolate_param_values(
+    values: np.ndarray,
+    i0: np.ndarray,
+    i1: np.ndarray,
+    alpha: np.ndarray,
+    valid: np.ndarray,
+) -> np.ndarray:
+    max_index = values.shape[-1] - 1
+    left = _gather_block(values, np.clip(i0, 0, max_index))
+    right = _gather_block(values, np.clip(i1, 0, max_index))
+    return np.where(valid, (1.0 - alpha) * left + alpha * right, np.nan)
 
 
 def _apply_param_map_blocks(
@@ -365,15 +373,9 @@ def _apply_param_map_blocks(
     logical_dims: tuple[str, ...] | None,
     plan: LogicalRowBlockPlan,
 ) -> xr.DataArray:
+    from .map_apply_dask import apply_lazy_param_map
+
     query_dim = param_map.query_dim
-    blocks = (
-        _interpolate_param_block(
-            select_logical_block(values, block),
-            param_map=_slice_param_map(param_map, block),
-            sequence_dim=sequence_dim,
-        )
-        for block in plan.blocks
-    )
     template = _gather_output_template(
         values,
         param_map.i0,
@@ -381,6 +383,20 @@ def _apply_param_map_blocks(
         query_dim=query_dim,
         logical_dims=plan.dims,
         dtype=_mapped_output_dtype(values),
+    )
+    operands = (values, param_map.i0, param_map.i1, param_map.alpha, param_map.valid)
+    if any(value.chunks is not None for value in operands):
+        return apply_lazy_param_map(
+            values, param_map=param_map, sequence_dim=sequence_dim, plan=plan,
+            template=template, kernel=_interpolate_param_values,
+        )
+    blocks = (
+        _interpolate_param_block(
+            select_logical_block(values, block),
+            param_map=_slice_param_map(param_map, block),
+            sequence_dim=sequence_dim,
+        )
+        for block in plan.blocks
     )
     return assemble_logical_blocks(
         blocks,

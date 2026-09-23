@@ -43,6 +43,7 @@ from .kinematics_frame_finalize_ops import (
     with_relation_semantics as _with_relation_semantics,
 )
 from .path_configuration import SelectedPathConfiguration, select_identity_graph
+from .path_query_plan import PathOutputRequest
 
 if TYPE_CHECKING:
     from ..acceleration import Acceleration, AngularAcceleration, LinearAcceleration
@@ -303,11 +304,11 @@ def _apply_vector_expression(
             edge_rotation_fn=request.edge_fn,
             configuration=path_request.configuration,
             prepared_resolver=path_request.resolver,
-            caller=source,
+            caller=PathOutputRequest(source, None, False, basis=True),
             owner=owner,
         )
     out = _rotation_apply_with_owner(
-        clear_framing(solved, owner=owner),
+        clear_framing(solved.value, owner=owner),
         source,
         validate=False,
         owner=owner,
@@ -318,7 +319,7 @@ def _apply_vector_expression(
         relation=relation,
         destination=destination,
         request=request,
-        graph=path_request.configuration.graph, owner=owner,
+        graph=path_request.configuration.graph, owner=owner, basis=solved,
     )
 
 

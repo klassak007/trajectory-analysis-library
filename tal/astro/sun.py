@@ -11,7 +11,13 @@ from tal.core.schema_read import read_roles
 from .backends.astropy import compute_sun_altaz
 from .direction import TopocentricDirection
 from .finalize import finalize_topocentric_direction
-from .options import AstroBackend, AstroIERSOptions, AstroTimeOptions, coerce_iers_options, coerce_time_options
+from .options import (
+    AstroBackend,
+    AstroIERSOptions,
+    AstroTimeOptions,
+    coerce_iers_options,
+    coerce_time_options,
+)
 from .orchestration import (
     AstroDirectionRuntimeContext,
     AstroObserverContext,
@@ -33,8 +39,6 @@ _AZIMUTH_VAR = "azimuth_deg"
 class SpiceSunOptions:
     """Reserved SPICE Sun-direction options.
 
-    Parameters
-    ----------
     No fields are defined in A2. The class is intentionally zero-field until
     SPICE execution is implemented.
 
@@ -58,7 +62,8 @@ class SunDirectionOptions:
 
     Parameters
     ----------
-    backend : {'astropy', 'spice'}, optional
+    backend : str, optional
+        Allowed values: ``'astropy'``, ``'spice'``.
         Requested astronomy backend. A2 executes only ``"astropy"``.
     time : AstroTimeOptions | None, optional
         Time scale and optional observer source coordinate.

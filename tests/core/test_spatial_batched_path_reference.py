@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 
 import numpy as np
@@ -11,6 +12,7 @@ from benchmarks._batched_path_direct_executor import execute_direct_packed
 from benchmarks._batched_path_process_protocol import (
     measure_batched_rss,
     measure_cold_public,
+    run_benchmark_cli,
 )
 from benchmarks._spatial_path_execution_routes import _public_case
 from benchmarks.bench_batched_fused_path_reference import (
@@ -69,6 +71,7 @@ def test_spatial_bench_batched_path_reference_001_reduced_protocol_reports_separ
     assert reference["median_seconds"] > 0.0
     assert reference["median_peak_bytes"] > 0
     assert report["public_result_shape"] == report["direct_result_shape"] == (2, 9)
+    assert report["dask_134c"]["all_gates_pass"] == all(report["dask_134c"]["gate_pass"].values())
     environment = report["environment"]
     assert environment["selected_backend"] in {"numba", "scipy"}
     if environment["selected_backend"] == "numba":
@@ -77,6 +80,21 @@ def test_spatial_bench_batched_path_reference_001_reduced_protocol_reports_separ
     else:
         assert environment["numba_threads"] == "not-selected"
         assert environment["numba_threading_layer"] == "not-selected"
+
+
+@pytest.mark.parametrize("passed", (False, True))
+def test_spatial_bench_batched_path_134c_gate_check_reports_exit_status(
+    passed: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["benchmark", "--check-134c"])
+    report = lambda: {"dask_134c": {"all_gates_pass": passed}}
+    if passed:
+        run_benchmark_cli(report)
+    else:
+        with pytest.raises(SystemExit) as caught:
+            run_benchmark_cli(report)
+        assert caught.value.code == 1
+    assert '"all_gates_pass": ' in capsys.readouterr().out
 
 
 def test_spatial_bench_batched_path_execution_001_isolated_rss_protocol() -> None:

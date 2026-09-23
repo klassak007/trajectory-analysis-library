@@ -33,7 +33,7 @@ class GeodeticParamAccessor(ParamAccessor):
         sequence_dim: str | None = None,
         batch_dims: Sequence[str] | None = None,
         sequence_size_coord: str | None = None,
-    ) -> "GeodeticPosition":
+    ) -> GeodeticPosition:
         """Evaluate geodetic LLA values at param queries.
 
         Parameters
@@ -115,7 +115,7 @@ class GeodeticParamAccessor(ParamAccessor):
         sequence_dim: str | None = None,
         batch_dims: Sequence[str] | None = None,
         sequence_size_coord: str | None = None,
-    ) -> "GeodeticPosition":
+    ) -> GeodeticPosition:
         """Resample geodetic LLA values to a target param grid.
 
         Parameters
@@ -197,7 +197,7 @@ class GeodeticParamAccessor(ParamAccessor):
         sequence_dim: str | None = None,
         batch_dims: Sequence[str] | None = None,
         sequence_size_coord: str | None = None,
-    ) -> "GeodeticPosition":
+    ) -> GeodeticPosition:
         """Interpolate geodetic LLA values onto another object's param grid.
 
         Parameters
@@ -210,7 +210,8 @@ class GeodeticParamAccessor(ParamAccessor):
         opts : GeodeticInterpolationOptions | None, optional
             Geodetic interpolation options including ``method``,
             ``longitude_wrap``, ``duplicate_policy``, and ``query_dim``.
-        batch_join : {'inner', 'left'}, optional
+        batch_join : str, optional
+            Allowed values: ``'inner'``, ``'left'``.
             Batch join policy accepted for API parity with core param
             interpolation. Batched ``'inner'`` joins fail closed; use
             ``'left'`` or pass an explicit aligned query to :meth:`resample_to`.

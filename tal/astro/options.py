@@ -20,7 +20,8 @@ class AstroIERSOptions:
     ----------
     auto_download : bool, optional
         Whether astronomy backends may download IERS data.
-    degraded_accuracy : {'error', 'warn', 'ignore'}, optional
+    degraded_accuracy : str, optional
+        Allowed values: ``'error'``, ``'warn'``, ``'ignore'``.
         Policy for backend degraded-accuracy conditions.
 
     Examples
@@ -40,7 +41,8 @@ class AstroTimeOptions:
 
     Parameters
     ----------
-    scale : {'utc', 'tai', 'tt', 'tdb'}, optional
+    scale : str, optional
+        Allowed values: ``'utc'``, ``'tai'``, ``'tt'``, ``'tdb'``.
         Time scale recorded in astro metadata and passed to future backends.
     source : str | None, optional
         Optional coordinate name used when time is resolved from an observer
@@ -63,7 +65,8 @@ class AstroOptions:
 
     Parameters
     ----------
-    backend : {'astropy', 'spice'}, optional
+    backend : str, optional
+        Allowed values: ``'astropy'``, ``'spice'``.
         Requested astronomy backend. A1 records this option but does not
         dispatch Sun calculations.
     time : AstroTimeOptions | None, optional

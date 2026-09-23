@@ -23,6 +23,7 @@ from .kinematics_path_support_ops import (
 )
 from .path_configuration import resolve_path_endpoint, resolve_path_endpoint_plan
 from .path_query_ops import complete_path_query, require_path_temporal_options
+from .path_query_output import PathBasisResult
 from .path_solve_ops import (
     _finalize_pose_path,
     _finalize_rotation_path,
@@ -265,7 +266,8 @@ def _express_motion_payload(
     path_request = PreparedFramePathRequest(
         prepared.configuration,
         prepared.resolver,
-        solved=solved,
+        # These payloads already share the completed provider query topology.
+        solved=PathBasisResult(solved, payload, None),
     )
     return _express_motion_in_selected_basis(
         payload,

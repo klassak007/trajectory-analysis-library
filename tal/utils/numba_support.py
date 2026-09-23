@@ -24,7 +24,7 @@ def require_numba(owner: str):
 
     Returns
     -------
-    module
+    types.ModuleType
         Imported ``numba`` module.
 
     Raises

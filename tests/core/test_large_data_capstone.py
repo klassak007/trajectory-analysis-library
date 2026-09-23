@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tracemalloc
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,11 +18,13 @@ from benchmarks.bench_capstone_workflow import (
     CapstoneConfig,
     CapstoneFixture,
     CapstoneOutputs,
+    analyze_public_tal,
     benchmark_report,
     capstone_fixture,
     direct_xarray_route,
     identity_rotation,
     materialize,
+    prepare_public_tal,
     public_tal_route,
     register_provider,
     task_count,
@@ -298,6 +301,71 @@ def test_capstone_benchmark_protocol_small_fixture() -> None:
         for route in ("direct_xarray", "public_tal"):
             assert len(report[section][route]["seconds"]) == 1
             assert report[section][route]["peak_bytes"][0] > 0
+    assert report["measurement"]["timing_allocation_separate"]
+    assert report["measurement"]["complete_routes_include_preparation"]
+    for storage in ("eager", "dask_graph_build"):
+        for stage in ("preparation", "prepared_analysis"):
+            assert len(report["public_stages"][storage][stage]["public_tal"]["seconds"]) == 1
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_capstone_prepared_and_complete_routes_match(lazy):
+    """ID: SPATIAL_BENCH_CAPSTONE_PROTOCOL_001_prepared_and_complete_routes."""
+    fixture = capstone_fixture(SMALL, lazy=lazy)
+    expected = materialize(direct_xarray_route(fixture))
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        prepared = prepare_public_tal(fixture)
+        analysis = analyze_public_tal(prepared)
+        complete = public_tal_route(fixture)
+    assert tasks == []
+    validate_outputs(analysis, expected)
+    validate_outputs(complete, expected)
+    _assert_output_topology(analysis)
+    _assert_output_topology(complete)
+    for left, right in zip(analysis.__dict__.values(), complete.__dict__.values(), strict=True):
+        xr.testing.assert_identical(left, right)
+
+
+def test_capstone_measurements_separate_tracing_and_validation(monkeypatch):
+    """ID: SPATIAL_BENCH_CAPSTONE_PROTOCOL_002_separate_timing_allocation_validation."""
+    from benchmarks import _spatial_path_benchmark_protocol as protocol
+    from benchmarks.bench_capstone_workflow import _sample_routes
+
+    events = []
+    monkeypatch.setattr(protocol, "perf_counter", lambda: events.append("clock") or 1.0)
+
+    def operation():
+        events.append("allocation" if tracemalloc.is_tracing() else "timing")
+        return np.empty(8)
+
+    def validate(value):
+        assert not tracemalloc.is_tracing()
+        assert value.shape == (8,)
+        events.append("validation")
+
+    _sample_routes({"probe": operation}, None, warmups=0, repeats=1, validate=validate)
+    assert events == ["clock", "timing", "clock", "validation", "allocation", "validation"]
+    assert not tracemalloc.is_tracing()
+
+
+@pytest.mark.parametrize("failure", ["operation", "materialize", "validate"])
+def test_capstone_allocation_failure_stops_tracing(failure):
+    """Failure coverage for SPATIAL_BENCH_CAPSTONE_PROTOCOL_002."""
+    from benchmarks._spatial_path_benchmark_protocol import (
+        MeasuredRoute,
+        measure_allocation,
+    )
+
+    def run(stage):
+        if stage == failure:
+            raise ValueError("measurement probe")
+        return np.empty(8)
+
+    route = MeasuredRoute("probe", lambda: run("operation"), lambda _: run("materialize"), lambda _: run("validate"))
+    with pytest.raises(ValueError, match="measurement probe"):
+        measure_allocation(route)
+    assert not tracemalloc.is_tracing()
 
 
 def test_doc_capstone_workflow_001_uses_accepted_public_boundaries() -> None:

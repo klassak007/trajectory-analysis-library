@@ -45,6 +45,7 @@ class PathOutputRequest:
     caller: object | None
     prototype: object | type | None
     validate: bool
+    basis: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class PreparedPathQuery:
     result_validate: bool = True
     batched_classification: BatchedPathMetadataClassification | None = None
     output_plan: QueryOutputPlan | None = None
+    caller_output_plan: QueryOutputPlan | None = None
 
 
 def provider_context(
@@ -292,6 +294,30 @@ def _prepare_output_plan(
     )
 
 
+def _prepare_output_plans(result, items, topology, *, owner):
+    caller_plan = _prepare_output_plan(result, items, topology, owner=owner)
+    if not result.basis:
+        return caller_plan, None
+    transform_plan = _prepare_output_plan(
+        replace(result, caller=None), items, topology, owner=owner,
+    )
+    return transform_plan, caller_plan
+
+
+def _prepare_provider_queries(providers, topology, temporal, *, owner):
+    return tuple(
+        _prepare_provider_context(
+            item, projection, native, topology, temporal, owner=owner,
+        )
+        for item, projection, native in zip(
+            providers,
+            topology.provider_values,
+            topology.native_provider_values,
+            strict=True,
+        )
+    )
+
+
 def _required_providers(
     values: Sequence[object],
     representations: Sequence[str | None] | None,
@@ -366,18 +392,8 @@ def _prepare_dynamic_query(
         if result.caller is not None
         else _direct_topology(query, values, contexts, temporal, owner=owner)
     )
-    items = tuple(
-        _prepare_provider_context(
-            item, projection, native, topology, temporal, owner=owner,
-        )
-        for item, projection, native in zip(
-            providers,
-            topology.provider_values,
-            topology.native_provider_values,
-            strict=True,
-        )
-    )
-    output_plan = _prepare_output_plan(result, items, topology, owner=owner)
+    items = _prepare_provider_queries(providers, topology, temporal, owner=owner)
+    output_plan, caller_plan = _prepare_output_plans(result, items, topology, owner=owner)
     prepared = PreparedPathQuery(
         providers,
         items,
@@ -387,6 +403,7 @@ def _prepare_dynamic_query(
         result.prototype,
         result.validate,
         output_plan=output_plan,
+        caller_output_plan=caller_plan,
     )
     classification = _preflight_batched_metadata(prepared)
     prepared = replace(prepared, batched_classification=classification)
@@ -409,6 +426,7 @@ def prepare_path_query(
     result_context: object | None = None,
     result_prototype: object | type | None = None,
     result_validate: bool = True,
+    basis: bool = False,
 ) -> PreparedPathQuery:
     """Classify topology and prepare reusable maps before payload work."""
     providers = _required_providers(
@@ -416,7 +434,7 @@ def prepare_path_query(
         source_representations,
         owner=owner,
     )
-    result = PathOutputRequest(caller, result_prototype, result_validate)
+    result = PathOutputRequest(caller, result_prototype, result_validate, basis)
     if not _requires_query_topology(providers, query, caller, owner=owner):
         items = tuple(PreparedProviderQuery(item, None, None, temporal) for item in providers)
         return PreparedPathQuery(

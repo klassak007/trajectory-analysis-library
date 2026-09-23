@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import xarray as xr
 
@@ -15,6 +15,22 @@ from tal.core.param_engine.query_topology import (
 from tal.core.schema_read import read_roles
 
 from .path_query_topology import OutputTopology
+
+
+@dataclass(frozen=True)
+class PathBasisResult:
+    """A verified intermediate transform and its caller's final declaration."""
+
+    value: object
+    caller: object
+    output_plan: QueryOutputPlan | None
+
+
+def finalize_basis_application(value: xr.Dataset, basis: PathBasisResult | None, caller: object) -> xr.Dataset:
+    """Verify the completed caller, leaving family members to their own owners."""
+    if basis is None or basis.caller is not caller:
+        return value
+    return finalize_path_query_output(value, plan=basis.output_plan)
 
 
 def _public_query(

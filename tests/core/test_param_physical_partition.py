@@ -122,3 +122,42 @@ def test_param_lazy_physical_partition_001_public_evaluation_reuses_source_work(
     computed = result.as_dataset(copy="none").compute(scheduler="synchronous")
     assert computed.sizes == {"trial": 4, "sample": 7}
     assert executed == ["source"]
+
+
+@pytest.mark.parametrize("lazy_source,lazy_map", ((True, False), (False, True), (True, True)))
+@pytest.mark.parametrize("queries", (0, 4))
+def test_param_lazy_physical_partition_001_broadcast_core_and_mixed_storage(
+    lazy_source: bool, lazy_map: bool, queries: int,
+) -> None:
+    from dask.callbacks import Callback
+
+    raw = np.arange(36, dtype=np.float32).reshape(2, 3, 6)
+    values = xr.DataArray(
+        raw, dims=("feature", "trial", "sample"),
+        coords={"feature": ["x", "y"], "trial": [20, 10, 30]},
+        attrs={"units": "unchanged"},
+    )
+    index = xr.DataArray(
+        np.tile([0, 1, 4, 8], (3, 1))[:, :queries],
+        dims=("trial", "query"), coords={"trial": [20, 10, 30]},
+    )
+    if lazy_source:
+        values = values.chunk({"feature": 1, "trial": 2, "sample": 2})
+    if lazy_map:
+        index = index.chunk({"trial": 1, "query": 2})
+    valid = index < 8
+    mapping = ParamMap(index, index + 1, xr.full_like(index, 0.25, dtype=float), valid, "query")
+    before = values.copy(deep=True)
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = apply_param_map(values, param_map=mapping, sequence_dim="sample")
+    assert tasks == []
+    assert result.dims == ("feature", "trial", "query")
+    assert result.chunks is not None
+    expected = np.tile([0.25, 1.25, 4.25, np.nan], (2, 3, 1))[:, :, :queries]
+    expected += raw[..., :1]
+    np.testing.assert_allclose(result.compute(scheduler="synchronous"), expected)
+    for dim in ("feature", "trial"):
+        assert result.xindexes[dim].equals(values.xindexes[dim])
+    assert result.attrs == values.attrs
+    xr.testing.assert_identical(values, before)

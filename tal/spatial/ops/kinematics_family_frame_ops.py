@@ -29,6 +29,8 @@ from .path_configuration import (
     resolve_path_configuration,
     select_path_graph,
 )
+from .path_query_output import finalize_basis_application
+from .path_query_plan import PathOutputRequest
 
 if TYPE_CHECKING:
     from ..acceleration import Acceleration
@@ -138,7 +140,8 @@ def _solve_family_path(
         request.dst,
         configuration=prepared.configuration,
         prepared_resolver=prepared.resolver,
-        caller=request.source,
+        caller=(PathOutputRequest(request.source, None, False, basis=True)
+                if operation == "express_in" else request.source),
         owner=request.owner,
         **edge_arg,
     )
@@ -150,9 +153,10 @@ def _restore_rep(value, *, source_rep: str, validate: bool):
     return value
 
 
-def _finalize_family_relation(source, out, *, expressed_in: str, validate: bool, owner: str):
+def _finalize_family_relation(source, out, *, expressed_in: str, validate: bool, owner: str, basis=None):
     inertial = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
-    ds = set_expressed_in(analysis_object_dataset(out), expressed_in=expressed_in, validate=False, owner=owner)
+    candidate = finalize_basis_application(analysis_object_dataset(out), basis, source)
+    ds = set_expressed_in(candidate, expressed_in=expressed_in, validate=False, owner=owner)
     ds = set_instantaneous_inertial(
         ds,
         instantaneous_inertial=inertial,
@@ -190,6 +194,7 @@ def run_family_pair_operation(
     return _finalize_family_relation(
         request.source,
         out,
+        basis=prepared_path.solved if prepared_path is not None and operation == "express_in" else None,
         expressed_in=expressed_in,
         validate=request.validate,
         owner=request.owner,

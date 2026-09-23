@@ -26,6 +26,7 @@ from .ops.path_solve_ops import (
 from .temporal.options import PoseTemporalOptions
 
 if TYPE_CHECKING:
+    from .ops.path_query_output import PathBasisResult
     from .pose import Pose
     from .rotation import Rotation
 
@@ -155,7 +156,7 @@ def _solve_rotation_path_transform_with_owner(
     prepared_resolver: PreparedEdgeResolver | None = None,
     caller=None,
     owner: str,
-) -> Rotation:
+) -> Rotation | PathBasisResult:
     if configuration is None:
         configuration = resolve_path_configuration(opts, graph=graph, owner=owner)
     try:
@@ -255,7 +256,7 @@ def _solve_pose_path_transform_with_owner(
     prepared_resolver: PreparedEdgeResolver | None = None,
     caller=None,
     owner: str,
-) -> Pose:
+) -> Pose | PathBasisResult:
     if configuration is None:
         configuration = resolve_path_configuration(opts, graph=graph, owner=owner)
     try:

@@ -12,6 +12,7 @@ from ..metadata import (
 )
 from ..policies.wrap import wrap_like
 from .kinematics_family_frame_ops import FamilyFrameRequest
+from .path_query_output import finalize_basis_application
 
 
 def with_relation_semantics(source, ds, *, expressed_in: str, owner: str):
@@ -52,10 +53,11 @@ def finalize_vector_expression(
     request: FamilyFrameRequest,
     graph: FrameGraph,
     owner: str,
+    basis=None,
 ):
     """Finalize one kinematic representation-basis change."""
     ds = set_frames(
-        analysis_object_dataset(out),
+        finalize_basis_application(analysis_object_dataset(out), basis, source),
         parent=relation[0],
         child=relation[1],
         validate=False,

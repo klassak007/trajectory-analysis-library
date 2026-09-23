@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from tal.core.dataset_ownership import analysis_object_dataset
+from tal.core.orchestration.runtime_checks import select_single_numeric_var
+from tal.core.schema_read import read_roles
 from tal.frames import Frame, FrameGraph
 from tal.utils.frame_schema import get_frames, set_frames
 
@@ -26,6 +28,8 @@ from .path_configuration import (
     select_identity_graph,
     select_path_graph,
 )
+from .path_query_output import finalize_basis_application
+from .path_query_plan import PathOutputRequest
 
 if TYPE_CHECKING:
     from ..path_solve import PathSolveOptions
@@ -49,7 +53,9 @@ def _finalize_same_relation(
     validate: bool,
     owner: str,
     association: SpatialAssociationPlan,
+    basis=None,
 ):
+    out_ds = finalize_basis_application(out_ds, basis, source)
     parent, child = get_frames(analysis_object_dataset(source))
     ds = set_frames(out_ds, parent=parent, child=child, validate=False)
     ds = set_expressed_in(
@@ -131,11 +137,11 @@ def position_express_in(
         dst,
         edge_rotation_fn=edge_rotation_fn,
         configuration=selected_config,
-        caller=position,
+        caller=PathOutputRequest(position, None, False, basis=True),
         owner=owner,
     )
     rotated = _rotation_apply_with_owner(
-        clear_framing(basis, owner=owner),
+        clear_framing(basis.value, owner=owner),
         position,
         validate=False,
         owner=owner,
@@ -144,6 +150,7 @@ def position_express_in(
     return _finalize_same_relation(
         position,
         analysis_object_dataset(rotated),
+        basis=basis,
         expressed_in=context.destination,
         validate=validate,
         owner=owner,
@@ -163,13 +170,28 @@ def _conjugate_rotation(rotation, basis, *, association, owner: str):
         association=association,
     )
     right = _rotation_inverse_with_owner(basis, validate=False, owner=owner)
-    return _rotation_compose_with_owner(
+    out = _rotation_compose_with_owner(
         left,
         right,
         validate=False,
         owner=owner,
         association=association,
     )
+    return _restore_expression_payload(value, out, owner=owner)
+
+
+def _restore_expression_payload(source, result, *, owner):
+    """Restore the caller's single-payload declaration after basis algebra."""
+    source_ds = analysis_object_dataset(source)
+    result_ds = analysis_object_dataset(result)
+    source_var = select_single_numeric_var(source_ds, owner=owner, what="expression source")
+    result_var = select_single_numeric_var(result_ds, owner=owner, what="expression result")
+    source_dims = read_roles(source_ds)[3]
+    result_dims = read_roles(result_ds)[3]
+    names = dict(zip(result_dims, source_dims, strict=True))
+    names[result_var] = source_var
+    rename = {old: new for old, new in names.items() if old != new}
+    return result.rename(rename, validate=False) if rename else result
 
 
 def rotation_express_in(
@@ -197,24 +219,20 @@ def rotation_express_in(
         dst=dst,
         owner=owner,
     )
-    basis = clear_framing(
-        _solve_rotation_path_transform_with_owner(
-            context.source_basis,
-            dst,
-            edge_rotation_fn=edge_rotation_fn,
-            configuration=selected_config,
-            caller=rotation,
-            owner=owner,
-        ).as_quat(validate=False),
-        owner=owner,
+    basis = _solve_rotation_path_transform_with_owner(
+        context.source_basis, dst, edge_rotation_fn=edge_rotation_fn,
+        configuration=selected_config,
+        caller=PathOutputRequest(rotation, None, False, basis=True), owner=owner,
     )
+    basis_rotation = clear_framing(basis.value.as_quat(validate=False), owner=owner)
     association = SpatialAssociationPlan(selected_config.graph)
-    out = _conjugate_rotation(rotation, basis, association=association, owner=owner)
+    out = _conjugate_rotation(rotation, basis_rotation, association=association, owner=owner)
     if src_rep == "matrix":
-        out = out.as_matrix(validate=False)
+        out = _restore_expression_payload(rotation, out.as_matrix(validate=False), owner=owner)
     return _finalize_same_relation(
         rotation,
         analysis_object_dataset(out),
+        basis=basis,
         expressed_in=context.destination,
         validate=validate,
         owner=owner,
@@ -254,15 +272,16 @@ def pose_express_in(
     )
     out = _reexpress_pose_components(
         pose,
-        basis,
+        basis.value,
         owner=owner,
         association=SpatialAssociationPlan(selected_config.graph),
     )
     if src_rep == "matrix":
-        out = out.as_matrix(validate=False)
+        out = _restore_expression_payload(pose, out.as_matrix(validate=False), owner=owner)
     return _finalize_same_relation(
         pose,
         analysis_object_dataset(out),
+        basis=basis,
         expressed_in=context.destination,
         validate=validate,
         owner=owner,
@@ -286,11 +305,11 @@ def _solve_pose_basis_rotation(
         dst,
         edge_pose_fn=edge_pose_fn,
         configuration=configuration,
-        caller=caller,
+        caller=PathOutputRequest(caller, None, False, basis=True),
         owner=owner,
     )
-    _, basis_rotation = basis_pose.decompose(validate=False)
-    return clear_framing(basis_rotation.as_quat(validate=False), owner=owner)
+    _, rotation = basis_pose.value.decompose(validate=False)
+    return replace(basis_pose, value=clear_framing(rotation.as_quat(validate=False), owner=owner))
 
 
 def _reexpress_pose_components(
@@ -301,7 +320,6 @@ def _reexpress_pose_components(
     association: SpatialAssociationPlan,
 ):
     from ..pose import Pose
-    from ..rotation import _rotation_compose_with_owner, _rotation_inverse_with_owner
     from .rotation_apply_ops import _rotation_apply_with_owner
 
     translation, rotation = pose.as_components(validate=False).decompose(validate=False)
@@ -312,22 +330,7 @@ def _reexpress_pose_components(
         owner=owner,
         association=association,
     )
-    rotation_quat = clear_framing(rotation.as_quat(validate=False), owner=owner)
-    left = _rotation_compose_with_owner(
-        basis,
-        rotation_quat,
-        validate=False,
-        owner=owner,
-        association=association,
-    )
-    right = _rotation_inverse_with_owner(basis, validate=False, owner=owner)
-    rotation_out = _rotation_compose_with_owner(
-        left,
-        right,
-        validate=False,
-        owner=owner,
-        association=association,
-    )
+    rotation_out = _conjugate_rotation(rotation, basis, owner=owner, association=association)
     return Pose.from_components(
         rotation_out,
         translation_out,

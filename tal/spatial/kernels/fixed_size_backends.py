@@ -48,6 +48,11 @@ def _resolve_backend(backend: str, *values: object) -> str:
     return SPATIAL_FIXED_BACKEND_NUMBA if eligible and _numba_available() else SPATIAL_FIXED_BACKEND_SCIPY
 
 
+def _identity_quaternion_rows(values: object) -> bool:
+    quats = np.asarray(values)
+    return bool(np.all(quats[..., :3] == 0.0) and np.all(quats[..., 3] != 0.0))
+
+
 def quat_compose_block_backend(left: object, right: object, *, backend: str = SPATIAL_FIXED_BACKEND_AUTO) -> np.ndarray:
     backend = _resolve_backend(backend, left, right)
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
@@ -70,6 +75,11 @@ def quat_inverse_block_backend(values: object, *, backend: str = SPATIAL_FIXED_B
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_unary_quat_rows(values, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[0], owner=_OWNER)
+        if _identity_quaternion_rows(values):
+            quats = np.asarray(values)
+            out = np.zeros(quats.shape, dtype=np.float64)
+            out[..., 3] = np.sign(quats[..., 3])
+            return out
         return _run_scipy_kernel(inverse_quat_kernel, np.asarray(values, dtype=np.float64))
     if backend == SPATIAL_FIXED_BACKEND_NUMBA:
         from .fixed_size_numba_backends import quat_inverse_block_numba
@@ -135,6 +145,8 @@ def pose_compose_translation_block_backend(
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_pose_compose_rows(left_t, right_t, right_q, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[2], owner=_OWNER)
+        if _identity_quaternion_rows(right_q):
+            return np.asarray(left_t, dtype=np.float64) + np.asarray(right_t, dtype=np.float64)
         return _run_scipy_kernel(
             compose_translation_kernel,
             np.asarray(left_t, dtype=np.float64),
@@ -158,6 +170,8 @@ def pose_inverse_translation_block_backend(
     if backend == SPATIAL_FIXED_BACKEND_SCIPY:
         rows = prepare_pose_inverse_rows(translation, quat, owner=_OWNER)
         validate_quat_rows(rows.row_arrays[1], owner=_OWNER)
+        if _identity_quaternion_rows(quat):
+            return -np.asarray(translation, dtype=np.float64)
         return _run_scipy_kernel(
             inverse_translation_kernel,
             np.asarray(translation, dtype=np.float64),

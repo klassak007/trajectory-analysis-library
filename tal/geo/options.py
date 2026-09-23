@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import math
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from tal.core.param_ops.guards import validate_query_dim_name
@@ -30,17 +30,21 @@ class GeodeticOptions:
 
     Parameters
     ----------
-    datum : {'WGS84'}, optional
+    datum : str, optional
+        Allowed values: ``'WGS84'``.
         Supported geodetic datum for G1.
     crs : str, optional
         Geographic 3D CRS. G1 supports ``"EPSG:4979"``.
     ecef_crs : str, optional
         ECEF CRS. G1 supports ``"EPSG:4978"``.
-    angular_unit : {'degree'}, optional
+    angular_unit : str, optional
+        Allowed values: ``'degree'``.
         Angular unit for latitude and longitude.
-    height_reference : {'ellipsoidal'}, optional
+    height_reference : str, optional
+        Allowed values: ``'ellipsoidal'``.
         Altitude height reference.
-    longitude_wrap : {'[-180, 180)', '[0, 360)'}, optional
+    longitude_wrap : str, optional
+        Allowed values: ``'[-180, 180)'``, ``'[0, 360)'``.
         Longitude wrap convention recorded in metadata.
     ecef_frame : str | None, optional
         Frame id for the ECEF coordinate basis.
@@ -162,7 +166,7 @@ class ENUOptions:
     'site_enu'
     """
 
-    origin: "GeodeticPosition | LocalOrigin | None" = None
+    origin: GeodeticPosition | LocalOrigin | None = None
     ecef_frame: str | None = "earth_ecef"
     output_frame: str | None = None
     strict_frame: bool = False
@@ -174,7 +178,8 @@ class GeodesicOptions:
 
     Parameters
     ----------
-    method : {'geodesic', 'local_enu'}, optional
+    method : str, optional
+        Allowed values: ``'geodesic'``, ``'local_enu'``.
         Distance/bearing method family. ``'geodesic'`` uses WGS84 geodesic
         calculations; ``'local_enu'`` uses an explicit local tangent-plane
         approximation.
@@ -212,7 +217,7 @@ class GeodesicOptions:
 
     method: Literal["geodesic", "local_enu"] = "geodesic"
     include_altitude: bool = False
-    local_origin: "GeodeticPosition | LocalOrigin | None" = None
+    local_origin: GeodeticPosition | LocalOrigin | None = None
 
 
 @dataclass(frozen=True)
@@ -221,13 +226,16 @@ class GeodeticInterpolationOptions:
 
     Parameters
     ----------
-    method : {'nearest', 'geodesic_linear', 'ecef_linear', 'local_enu_linear'}, optional
+    method : str, optional
+        Allowed values: ``'nearest'``, ``'geodesic_linear'``, ``'ecef_linear'``, ``'local_enu_linear'``.
         Interpolation method for LLA payloads.
     local_origin : GeodeticPosition | LocalOrigin | None, optional
         Required origin for ``method='local_enu_linear'``.
-    longitude_wrap : {'shortest', 'preserve', '[-180, 180)', '[0, 360)'}, optional
+    longitude_wrap : str, optional
+        Allowed values: ``'shortest'``, ``'preserve'``, ``'[-180, 180)'``, ``'[0, 360)'``.
         Longitude wrapping policy applied to interpolated output.
-    duplicate_policy : {'invalid', 'left', 'right', 'raise'}, optional
+    duplicate_policy : str, optional
+        Allowed values: ``'invalid'``, ``'left'``, ``'right'``, ``'raise'``.
         Duplicate parameter policy for linear methods. ``nearest`` follows
         core nearest-selection behavior.
     query_dim : str, optional
@@ -261,7 +269,7 @@ class GeodeticInterpolationOptions:
     """
 
     method: Literal["nearest", "geodesic_linear", "ecef_linear", "local_enu_linear"] = "geodesic_linear"
-    local_origin: "GeodeticPosition | LocalOrigin | None" = None
+    local_origin: GeodeticPosition | LocalOrigin | None = None
     longitude_wrap: Literal["shortest", "preserve", "[-180, 180)", "[0, 360)"] = "shortest"
     duplicate_policy: Literal["invalid", "left", "right", "raise"] = "invalid"
     query_dim: str = "query"
@@ -432,14 +440,14 @@ def coerce_geodetic_interpolation_options(
 
 __all__ = [
     "ENUOptions",
+    "GeodesicOptions",
     "GeodeticDatum",
     "GeodeticInterpolationOptions",
     "GeodeticOptions",
-    "GeodesicOptions",
     "LocalOrigin",
-    "coerce_geodetic_interpolation_options",
-    "coerce_geodetic_options",
     "coerce_enu_options",
     "coerce_geodesic_options",
+    "coerce_geodetic_interpolation_options",
+    "coerce_geodetic_options",
     "coerce_local_origin",
 ]

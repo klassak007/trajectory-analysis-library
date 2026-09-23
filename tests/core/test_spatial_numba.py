@@ -999,6 +999,27 @@ def test_spatial_core_matrix_conversion_reference_001_auto_keeps_scipy_domain(
     )
 
 
+def test_spatial_fixed_identity_quaternions_match_scipy_rotations() -> None:
+    quats = np.asarray([[0.0, 0.0, 0.0, 2.0], [0.0, 0.0, 0.0, -3.0]])
+    left = np.asarray([[1.0, 2.0, 3.0], [-4.0, 5.0, 6.0]])
+    right = np.asarray([[0.5, -1.0, 2.0], [1.0, 1.5, -2.0]])
+    rotation = SciRotation.from_quat(quats)
+    expected_compose = rotation.apply(left) + right
+    expected_inverse = -rotation.inv().apply(right)
+    np.testing.assert_allclose(
+        pose_compose_translation_block_backend(left, right, quats, backend=SPATIAL_FIXED_BACKEND_SCIPY),
+        expected_compose,
+    )
+    np.testing.assert_allclose(
+        pose_inverse_translation_block_backend(right, quats, backend=SPATIAL_FIXED_BACKEND_SCIPY),
+        expected_inverse,
+    )
+    np.testing.assert_allclose(
+        quat_inverse_block_backend(quats, backend=SPATIAL_FIXED_BACKEND_SCIPY),
+        rotation.inv().as_quat(),
+    )
+
+
 def test_spatial_numba_034_rotate_vec3_backend_parity() -> None:
     """ID: SPATIAL_NUMBA_034_rotate_vec3_backend_parity."""
     _require_numba()
