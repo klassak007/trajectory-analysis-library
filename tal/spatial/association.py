@@ -145,6 +145,11 @@ class SpatialAssociationMixin:
 
     _spatial_graph: FrameGraph | None
 
+    def _display_rows(self, schema: object) -> tuple:
+        from .display import spatial_display_rows
+
+        return spatial_display_rows(schema)
+
     @property
     def graph(self) -> FrameGraph | None:
         """Return this spatial value's associated frame graph, if any.

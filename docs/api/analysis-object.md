@@ -13,6 +13,12 @@ Use this page for the AO contract itself. Parameter operations, events,
 reducers, frame graph utilities, and typed wrappers have dedicated reference
 pages.
 
+Direct text and notebook display show the concrete TAL type, stored declarations,
+and xarray data previews. Notebook output includes bounded stored-schema detail;
+the coordinate Role column identifies stored dimension and parameter roles.
+Display does not validate or compute lazy payloads. See
+{doc}`../user-guide/viewing` for executable inspection examples and display limits.
+
 ```{contents}
 :local:
 :depth: 2

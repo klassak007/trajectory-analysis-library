@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import xarray as xr
 
 from . import dataset_ownership as _dataset_ownership
 from .dataset_utils import ensure_dataset
-from .schema import UNSET, UnsetType
-from .schema import _SchemaUpdatePlan
-from .schema import _apply_schema_update
-from .schema import _is_bootstrap_schema
-from .schema import _relocate_dataarray_schema
-from .schema import _validate_existing_schema_envelope
+from .schema import (
+    UNSET,
+    UnsetType,
+    _apply_schema_update,
+    _is_bootstrap_schema,
+    _relocate_dataarray_schema,
+    _SchemaUpdatePlan,
+    _validate_existing_schema_envelope,
+)
 from .schema import merge_schema as _merge_schema
 from .schema import repair_schema_after_structure as _repair_schema_after_structure
 from .schema import set_param_coord as _set_param_coord
@@ -21,6 +24,9 @@ from .schema import set_validity as _set_validity
 from .schema import validate_schema as _validate_schema
 from .schema_errors import schema_error
 from .validity_finalize import reconcile_sequence_validity_after_structure
+
+if TYPE_CHECKING:
+    from . import combine_ops, component_ops, event_ops, group_ops, param_ops
 
 
 class AnalysisObject:
@@ -31,6 +37,12 @@ class AnalysisObject:
     TAL stores semantic metadata in ``ds.attrs["tal"]`` and preserves xarray's
     label-aware behavior. Alignment is by dimension names and coordinate labels,
     not by positional axis order.
+
+    ``repr(ao)``, ``print(ao)``, and notebook display show stored TAL declarations
+    beside xarray's data preview. Display does not validate the object or execute
+    Dask tasks. Transform-backed coordinate values are explicitly omitted.
+    Notebook display includes a collapsed, bounded ``TAL schema`` detail and
+    honors xarray display options. Opaque schema values show type placeholders.
 
     Operator Families
     -----------------
@@ -67,6 +79,18 @@ class AnalysisObject:
 
     _WHERE_OTHER_UNSET = object()
     __hash__ = object.__hash__
+
+    def __repr__(self) -> str:
+        """Show stored TAL declarations alongside the native xarray preview."""
+        from tal.utils.display import analysis_object_repr
+
+        return analysis_object_repr(self)
+
+    def _repr_html_(self) -> str:
+        """Return a lazy notebook preview with bounded stored-schema detail."""
+        from tal.utils.display import analysis_object_html
+
+        return analysis_object_html(self)
 
     @staticmethod
     def _multiindex_dims(ds: xr.Dataset) -> tuple[str, ...]:
@@ -158,7 +182,7 @@ class AnalysisObject:
 
     def _after_bind_dataset(self) -> None:
         """Subclass hook invoked after dataset binding."""
-        return None
+        return
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> AnalysisObject:
@@ -180,7 +204,7 @@ class AnalysisObject:
         return obj
 
     @property
-    def param(self) -> "ParamAccessor":
+    def param(self) -> param_ops.ParamAccessor:
         """Return the param accessor (``ao.param``).
 
         Returns
@@ -193,7 +217,7 @@ class AnalysisObject:
         return ParamAccessor(self)
 
     @property
-    def combine(self) -> "CombineAccessor":
+    def combine(self) -> combine_ops.CombineAccessor:
         """Return the combine accessor (``ao.combine``).
 
         Returns
@@ -220,7 +244,7 @@ class AnalysisObject:
         return CombineAccessor(self)
 
     @property
-    def events(self) -> "EventsAccessor":
+    def events(self) -> event_ops.EventsAccessor:
         """Return the events accessor (``ao.events``).
 
         Returns
@@ -251,7 +275,7 @@ class AnalysisObject:
         return EventsAccessor(self)
 
     @property
-    def components(self) -> "ComponentsAccessor":
+    def components(self) -> component_ops.ComponentsAccessor:
         """Return the components accessor (``ao.components``).
 
         Returns
@@ -279,7 +303,7 @@ class AnalysisObject:
         return ComponentsAccessor(self)
 
     @property
-    def group(self) -> "GroupAccessor":
+    def group(self) -> group_ops.GroupAccessor:
         """Return the grouping accessor (``ao.group``).
 
         Returns
@@ -505,11 +529,14 @@ class AnalysisObject:
         --------
         tal.core.orchestration.broadcast_intent.resolve_broadcast_intent
         """
+        from .orchestration.alignment_intent import (
+            read_alignment_intent,
+            set_alignment_intent,
+        )
         from .orchestration.broadcast_intent import (
             resolve_broadcast_intent,
             set_broadcast_intent,
         )
-        from .orchestration.alignment_intent import read_alignment_intent, set_alignment_intent
 
         intent = resolve_broadcast_intent(mode=mode, owner="AnalysisObject.b")
         previous_alignment = read_alignment_intent(self, owner="AnalysisObject.b")
@@ -573,7 +600,10 @@ class AnalysisObject:
             resolve_alignment_intent,
             set_alignment_intent,
         )
-        from .orchestration.broadcast_intent import read_broadcast_intent, set_broadcast_intent
+        from .orchestration.broadcast_intent import (
+            read_broadcast_intent,
+            set_broadcast_intent,
+        )
 
         intent = resolve_alignment_intent(
             on=on,
@@ -1387,6 +1417,8 @@ class AnalysisObject:
         return self._rewrap_dataset(_validate_schema(self._data), validate=True)
 
 
-from .reducer_ops.surface import install_analysis_object_reducers as _install_analysis_object_reducers
+from .reducer_ops.surface import (
+    install_analysis_object_reducers as _install_analysis_object_reducers,
+)
 
 _install_analysis_object_reducers(AnalysisObject)

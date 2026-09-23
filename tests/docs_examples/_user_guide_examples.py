@@ -776,6 +776,14 @@ def example_guide_viewing_schema() -> None:
         validate=True,
     )
     out = ao.param.at([0.05, 0.15], on="time_s")
+    print(ao)
+    print(out)
+    with xr.set_options(display_width=90, display_max_rows=8):
+        preview = repr(out)
+    assert "tal.AnalysisObject" in preview and "Parameter" in preview
+    coordinates = preview.split("Coordinates:", 1)[1].split("Data variables:", 1)[0]
+    assert "Role" in coordinates and "sequence" in coordinates and "parameter" in coordinates
+    assert "TAL schema" in out._repr_html_()
     safe_snapshot = ao.as_dataset()
     backing_store = ao.as_dataset(copy="none")
     roles = read_roles(backing_store)
