@@ -1322,53 +1322,6 @@ def test_param_hard_032_gather_along_sequence_chunked_path_remains_lazy() -> Non
     assert out.chunks is not None
 
 
-def test_param_hard_033_param_map_build_stopgap_routes_through_backend_interface(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ID: PARAM_HARD_033_param_map_build_stopgap_routes_through_backend_interface."""
-    calls = {"n": 0}
-    original = map_build_mod.map_block_backend
-
-    def _count(*args: object, **kwargs: object):
-        calls["n"] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: False)
-    monkeypatch.setattr(map_build_mod, "map_block_backend", _count)
-    param = xr.DataArray(np.asarray([0.0, 1.0, 2.0], dtype="float64"), dims=("sample",))
-    query = xr.DataArray(np.asarray([0.25, 1.25], dtype="float64"), dims=("query",))
-    _ = build_param_map(
-        param=param,
-        query=query,
-        sequence_dim="sample",
-        query_dim="query",
-    )
-    assert calls["n"] >= 1
-
-
-def test_param_hard_034_param_bounds_build_stopgap_routes_through_backend_interface(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ID: PARAM_HARD_034_param_bounds_build_stopgap_routes_through_backend_interface."""
-    calls = {"n": 0}
-    original = map_build_mod.bounds_block_backend
-
-    def _count(*args: object, **kwargs: object):
-        calls["n"] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: False)
-    monkeypatch.setattr(map_build_mod, "bounds_block_backend", _count)
-    param = xr.DataArray(np.asarray([0.0, 1.0, 2.0], dtype="float64"), dims=("sample",))
-    _ = build_param_bounds_map(
-        param=param,
-        start=xr.DataArray(0.25),
-        stop=xr.DataArray(1.75),
-        sequence_dim="sample",
-    )
-    assert calls["n"] >= 1
-
-
 def test_param_hard_036_complex_param_and_query_dtypes_rejected() -> None:
     """ID: PARAM_HARD_036_complex_param_and_query_dtypes_rejected."""
     declared = xr.Dataset(

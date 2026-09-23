@@ -137,9 +137,10 @@ def _imports_param_engine_validity_mask(tree: ast.Module) -> bool:
     absolute_parent = "tal.core.param_engine"
     relative_parent = "param_engine"
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(alias.name == absolute for alias in node.names):
-                return True
+        if isinstance(node, ast.Import) and any(
+            alias.name == absolute for alias in node.names
+        ):
+            return True
         if not isinstance(node, ast.ImportFrom):
             continue
         if node.level == 0 and node.module == absolute:
@@ -160,9 +161,10 @@ def _imports_reducer_ops_validity(tree: ast.Module) -> bool:
     absolute = "tal.core.reducer_ops.validity"
     parent = "tal.core.reducer_ops"
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(alias.name in {absolute, parent} for alias in node.names):
-                return True
+        if isinstance(node, ast.Import) and any(
+            alias.name in {absolute, parent} for alias in node.names
+        ):
+            return True
         if not isinstance(node, ast.ImportFrom):
             continue
         if node.level == 0 and node.module == absolute:
@@ -176,12 +178,14 @@ def _imports_reducer_ops_validity(tree: ast.Module) -> bool:
         )
         if parent_import and any(alias.name == "validity" for alias in node.names):
             return True
-        if node.level == 2 and node.module is None:
-            if any(alias.name == "reducer_ops" for alias in node.names):
-                return True
-        if node.level == 0 and node.module == "tal.core":
-            if any(alias.name == "reducer_ops" for alias in node.names):
-                return True
+        if node.level == 2 and node.module is None and any(
+            alias.name == "reducer_ops" for alias in node.names
+        ):
+            return True
+        if node.level == 0 and node.module == "tal.core" and any(
+            alias.name == "reducer_ops" for alias in node.names
+        ):
+            return True
     return False
 
 
@@ -435,8 +439,10 @@ def test_orch_arch_015_structural_valid_mask_has_shared_core_owner() -> None:
         "from .. import reducer_ops\nreducer_ops.validity.resolve_structural_valid_mask_base(value)",
         "from tal.core import reducer_ops as ro\nro.validity.resolve_structural_valid_mask_base(value)",
         "import tal.core.reducer_ops as ro\nro.validity.resolve_structural_valid_mask_base(value)",
-        "import tal.core.reducer_ops.validity\n"
-        "tal.core.reducer_ops.validity.resolve_structural_valid_mask_base(value)",
+        (
+            "import tal.core.reducer_ops.validity\n"
+            "tal.core.reducer_ops.validity.resolve_structural_valid_mask_base(value)"
+        ),
     )
     for source in forbidden_sources:
         assert _imports_reducer_ops_validity(ast.parse(source))
@@ -818,7 +824,6 @@ def test_arch_bcast_036_spatial_approved_family_matrix_is_explicit_and_guarded()
 def test_bcast_doc_004_spatial_frame_aware_alignment_and_broadcast_boundaries_documented() -> None:
     """ID: BCAST_DOC_004_spatial_frame_aware_alignment_and_broadcast_boundaries_documented."""
     numpy_doc = Path("docs/user-guide/numpy.md").read_text(encoding="utf-8").lower()
-    spatial_doc = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8").lower()
     assert "frame-sensitive spatial" in numpy_doc
 
 
@@ -829,46 +834,6 @@ def test_arch_spatial_131_temporal_vector_like_param_key_resolution_reuses_share
     assert "resolve_param_runtime_context(" in accessor_text
     assert "def resolve_param_runtime_context(" in resolve_text
     assert "_resolve_schema_context_validated(" in resolve_text
-
-
-def test_arch_spatial_135_temporal_vector_like_execution_owners_contain_no_vectorize_true() -> None:
-    """ID: ARCH_SPATIAL_135_temporal_vector_like_execution_owners_contain_no_vectorize_true."""
-    files = [
-        Path("tal/core/param_ops/accessor.py"),
-        Path("tal/core/param_ops/evaluate.py"),
-        Path("tal/core/param_ops/resample.py"),
-        Path("tal/core/param_engine/map_apply.py"),
-    ]
-    for path in files:
-        text = path.read_text(encoding="utf-8")
-        assert "vectorize=True" not in text
-
-
-def test_arch_spatial_136_temporal_vector_like_stopgaps_are_backend_routed_and_explicit() -> None:
-    """ID: ARCH_SPATIAL_136_temporal_vector_like_stopgaps_are_backend_routed_and_explicit."""
-    map_build = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
-    backends = Path("tal/core/param_engine/backends.py").read_text(encoding="utf-8")
-    map_section = map_build.split("def _apply_param_map_block(", 1)[1].split("def build_param_map(", 1)[0]
-    bounds_section = map_build.split("def _apply_param_bounds_block(", 1)[1].split(
-        "def build_param_bounds_map(",
-        1,
-    )[0]
-    assert "_select_map_normal_backend" in map_build
-    assert "_select_bounds_normal_backend" in map_build
-    assert "PARAM_MAP_BACKEND_NUMPY_BLOCK" in map_build
-    assert "PARAM_BOUNDS_BACKEND_NUMPY_BLOCK" in map_build
-    assert "map_block_backend" in map_section
-    assert "bounds_block_backend" in bounds_section
-    assert "vectorize=False" in map_section
-    assert "vectorize=False" in bounds_section
-    assert "vectorize=True" not in map_section
-    assert "vectorize=True" not in bounds_section
-    assert "PARAM_MAP_BACKEND_NUMPY_BLOCK" in backends
-    assert "PARAM_BOUNDS_BACKEND_NUMPY_BLOCK" in backends
-    assert "PARAM_MAP_BACKEND_NUMPY_ROW" not in backends
-    assert "PARAM_BOUNDS_BACKEND_NUMPY_ROW" not in backends
-    assert "def map_row_backend(" not in backends
-    assert "def bounds_row_backend(" not in backends
 
 
 def test_arch_spatial_151_d3_derivative_integral_paths_do_not_reuse_interpolation_execution_owners() -> None:

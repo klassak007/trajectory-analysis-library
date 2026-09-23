@@ -6,7 +6,12 @@ import numpy as np
 import xarray as xr
 
 from ..param_engine import ParamMapOptions
-from ..param_engine.prepared import PreparedParamEvaluation, prepare_param_evaluation
+from ..param_engine.backends import _PARAM_BACKEND_AUTO
+from ..param_engine.prepared import (
+    PreparedParamEvaluation,
+    _ParamEvaluationRequest,
+    _prepare_param_evaluation,
+)
 from .types import ParamRuntimeContext
 
 
@@ -28,10 +33,11 @@ def prepare_runtime_param_evaluation(
     param_kind: str,
     query_dim: str,
     reuse: Sequence[PreparedParamEvaluation] = (),
+    defer_backend_selection: bool = False,
 ) -> PreparedParamEvaluation:
     """Prepare evaluation after removing source-only validity metadata."""
     size_name = context.sequence_size_coord
-    return prepare_param_evaluation(
+    request = _ParamEvaluationRequest(
         param=_without_sequence_size_coordinate(context.spec.coord, name=size_name),
         query=query,
         sequence_dim=context.sequence_dim,
@@ -41,8 +47,9 @@ def prepare_runtime_param_evaluation(
         options=options,
         param_kind=param_kind,
         query_dim=query_dim,
-        reuse=reuse,
+        map_backend=_PARAM_BACKEND_AUTO if defer_backend_selection else None,
     )
+    return _prepare_param_evaluation(request, reuse=reuse)
 
 
 __all__ = ["prepare_runtime_param_evaluation"]

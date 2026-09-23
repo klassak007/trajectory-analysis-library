@@ -19,6 +19,7 @@ from .blocking import (
     prepare_logical_row_blocks,
     select_logical_block,
 )
+from .physical_partition import prepare_physical_row_partitions
 from .types import ParamMap
 
 
@@ -258,13 +259,14 @@ def gather_along_sequence(
             query_dim=query_dim,
             owner=owner,
         )
+    physical = prepare_physical_row_partitions(plan, values, indexer)
     return _gather_nonempty(
         values,
         indexer,
         sequence_dim=sequence_dim,
         query_dim=query_dim,
         owner=owner,
-        plan=plan,
+        plan=physical.execution,
     )
 
 
@@ -467,12 +469,20 @@ def _apply_param_map_request(
     )
     if int(values.sizes.get(sequence_dim, 0)) == 0 or plan.has_no_rows:
         return empty_mapped_value(values, param_map=param_map, sequence_dim=sequence_dim)
+    physical = prepare_physical_row_partitions(
+        plan,
+        values,
+        param_map.i0,
+        param_map.i1,
+        param_map.alpha,
+        param_map.valid,
+    )
     return _apply_param_map_blocks(
         values,
         param_map=param_map,
         sequence_dim=sequence_dim,
         logical_dims=logical_dims,
-        plan=plan,
+        plan=physical.execution,
     )
 
 

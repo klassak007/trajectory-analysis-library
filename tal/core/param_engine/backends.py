@@ -6,6 +6,20 @@ PARAM_MAP_BACKEND_NUMPY_BLOCK = "numpy_block"
 PARAM_BOUNDS_BACKEND_NUMPY_BLOCK = "numpy_block"
 PARAM_MAP_BACKEND_NUMBA = "numba"
 PARAM_BOUNDS_BACKEND_NUMBA = "numba"
+_PARAM_BACKEND_AUTO = "auto"
+
+
+def _runtime_numba_available(*values: np.ndarray) -> bool:
+    """Return whether one executing numerical task can use Numba."""
+    compatible = all(
+        value.dtype.kind == "f" and value.dtype.itemsize in {4, 8}
+        for value in values
+    )
+    if not compatible:
+        return False
+    from tal.utils.numba_support import _numba_available
+
+    return _numba_available()
 
 
 def map_block_backend(
@@ -17,6 +31,12 @@ def map_block_backend(
     dup_code: int,
     backend: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if backend == _PARAM_BACKEND_AUTO:
+        backend = (
+            PARAM_MAP_BACKEND_NUMBA
+            if _runtime_numba_available(param_block, query_block)
+            else PARAM_MAP_BACKEND_NUMPY_BLOCK
+        )
     if backend == PARAM_MAP_BACKEND_NUMPY_BLOCK:
         from .numpy_backends import map_block_numpy
 
@@ -37,6 +57,12 @@ def map_block_status_backend(
     dup_code: int,
     backend: str,
 ) -> tuple[np.ndarray, ...]:
+    if backend == _PARAM_BACKEND_AUTO:
+        backend = (
+            PARAM_MAP_BACKEND_NUMBA
+            if _runtime_numba_available(param_block, query_block)
+            else PARAM_MAP_BACKEND_NUMPY_BLOCK
+        )
     if backend == PARAM_MAP_BACKEND_NUMPY_BLOCK:
         from .numpy_backends import map_block_numpy_status
 
@@ -56,6 +82,12 @@ def bounds_block_backend(
     *,
     backend: str,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if backend == _PARAM_BACKEND_AUTO:
+        backend = (
+            PARAM_BOUNDS_BACKEND_NUMBA
+            if _runtime_numba_available(param_block, start_block, stop_block)
+            else PARAM_BOUNDS_BACKEND_NUMPY_BLOCK
+        )
     if backend == PARAM_BOUNDS_BACKEND_NUMPY_BLOCK:
         from .numpy_backends import bounds_block_numpy
 

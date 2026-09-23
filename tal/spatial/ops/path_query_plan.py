@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from typing import Literal
 
 import numpy as np
 
@@ -14,6 +15,7 @@ from tal.core.param_ops.types import ParamRuntimeContext
 from tal.utils.xarray_namespace import dataset_namespace_names, unique_temp_dim
 
 from ..pose import Pose
+from ..position import Position
 from ..rotation import Rotation
 from ..temporal.options import PoseTemporalOptions, resolve_rotation_method
 from .path_query_topology import (
@@ -27,6 +29,8 @@ from .path_query_topology import (
 )
 from .provider_topology import ProviderTopology, classify_provider_topology
 
+PathOutputIntent = Literal["pose", "position", "unsupported"]
+
 
 @dataclass(frozen=True)
 class RequiredProvider:
@@ -34,6 +38,7 @@ class RequiredProvider:
 
     value: object
     topology: ProviderTopology
+    source_representation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,8 @@ class PreparedPathQuery:
     providers: tuple[RequiredProvider, ...]
     items: tuple[PreparedProviderQuery, ...]
     topology: OutputTopology | None
+    output_intent: PathOutputIntent
+    result_context: object | None = None
 
 
 def provider_context(
@@ -183,12 +190,11 @@ def _effective_temporal(
     )
 
 
-def _prepare_provider(
+def _prepare_provider_context(
     required: RequiredProvider,
     projection: _ProviderBatchProjection,
     topology: OutputTopology,
     temporal: PoseTemporalOptions,
-    reuse: list[PreparedParamEvaluation],
     *,
     owner: str,
 ) -> PreparedProviderQuery:
@@ -196,8 +202,20 @@ def _prepare_provider(
     if required.topology != "dynamic":
         return PreparedProviderQuery(required, projection, None, effective)
     context = provider_context(projection.value, effective, owner=owner)
+    return PreparedProviderQuery(required, projection, context, effective)
+
+
+def _prepare_provider_evaluations(
+    item: PreparedProviderQuery,
+    topology: OutputTopology,
+    reuse: list[PreparedParamEvaluation],
+    defer_backend_selection: bool,
+) -> PreparedProviderQuery:
+    context = item.context
+    if context is None or item.projection is None:
+        return item
     evaluations: list[PreparedParamEvaluation] = []
-    for options in map_options(projection.value, effective):
+    for options in map_options(item.projection.value, item.temporal):
         evaluation = prepare_runtime_param_evaluation(
             context,
             query=topology.query,
@@ -205,11 +223,52 @@ def _prepare_provider(
             param_kind=context.param_kind,
             query_dim=topology.query_dim,
             reuse=reuse,
+            defer_backend_selection=defer_backend_selection,
         )
         evaluations.append(evaluation)
         if all(evaluation is not candidate for candidate in reuse):
             reuse.append(evaluation)
-    return PreparedProviderQuery(required, projection, context, effective, tuple(evaluations))
+    return replace(item, evaluations=tuple(evaluations))
+
+
+def _preflight_batched_metadata(plan: PreparedPathQuery) -> bool:
+    topology = plan.topology
+    if topology is None or not topology.batch_dims:
+        return False
+    from .batched_path_plan import classify_batched_path_metadata
+
+    classification = classify_batched_path_metadata(plan)
+    return classification.map_is_lazy
+
+
+def _required_providers(
+    values: Sequence[object],
+    representations: Sequence[str | None] | None,
+    *,
+    owner: str,
+) -> tuple[RequiredProvider, ...]:
+    resolved = (None,) * len(values) if representations is None else representations
+    if len(resolved) != len(values):
+        raise ValueError(f"{owner}: provider representation count does not match provider count.")
+    return tuple(
+        RequiredProvider(value, classify_provider_topology(value), representation)
+        for value, representation in zip(values, resolved, strict=True)
+    )
+
+
+def _evaluate_providers(
+    items: tuple[PreparedProviderQuery, ...],
+    topology: OutputTopology,
+    *,
+    defer_backend_selection: bool,
+) -> tuple[PreparedProviderQuery, ...]:
+    reuse: list[PreparedParamEvaluation] = []
+    return tuple(
+        _prepare_provider_evaluations(
+            item, topology, reuse, defer_backend_selection,
+        )
+        for item in items
+    )
 
 
 def prepare_path_query(
@@ -219,9 +278,22 @@ def prepare_path_query(
     caller: object | None,
     temporal: PoseTemporalOptions,
     owner: str,
+    source_representations: Sequence[str | None] | None = None,
+    result_context: object | None = None,
 ) -> PreparedPathQuery:
     """Classify topology and prepare reusable maps before payload work."""
-    providers = tuple(RequiredProvider(value, classify_provider_topology(value)) for value in values)
+    providers = _required_providers(
+        values,
+        source_representations,
+        owner=owner,
+    )
+    output_intent: PathOutputIntent
+    if isinstance(caller, Position):
+        output_intent = "position"
+    elif caller is None:
+        output_intent = "pose"
+    else:
+        output_intent = "unsupported"
     has_dynamic = any(item.topology == "dynamic" for item in providers)
     has_exact = any(item.topology == "exact" for item in providers)
     if has_exact and (has_dynamic or query is not None):
@@ -230,19 +302,25 @@ def prepare_path_query(
         raise ValueError(f"{owner}: dynamic direct path solving requires explicit query=.")
     if not (has_dynamic or (query is not None and not has_exact)):
         items = tuple(PreparedProviderQuery(item, None, None, temporal) for item in providers)
-        return PreparedPathQuery(providers, items, None)
+        return PreparedPathQuery(providers, items, None, output_intent, result_context)
     contexts = tuple(provider_context(item.value, temporal, owner=owner) for item in providers if item.topology == "dynamic")
     topology = (
         _object_topology(caller, temporal, contexts, values, owner=owner)
         if caller is not None
         else _direct_topology(query, values, contexts, temporal, owner=owner)
     )
-    reuse: list[PreparedParamEvaluation] = []
     items = tuple(
-        _prepare_provider(item, projection, topology, temporal, reuse, owner=owner)
+        _prepare_provider_context(item, projection, topology, temporal, owner=owner)
         for item, projection in zip(providers, topology.provider_values, strict=True)
     )
-    return PreparedPathQuery(providers, items, topology)
+    prepared = PreparedPathQuery(providers, items, topology, output_intent, result_context)
+    defer_backend_selection = _preflight_batched_metadata(prepared)
+    evaluated = _evaluate_providers(
+        items,
+        topology,
+        defer_backend_selection=defer_backend_selection,
+    )
+    return replace(prepared, items=evaluated)
 
 
 __all__ = [

@@ -4,20 +4,17 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from tal.utils.numba_support import _numba_available
-
 from ..orchestration.indexing import (
     capture_result_coordinates,
     restore_result_coordinates,
 )
 from ..ordered_dtypes import is_ordered_real_numeric_dtype
-from .backends import (
-    PARAM_BOUNDS_BACKEND_NUMBA,
-    PARAM_BOUNDS_BACKEND_NUMPY_BLOCK,
-    PARAM_MAP_BACKEND_NUMBA,
-    PARAM_MAP_BACKEND_NUMPY_BLOCK,
-    bounds_block_backend,
+from .backend_selection import (
+    _param_map_backend,
+    select_bounds_backend,
+    select_map_backend,
 )
+from .backends import bounds_block_backend
 from .backends import map_block_status_backend as map_block_backend
 from .blocking import (
     LogicalRowBlockPlan,
@@ -172,27 +169,6 @@ def _prepare_map_inputs(
     return opts, aligned[0], aligned[1], aligned[2]
 
 
-def _float_numba_compatible(*values: xr.DataArray) -> bool:
-    return all(np.dtype(value.dtype).kind == "f" and np.dtype(value.dtype).itemsize in {4, 8} for value in values)
-
-
-def _select_map_normal_backend(*, param: xr.DataArray, query: xr.DataArray) -> str:
-    if _float_numba_compatible(param, query) and _numba_available():
-        return PARAM_MAP_BACKEND_NUMBA
-    return PARAM_MAP_BACKEND_NUMPY_BLOCK
-
-
-def _select_bounds_normal_backend(
-    *,
-    param: xr.DataArray,
-    start: xr.DataArray,
-    stop: xr.DataArray,
-) -> str:
-    if _float_numba_compatible(param, start, stop) and _numba_available():
-        return PARAM_BOUNDS_BACKEND_NUMBA
-    return PARAM_BOUNDS_BACKEND_NUMPY_BLOCK
-
-
 def _without_kernel_coordinates(value: xr.DataArray) -> xr.DataArray:
     """Project one mapped block to its schema-free numerical payload."""
     return value.drop_vars(tuple(value.coords))
@@ -228,8 +204,9 @@ def _apply_param_map_block(
     query_dim: str,
     opts: ParamMapOptions,
     param_kind: str,
+    backend: str | None,
 ) -> tuple[xr.DataArray, ...]:
-    backend = _select_map_normal_backend(param=param_da, query=query_da)
+    backend = select_map_backend(param_da, mask_da, query_da, backend)
     arrays = tuple(
         _without_kernel_coordinates(value)
         for value in (param_da, mask_da, query_da)
@@ -326,6 +303,7 @@ def _apply_param_map_blocks(
     query_dim: str,
     opts: ParamMapOptions,
     param_kind: str,
+    backend: str | None,
 ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
     plan = prepare_logical_row_blocks(
         param_da,
@@ -334,8 +312,7 @@ def _apply_param_map_blocks(
         excluded_dims=frozenset({sequence_dim}),
         fastest_dim=query_dim,
     )
-    source_size = int(param_da.sizes[sequence_dim])
-    if plan.has_no_rows or source_size == 0:
+    if plan.has_no_rows or int(param_da.sizes[sequence_dim]) == 0:
         return _empty_param_map(
             param_da,
             mask_da,
@@ -354,6 +331,7 @@ def _apply_param_map_blocks(
             query_dim=query_dim,
             opts=opts,
             param_kind=param_kind,
+            backend=backend,
         )
         for block in plan.blocks
     )
@@ -415,6 +393,7 @@ def build_param_map(
         options=options,
         param_kind=param_kind,
     )
+    backend = _param_map_backend(opts)
     i0, i1, alpha, valid = _apply_param_map_blocks(
         param_da=param_da,
         mask_da=mask_da,
@@ -423,6 +402,7 @@ def build_param_map(
         query_dim=query_dim,
         opts=opts,
         param_kind=param_kind,
+        backend=backend,
     )
     return ParamMap(i0=i0, i1=i1, alpha=alpha, valid=valid, query_dim=query_dim)
 
@@ -525,7 +505,7 @@ def _apply_param_bounds_block(
             dask_gufunc_kwargs={"allow_rechunk": True},
             output_dtypes=[np.int64, np.int64],
         )
-    backend = _select_bounds_normal_backend(param=param_da, start=start_da, stop=stop_da)
+    backend = select_bounds_backend(param_da, mask_da, start_da, stop_da)
     return xr.apply_ufunc(
         bounds_block_backend,
         param_da,

@@ -10,7 +10,7 @@ from tal.frames import Frame, FramePath, find_path, fold_path
 from tal.utils.frame_schema import set_frames
 
 from ..association import attach_spatial_association
-from ..metadata import set_expressed_in, set_pose_rep, set_rotation_rep
+from ..metadata import get_pose_rep, set_expressed_in, set_pose_rep, set_rotation_rep
 from ..pose import Pose
 from ..position import Position
 from ..rotation import (
@@ -42,6 +42,7 @@ from .pose_provider_ops import (
     normalize_pose_provider,
     require_bound_pose_provider,
     resolve_bound_pose,
+    resolve_bound_pose_with_representation,
 )
 
 _QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
@@ -82,6 +83,24 @@ def _normalize_pose_edge(
     return normalize_pose_provider(
         payload, child_id=child.id, parent_id=parent.id, owner=owner,
     )
+
+
+def _normalize_pose_edge_with_representation(
+    payload: object,
+    *,
+    child: Frame,
+    parent: Frame,
+    owner: str,
+) -> tuple[Pose, str]:
+    try:
+        source = payload if isinstance(payload, Pose) else Pose(payload)
+        representation = get_pose_rep(analysis_object_dataset(source), owner=owner)
+    except (TypeError, ValueError, SchemaError) as exc:
+        raise ValueError(f"{owner}: edge resolver must return Pose-coercible payload.") from exc
+    value = _normalize_pose_edge(
+        source, child=child, parent=parent, owner=owner, strict=True,
+    )
+    return value, representation
 
 
 def _rotation_identity(*, parent: str, child: str, owner: str) -> Rotation:
@@ -134,7 +153,7 @@ def _resolve_edge_value(
     *,
     kind: str,
     owner: str,
-):
+) -> Rotation | Pose:
     if prepared.resolver is None:
         pose = resolve_bound_pose(child, parent, owner=owner)
         return pose if kind == "pose" else pose.decompose(validate=False)[1].as_quat(validate=False)
@@ -144,8 +163,30 @@ def _resolve_edge_value(
         parent,
         owner=owner,
     )
-    normalize = _normalize_pose_edge if kind == "pose" else _normalize_rotation_edge
-    return normalize(payload, child=child, parent=parent, owner=owner, strict=True)
+    if kind != "pose":
+        return _normalize_rotation_edge(
+            payload,
+            child=child,
+            parent=parent,
+            owner=owner,
+            strict=True,
+        )
+    return _normalize_pose_edge(payload, child=child, parent=parent, owner=owner, strict=True)
+
+
+def _resolve_pose_value_with_representation(
+    prepared: PreparedEdgeResolver,
+    child: Frame,
+    parent: Frame,
+    *,
+    owner: str,
+) -> tuple[Pose, str]:
+    if prepared.resolver is None:
+        return resolve_bound_pose_with_representation(child, parent, owner=owner)
+    payload = call_prepared_edge_resolver(prepared, child, parent, owner=owner)
+    return _normalize_pose_edge_with_representation(
+        payload, child=child, parent=parent, owner=owner,
+    )
 
 
 def _resolved_path(endpoints: ResolvedPathEndpointPlan, *, owner: str):
@@ -177,6 +218,20 @@ def _acquire_path_values(
             step.parent,
             kind=kind,
             owner=owner,
+        )
+        for step in path.steps
+    )
+
+
+def _acquire_pose_path_values(
+    path: FramePath,
+    prepared: PreparedEdgeResolver,
+    *,
+    owner: str,
+) -> tuple[tuple[Pose, str], ...]:
+    return tuple(
+        _resolve_pose_value_with_representation(
+            prepared, step.child, step.parent, owner=owner,
         )
         for step in path.steps
     )
@@ -358,8 +413,17 @@ def solve_pose_path_transform_impl(
     path = _resolved_path(endpoints, owner=owner)
     temporal = require_path_temporal_options(endpoints.configuration.options.temporal, owner=owner)
     _preflight_bound_path(path, prepared, owner=owner)
-    values = _acquire_path_values(path, prepared, kind="pose", owner=owner)
-    query_plan = prepare_path_query(values, query=query, caller=caller, temporal=temporal, owner=owner)
+    acquired = _acquire_pose_path_values(path, prepared, owner=owner)
+    values = tuple(item[0] for item in acquired)
+    query_plan = prepare_path_query(
+        values,
+        query=query,
+        caller=caller,
+        temporal=temporal,
+        owner=owner,
+        source_representations=tuple(item[1] for item in acquired),
+        result_context=endpoints.association,
+    )
     execution = prepare_pose_path_execution(path, query_plan)
     complete = execute_pose_path(execution, owner=owner)
     if isinstance(complete, Pose):

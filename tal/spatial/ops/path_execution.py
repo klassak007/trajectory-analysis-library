@@ -21,6 +21,10 @@ from ..kernels.streaming_pose_path import stream_pose_path_blocks
 from ..metadata import get_pose_rep
 from ..pose import Pose
 from ..temporal.options import resolve_rotation_method
+from .batched_path_plan import (
+    PreparedBatchedPathExecution,
+    prepare_batched_path_execution,
+)
 from .path_query_ops import (
     CompletePathQuery,
     _raise_path_query_execution_error,
@@ -41,6 +45,7 @@ class PreparedPosePathExecution:
     path: FramePath
     query: PreparedPathQuery
     kind: PathExecutionKind
+    batched: PreparedBatchedPathExecution | None = None
 
 
 @dataclass(frozen=True)
@@ -186,13 +191,14 @@ def prepare_pose_path_execution(
 ) -> PreparedPosePathExecution:
     """Classify one prepared Pose request without inspecting payload values."""
     topology = query.topology
-    if topology is None or topology.query.size == 0 or not _streaming_eligible(query):
+    batched = prepare_batched_path_execution(path, query)
+    if batched is not None or topology is None or topology.query.size == 0 or not _streaming_eligible(query):
         kind: PathExecutionKind = "generic"
     elif _numba_available():
         kind = "fused-numba"
     else:
         kind = "scipy-stream"
-    return PreparedPosePathExecution(path, query, kind)
+    return PreparedPosePathExecution(path, query, kind, batched)
 
 
 def _pose_arrays(item: PreparedProviderQuery) -> _PoseArrays:

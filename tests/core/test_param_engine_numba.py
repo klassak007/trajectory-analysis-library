@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+import tal.core.param_engine.backend_selection as backend_selection_mod
 import tal.core.param_engine.map_build as map_build_mod
 from tal.core.event_ops.backends import (
     EVENT_BOUNDARY_BACKEND_NUMBA,
@@ -29,6 +30,7 @@ from tal.core.param_engine.map_build import (
 )
 from tal.core.param_engine.numeric_rows import numeric_bounds_row, numeric_map_row
 from tal.linalg.ops.solve_backends import LSTSQ_BACKEND_NUMBA, lstsq_block_backend
+from tal.utils import numba_support
 
 
 def _require_numba() -> None:
@@ -66,6 +68,44 @@ assert all(bool(value.data[0, 0]) for value in computed)
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_param_lazy_backend_selection_occurs_inside_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: PARAM_LAZY_WORKER_BACKEND_SELECTION_001."""
+    da = pytest.importorskip("dask.array")
+
+    param = xr.DataArray(
+        da.from_array([[0.0, 1.0, 2.0]], chunks=(1, 3)),
+        dims=("row", "sample"),
+    )
+    query = xr.DataArray(
+        da.from_array([[0.5, 1.5]], chunks=(1, 1)),
+        dims=("row", "query"),
+    )
+    monkeypatch.setattr(
+        backend_selection_mod,
+        "_numba_available",
+        lambda: (_ for _ in ()).throw(AssertionError("client backend acquisition")),
+    )
+    mapping = build_param_map(
+        param=param,
+        query=query,
+        sequence_dim="sample",
+        query_dim="query",
+    )
+    bounds = build_param_bounds_map(
+        param=param,
+        start=xr.DataArray([0.25], dims=("row",)),
+        stop=xr.DataArray([1.75], dims=("row",)),
+        sequence_dim="sample",
+    )
+
+    monkeypatch.setattr(numba_support, "_numba_available", lambda: False)
+    np.testing.assert_allclose(mapping.alpha.compute(scheduler="synchronous"), [[0.5, 0.5]])
+    np.testing.assert_array_equal(bounds.i0.compute(scheduler="synchronous"), [1])
+    np.testing.assert_array_equal(bounds.i1.compute(scheduler="synchronous"), [2])
 
 
 def _baseline_map_block(
@@ -181,7 +221,7 @@ def test_param_f2c_003_map_normal_path_uses_block_backend(monkeypatch: pytest.Mo
         kwargs["backend"] = PARAM_MAP_BACKEND_NUMPY_BLOCK
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: True)
+    monkeypatch.setattr(backend_selection_mod, "_numba_available", lambda: True)
     monkeypatch.setattr(map_build_mod, "map_block_backend", _capture)
     pmap = build_param_map(
         param=xr.DataArray(np.asarray([0.0, 1.0, 2.0]), dims=("sample",)),
@@ -204,7 +244,7 @@ def test_param_f2c_004_bounds_normal_path_uses_block_backend(monkeypatch: pytest
         kwargs["backend"] = PARAM_BOUNDS_BACKEND_NUMPY_BLOCK
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: True)
+    monkeypatch.setattr(backend_selection_mod, "_numba_available", lambda: True)
     monkeypatch.setattr(map_build_mod, "bounds_block_backend", _capture)
     bounds = build_param_bounds_map(
         param=xr.DataArray(np.asarray([0.0, 1.0, 2.0]), dims=("sample",)),
@@ -231,7 +271,7 @@ def test_param_f2c_005_param_no_numba_block_fallback_parity(monkeypatch: pytest.
         seen.append(kwargs["backend"])
         return original_bounds(*args, **kwargs)
 
-    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: False)
+    monkeypatch.setattr(backend_selection_mod, "_numba_available", lambda: False)
     monkeypatch.setattr(map_build_mod, "map_block_backend", _capture_map)
     monkeypatch.setattr(map_build_mod, "bounds_block_backend", _capture_bounds)
     param = xr.DataArray(np.asarray([[0.0, 1.0, 2.0], [10.0, 11.0, np.nan]]), dims=("trial", "sample"))
@@ -253,7 +293,7 @@ def test_param_f2c_005_param_no_numba_block_fallback_parity(monkeypatch: pytest.
 
 def test_numba_opt_010_param_default_migration_falls_back_without_numba(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: NUMBA_OPT_010_param_default_migration_falls_back_without_numba."""
-    monkeypatch.setattr(map_build_mod, "_numba_available", lambda: False)
+    monkeypatch.setattr(backend_selection_mod, "_numba_available", lambda: False)
     pmap = build_param_map(
         param=xr.DataArray(np.asarray([0.0, 1.0, 2.0]), dims=("sample",)),
         query=xr.DataArray(np.asarray([0.5]), dims=("query",)),

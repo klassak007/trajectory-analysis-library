@@ -12,7 +12,7 @@ from tal.frames import Frame
 from tal.frames.registry import get_edge_to_parent_runtime_ext
 from tal.utils.frame_schema import get_frames, set_frames
 
-from ..metadata import get_expressed_in
+from ..metadata import get_expressed_in, get_pose_rep
 from ..metadata.relation import clear_expressed_in
 from .edge_resolver_ops import (
     PreparedEdgeResolver,
@@ -118,7 +118,7 @@ def require_bound_pose_provider(child: Frame, parent: Frame, *, owner: str) -> B
     return provider
 
 
-def resolve_bound_pose(child: Frame, parent: Frame, *, owner: str) -> Pose:
+def _bound_pose_payload(child: Frame, parent: Frame, *, owner: str) -> object:
     provider = require_bound_pose_provider(child, parent, owner=owner)
     value = provider.value
     if provider.signature_checked is not None:
@@ -129,4 +129,35 @@ def resolve_bound_pose(child: Frame, parent: Frame, *, owner: str) -> Pose:
             parent,
             owner=owner,
         )
-    return normalize_pose_provider(value, child_id=child.id, parent_id=parent.id, owner=owner)
+    return value
+
+
+def resolve_bound_pose_with_representation(
+    child: Frame,
+    parent: Frame,
+    *,
+    owner: str,
+) -> tuple[Pose, str]:
+    """Resolve one provider while retaining its declared source representation."""
+    from ..pose import Pose
+
+    value = _bound_pose_payload(child, parent, owner=owner)
+    try:
+        pose = value if isinstance(value, Pose) else Pose(value)
+        representation = get_pose_rep(analysis_object_dataset(pose), owner=owner)
+    except (TypeError, ValueError, SchemaError) as exc:
+        raise ValueError(f"{owner}: edge resolver must return Pose-coercible payload.") from exc
+    normalized = normalize_pose_provider(
+        pose,
+        child_id=child.id,
+        parent_id=parent.id,
+        owner=owner,
+    )
+    return normalized, representation
+
+
+def resolve_bound_pose(child: Frame, parent: Frame, *, owner: str) -> Pose:
+    value = _bound_pose_payload(child, parent, owner=owner)
+    return normalize_pose_provider(
+        value, child_id=child.id, parent_id=parent.id, owner=owner,
+    )

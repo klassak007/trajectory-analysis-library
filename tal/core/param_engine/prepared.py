@@ -8,6 +8,7 @@ import pandas as pd
 import xarray as xr
 
 from ..orchestration.indexing import restore_result_coordinates
+from .backend_selection import _with_map_backend
 from .map_build import build_param_map
 from .query_grid import _normalize_query_grid_with_topology
 from .query_topology import QueryTopologyPlan
@@ -31,6 +32,20 @@ class PreparedParamEvaluation:
     @property
     def has_no_rows(self) -> bool:
         return int(self.param_map.valid.size) == 0
+
+
+@dataclass(frozen=True)
+class _ParamEvaluationRequest:
+    param: xr.DataArray
+    query: object
+    sequence_dim: str
+    batch_dims: tuple[str, ...]
+    batch_coords: xr.Coordinates | None
+    valid_mask: xr.DataArray
+    options: ParamMapOptions
+    param_kind: str
+    query_dim: str
+    map_backend: str | None = None
 
 
 def _array_is_lazy(value: xr.DataArray) -> bool:
@@ -260,34 +275,48 @@ def prepare_param_evaluation(
     reuse: Iterable[PreparedParamEvaluation] = (),
 ) -> PreparedParamEvaluation:
     """Normalize and map one request, reusing an exactly equivalent plan."""
-    grid, query_topology = _normalize_query_grid_with_topology(
+    request = _ParamEvaluationRequest(
+        param,
         query,
-        query_dim=query_dim,
-        batch_dims=batch_dims,
-        batch_coords=batch_coords,
-        param_kind=param_kind,
+        sequence_dim,
+        batch_dims,
+        batch_coords,
+        valid_mask,
+        options,
+        param_kind,
+        query_dim,
+    )
+    return _prepare_param_evaluation(request, reuse=reuse)
+
+
+def _prepare_param_evaluation(
+    request: _ParamEvaluationRequest,
+    *,
+    reuse: Iterable[PreparedParamEvaluation] = (),
+) -> PreparedParamEvaluation:
+    grid, query_topology = _normalize_query_grid_with_topology(
+        request.query,
+        query_dim=request.query_dim,
+        batch_dims=request.batch_dims,
+        batch_coords=request.batch_coords,
+        param_kind=request.param_kind,
     )
     for candidate in reuse:
         if prepared_evaluation_matches(
             candidate,
             grid=grid,
-            param=param,
-            valid_mask=valid_mask,
-            sequence_dim=sequence_dim,
-            batch_dims=batch_dims,
-            param_kind=param_kind,
-            options=options,
+            param=request.param,
+            valid_mask=request.valid_mask,
+            sequence_dim=request.sequence_dim,
+            batch_dims=request.batch_dims,
+            param_kind=request.param_kind,
+            options=request.options,
             query_topology=query_topology,
         ):
             return candidate
     return _new_prepared_evaluation(
         grid=grid,
-        param=param,
-        valid_mask=valid_mask,
-        sequence_dim=sequence_dim,
-        batch_dims=batch_dims,
-        param_kind=param_kind,
-        options=options,
+        request=request,
         query_topology=query_topology,
     )
 
@@ -295,38 +324,35 @@ def prepare_param_evaluation(
 def _new_prepared_evaluation(
     *,
     grid: QueryGrid,
-    param: xr.DataArray,
-    valid_mask: xr.DataArray,
-    sequence_dim: str,
-    batch_dims: tuple[str, ...],
-    param_kind: str,
-    options: ParamMapOptions,
+    request: _ParamEvaluationRequest,
     query_topology: QueryTopologyPlan,
 ) -> PreparedParamEvaluation:
     param_map = build_param_map(
-        param=param,
+        param=request.param,
         query=grid.values,
-        sequence_dim=sequence_dim,
+        sequence_dim=request.sequence_dim,
         query_dim=grid.query_dim,
-        valid_mask=valid_mask,
-        options=options,
-        param_kind=param_kind,
+        valid_mask=request.valid_mask,
+        options=_with_map_backend(request.options, request.map_backend),
+        param_kind=request.param_kind,
     )
     return PreparedParamEvaluation(
         grid=grid,
         param_map=param_map,
-        sequence_dim=sequence_dim,
-        batch_dims=batch_dims,
-        param_kind=param_kind,
-        options=options,
-        source_param=param,
-        source_valid=valid_mask,
+        sequence_dim=request.sequence_dim,
+        batch_dims=request.batch_dims,
+        param_kind=request.param_kind,
+        options=request.options,
+        source_param=request.param,
+        source_valid=request.valid_mask,
         query_topology=query_topology,
     )
 
 
 __all__ = [
     "PreparedParamEvaluation",
+    "_ParamEvaluationRequest",
+    "_prepare_param_evaluation",
     "prepare_param_evaluation",
     "prepared_evaluation_matches",
 ]
