@@ -632,6 +632,7 @@ class AnalysisObject:
         validate: bool,
         rename_map: Mapping[str, str] | None = None,
         validated_registry: Mapping[str, Any] | None = None,
+        preserve_sequence_topology: bool = False,
     ) -> AnalysisObject:
         from .component_ops.rewrite import rewrite_component_registry_after_structure
 
@@ -641,7 +642,7 @@ class AnalysisObject:
             repaired,
             validate=validate,
             owner=f"{self.__class__.__name__}._finalize_structural",
-            rename_map=rename_map,
+            rename_map=rename_map, preserve_topology=preserve_sequence_topology,
         )
         rewritten = rewrite_component_registry_after_structure(
             reconciled,

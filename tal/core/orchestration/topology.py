@@ -13,6 +13,7 @@ from typing import Literal
 
 import xarray as xr
 
+from .indexing import dimension_coordinates
 from .topology_batch import (
     align_combine_batch_axis,
     allocate_flat_batch_dim_name,
@@ -26,6 +27,7 @@ from .topology_batch import (
     restore_dataset_multi_batch,
     stack_combine_batch_axis,
 )
+
 
 @dataclass(frozen=True)
 class SemanticTopology:
@@ -97,7 +99,7 @@ def _normalize_policy(
     if resolved.core_policy not in _CORE_POLICIES:
         raise ValueError(f"{owner}: core_policy={resolved.core_policy!r} is not supported.")
     if not isinstance(resolved.strict_core_match_required, bool):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004 - preserve the established topology-policy error type.
             f"{owner}: strict_core_match_required={resolved.strict_core_match_required!r} "
             "must be bool."
         )
@@ -503,15 +505,6 @@ def _reference_operand_for_dim(
         f"{owner}: {what} semantic broadcast requires at least one operand carrying dim {dim!r}."
     )
 
-def _expand_spec_for_dim(
-    reference: xr.DataArray,
-    *,
-    dim: str,
-) -> xr.DataArray | int:
-    if dim in reference.coords and tuple(reference.coords[dim].dims) == (dim,):
-        return reference.coords[dim]
-    return int(reference.sizes[dim])
-
 def _expand_operand_semantic_dims(
     operand: TopologyOperand,
     *,
@@ -528,11 +521,15 @@ def _expand_operand_semantic_dims(
     if not dims_to_add:
         return operand.data
     expand_spec = {
-        dim: _expand_spec_for_dim(references[dim], dim=dim)
+        dim: references[dim].sizes[dim]
         for dim in dims_to_add
     }
     try:
-        return operand.data.expand_dims(expand_spec)
+        output = operand.data.expand_dims(expand_spec)
+        sources = {id(references[dim]): references[dim] for dim in dims_to_add}
+        for reference in sources.values():
+            output = output.assign_coords(dimension_coordinates(reference, dims=tuple(dims_to_add)))
+        return output
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"{owner}: {what} failed to realize semantic broadcast dims {tuple(dims_to_add)!r} "
@@ -565,12 +562,12 @@ def _realize_semantic_broadcast_operands(
     )
 
 __all__ = [
-    "ResolvedTopologyPlan",
     "SEMANTIC_EXACT_POLICY",
     "SEMANTIC_NON_CORE_POLICY",
-    "SemanticTopology",
     "STRICT_EXACT_POLICY",
     "STRICT_NON_CORE_POLICY",
+    "ResolvedTopologyPlan",
+    "SemanticTopology",
     "TopologyOperand",
     "TopologyPolicy",
     "align_combine_batch_axis",
@@ -578,14 +575,14 @@ __all__ = [
     "batch_index_for_dataset",
     "flatten_param_contexts",
     "flatten_query_for_batch_plan",
-    "join_combine_batch_labels",
     "join_batch_indices",
-    "restore_combine_batch_axis",
-    "restore_dataset_batch_topology",
-    "restore_dataset_multi_batch",
+    "join_combine_batch_labels",
+    "realize_operands_for_plan",
     "resolve_binary_topology",
     "resolve_nary_topology",
     "resolve_unary_topology",
-    "realize_operands_for_plan",
+    "restore_combine_batch_axis",
+    "restore_dataset_batch_topology",
+    "restore_dataset_multi_batch",
     "stack_combine_batch_axis",
 ]

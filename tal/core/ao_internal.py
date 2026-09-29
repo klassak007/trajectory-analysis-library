@@ -12,6 +12,7 @@ def finalize_structural(
     validate: bool,
     rename_map: Mapping[str, str] | None = None,
     validated_registry: Mapping[str, object] | None = None,
+    preserve_sequence_topology: bool = False,
 ):
     """Centralized wrapper for AO structural finalization internals.
 
@@ -40,6 +41,7 @@ def finalize_structural(
         validate=validate,
         rename_map=rename_map,
         validated_registry=validated_registry,
+        preserve_sequence_topology=preserve_sequence_topology,
     )
 
 

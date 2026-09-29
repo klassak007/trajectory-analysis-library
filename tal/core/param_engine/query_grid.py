@@ -20,6 +20,7 @@ from ..ordered_dtypes import (
     is_integral_dtype,
     is_ordered_real_numeric_dtype,
 )
+from ..param_ops.query_metadata import without_inherited_query_metadata
 from ..schema_validate.finalize import transfer_dataarray_metadata
 from .query_topology import (
     QueryTopologyPlan,
@@ -330,6 +331,7 @@ def _normalize_query_grid_with_topology(
     enforce_order: bool = True,
 ) -> tuple[QueryGrid, QueryTopologyPlan]:
     """Prepare normalized values and private public-topology state."""
+    query = without_inherited_query_metadata(query)
     batch_tuple = tuple(str(dim) for dim in batch_dims)
     if query_dim in batch_tuple:
         raise ValueError(

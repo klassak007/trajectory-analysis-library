@@ -22,6 +22,7 @@ from tal.core.orchestration.runtime_checks import (
 from tal.core.orchestration.topology import (
     SEMANTIC_NON_CORE_POLICY,
     STRICT_NON_CORE_POLICY,
+    ResolvedTopologyPlan,
     TopologyOperand,
     TopologyPolicy,
     resolve_binary_topology,
@@ -56,6 +57,14 @@ from .metadata import (
 from .ops.core_chunks import single_core_chunk
 from .ops.frame_api_ops import rotation_class_solve_path_transform
 from .ops.frame_owner_common import require_parent_basis_for_inverse
+from .ops.numerical_coordinates import share_lazy_numerical_coordinates
+from .ops.numerical_validity import (
+    combined_numerical_mask,
+    finalize_numerical_result,
+    mask_numerical_result,
+    numerical_valid_mask,
+    safe_rotation_values,
+)
 from .ops.quat_role_dim_ops import (
     require_matrix_core_dims,
     require_rotation_ingress_core_roles,
@@ -90,10 +99,6 @@ if TYPE_CHECKING:
 _QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
 _MATRIX_LABELS: tuple[str, str, str] = ("x", "y", "z")
 _ALLOWED_TARGET_REPS = {"quat", "matrix"}
-
-
-def _coerce_rotation_source(value: object, *, owner: str) -> AnalysisObject:
-    return coerce_analysis_object_input(value, owner=owner)
 
 
 def _coerce_rotation_operand(value: object, *, owner: str) -> Rotation:
@@ -150,9 +155,11 @@ def _convert_quat_to_matrix(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         second_what="rotation matrix col dim",
         owner=owner,
     )
+    valid = numerical_valid_mask(candidate)
+    values = safe_rotation_values(candidate[var_name], core_dims=(quat_dim,), valid=valid)
     matrix = xr.apply_ufunc(
         wrap_quat_to_matrix_backend,
-        single_core_chunk(candidate[var_name], dim=quat_dim),
+        single_core_chunk(values, dim=quat_dim),
         input_core_dims=[[quat_dim]],
         output_core_dims=[[row_dim, col_dim]],
         vectorize=False,
@@ -160,6 +167,7 @@ def _convert_quat_to_matrix(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         output_dtypes=[np.float64],
         dask_gufunc_kwargs={"output_sizes": {row_dim: 3, col_dim: 3}},
     )
+    matrix = mask_numerical_result(matrix, valid)
     matrix = matrix.assign_coords({row_dim: list(_MATRIX_LABELS), col_dim: list(_MATRIX_LABELS)})
     out = conversion_dataset_from_array(matrix, var_name=var_name, source_ds=candidate)
     return _finalize_rotation_conversion(out, core_dims=(row_dim, col_dim), rep="matrix", owner=owner)
@@ -184,9 +192,11 @@ def _convert_matrix_to_quat(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         owner=owner,
         what="rotation quaternion dim",
     )
+    valid = numerical_valid_mask(candidate)
+    values = safe_rotation_values(candidate[var_name], core_dims=(row_dim, col_dim), valid=valid)
     quat = xr.apply_ufunc(
         wrap_matrix_to_quat_backend,
-        single_core_chunk(single_core_chunk(candidate[var_name], dim=row_dim), dim=col_dim),
+        single_core_chunk(single_core_chunk(values, dim=row_dim), dim=col_dim),
         input_core_dims=[[row_dim, col_dim]],
         output_core_dims=[[quat_dim]],
         vectorize=False,
@@ -194,6 +204,7 @@ def _convert_matrix_to_quat(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
         output_dtypes=[np.float64],
         dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}},
     )
+    quat = mask_numerical_result(quat, valid)
     quat = quat.assign_coords({quat_dim: list(_QUAT_LABELS)})
     out = conversion_dataset_from_array(quat, var_name=var_name, source_ds=candidate)
     return _finalize_rotation_conversion(out, core_dims=(quat_dim,), rep="quat", owner=owner)
@@ -216,19 +227,17 @@ def _prepare_compose_quat_inputs(
     *,
     owner: str,
     policy: TopologyPolicy,
-) -> tuple[xr.Dataset, str, str, str, xr.DataArray, xr.DataArray]:
+) -> tuple[xr.Dataset, str, str, str, xr.DataArray, xr.DataArray, ResolvedTopologyPlan, xr.DataArray | None]:
     left_candidate = validate_schema_if_needed(left_ds)
     right_candidate = validate_schema_if_needed(right_ds)
     left_var, left_quat_dim = resolve_single_numeric_var_single_core_dim(left_candidate, owner=owner, what="left rotation")
     right_var, right_quat_dim = resolve_single_numeric_var_single_core_dim(right_candidate, owner=owner, what="right rotation")
     require_quat_labels(left_candidate, axis=left_quat_dim, owner=owner)
     require_quat_labels(right_candidate, axis=right_quat_dim, owner=owner)
-    left_da = left_candidate[left_var]
-    right_da = right_candidate[right_var]
     plan = resolve_binary_topology(
         TopologyOperand(
             index=0,
-            data=left_da,
+            data=left_candidate[left_var],
             semantic=resolve_semantic_topology_from_dataset(
                 left_candidate,
                 var_name=left_var,
@@ -242,7 +251,7 @@ def _prepare_compose_quat_inputs(
         ),
         TopologyOperand(
             index=1,
-            data=right_da,
+            data=right_candidate[right_var],
             semantic=resolve_semantic_topology_from_dataset(
                 right_candidate,
                 var_name=right_var,
@@ -258,8 +267,9 @@ def _prepare_compose_quat_inputs(
         what="compose",
         policy=policy,
     )
-    aligned_left, aligned_right = align_exact_for_plan(plan, owner=owner, what="compose")
-    return left_candidate, left_var, left_quat_dim, right_quat_dim, aligned_left, aligned_right
+    valid = combined_numerical_mask(left_candidate, right_candidate, topology=plan, owner=owner)
+    aligned_left, aligned_right = share_lazy_numerical_coordinates(*align_exact_for_plan(plan, owner=owner, what="compose"), owner=owner)
+    return left_candidate, left_var, left_quat_dim, right_quat_dim, aligned_left, aligned_right, plan, valid
 
 
 def _compose_quat_datasets(
@@ -269,12 +279,14 @@ def _compose_quat_datasets(
     owner: str,
     policy: TopologyPolicy,
 ) -> tuple[xr.Dataset, str]:
-    left_candidate, left_var, left_quat_dim, right_quat_dim, aligned_left, aligned_right = _prepare_compose_quat_inputs(
+    left_candidate, left_var, left_quat_dim, right_quat_dim, aligned_left, aligned_right, plan, valid = _prepare_compose_quat_inputs(
         left_ds,
         right_ds,
         owner=owner,
         policy=policy,
     )
+    aligned_left = safe_rotation_values(aligned_left, core_dims=(left_quat_dim,), valid=valid)
+    aligned_right = safe_rotation_values(aligned_right, core_dims=(right_quat_dim,), valid=valid)
     out = xr.apply_ufunc(
         partial(wrap_compose_quat_kernel, owner=owner),
         single_core_chunk(aligned_left, dim=left_quat_dim),
@@ -286,18 +298,21 @@ def _compose_quat_datasets(
         output_dtypes=[np.float64],
         dask_gufunc_kwargs={"output_sizes": {left_quat_dim: 4}},
     )
+    out = mask_numerical_result(out, valid)
     out = out.assign_coords({left_quat_dim: list(_QUAT_LABELS)})
     out_ds = out.to_dataset(name=left_var)
-    out_ds = transfer_dataset_attrs(left_candidate, out_ds, validate=False)
+    out_ds = finalize_numerical_result(left_candidate, out_ds, valid, topology=plan, other=right_ds, owner=owner)
     return _finalize_rotation_conversion(out_ds, core_dims=(left_quat_dim,), rep="quat", owner=owner), left_quat_dim
 
 
 def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, str]:
     candidate = validate_schema_if_needed(ds)
     var_name, quat_dim = require_quat_var_and_dim(candidate, owner=owner)
+    valid = numerical_valid_mask(candidate)
+    values = safe_rotation_values(candidate[var_name], core_dims=(quat_dim,), valid=valid)
     quat = xr.apply_ufunc(
         partial(wrap_inverse_quat_kernel, owner=owner),
-        single_core_chunk(candidate[var_name], dim=quat_dim),
+        single_core_chunk(values, dim=quat_dim),
         input_core_dims=[[quat_dim]],
         output_core_dims=[[quat_dim]],
         vectorize=False,
@@ -305,6 +320,7 @@ def _inverse_quat_dataset(ds: xr.Dataset, *, owner: str) -> tuple[xr.Dataset, st
         output_dtypes=[np.float64],
         dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}},
     )
+    quat = mask_numerical_result(quat, valid)
     quat = quat.assign_coords({quat_dim: list(_QUAT_LABELS)})
     out_ds = quat.to_dataset(name=var_name)
     out_ds = transfer_dataset_attrs(candidate, out_ds, validate=False)
@@ -411,7 +427,7 @@ class Rotation(
     MATRIX_LABELS: tuple[str, str, str] = _MATRIX_LABELS
     SPATIAL_FIELD_TARGET = "rotation"
     SPATIAL_CONSTRUCTION_OWNER = "spatial.rotation.__init__"
-    SPATIAL_SOURCE_COERCER = staticmethod(_coerce_rotation_source)
+    SPATIAL_SOURCE_COERCER = staticmethod(coerce_analysis_object_input)
     SPATIAL_PRE_ENFORCE = staticmethod(require_rotation_ingress_core_roles)
 
     @classmethod

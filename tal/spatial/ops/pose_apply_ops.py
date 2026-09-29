@@ -10,13 +10,13 @@ from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
-from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.orchestration.runtime_checks import (
     resolve_single_numeric_var_single_core_dim,
 )
 from tal.core.orchestration.topology import (
     SEMANTIC_NON_CORE_POLICY,
     STRICT_NON_CORE_POLICY,
+    ResolvedTopologyPlan,
     TopologyOperand,
     TopologyPolicy,
     resolve_nary_topology,
@@ -40,7 +40,14 @@ from ..policies.wrap import wrap_like
 from ..position import Position
 from ..velocity import AngularVelocity, LinearVelocity, Velocity
 from .core_chunks import single_core_chunk
-from .pose_rotation_ops import safe_pose_operands
+from .numerical_coordinates import share_lazy_numerical_coordinates
+from .numerical_validity import (
+    combined_numerical_mask,
+    finalize_numerical_result,
+    mask_numerical_result,
+    safe_rotation_values,
+)
+from .pose_rotation_ops import rotation_with_selection_intents, safe_pose_operands
 from .rotation_apply_ops import _rotation_apply_with_owner
 
 if TYPE_CHECKING:
@@ -83,6 +90,8 @@ class PoseApplyResolvedInputs:
     target_da: xr.DataArray
     translation_da: xr.DataArray
     quat_da: xr.DataArray
+    topology: ResolvedTopologyPlan
+    valid: xr.DataArray | None
 
 
 def _topology_operand(
@@ -125,7 +134,7 @@ def _wrap_pose_apply_position_kernel(
 
 
 def _resolve_pose_position_apply_inputs(
-    pose: "Pose",
+    pose: Pose,
     target: Position,
     *,
     owner: str,
@@ -143,7 +152,7 @@ def _resolve_pose_position_apply_inputs(
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
     policy = selection.policy
-    target_da, translation_da, quat_da = _align_pose_position_operands(
+    target_da, translation_da, quat_da, plan, valid = _align_pose_position_operands(
         specs,
         owner=owner,
         policy=policy,
@@ -153,11 +162,13 @@ def _resolve_pose_position_apply_inputs(
         target_da=target_da,
         translation_da=translation_da,
         quat_da=quat_da,
+        topology=plan,
+        valid=valid,
     )
 
 
 def _resolve_pose_position_input_specs(
-    pose: "Pose",
+    pose: Pose,
     target: Position,
     *,
     owner: str,
@@ -201,17 +212,18 @@ def _align_pose_position_operands(
     *,
     owner: str,
     policy: TopologyPolicy,
-) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, ResolvedTopologyPlan, xr.DataArray | None]:
     plan = _resolve_pose_position_plan(
         specs,
         owner=owner,
         policy=policy,
     )
-    return align_exact_for_plan(
+    valid = combined_numerical_mask(specs.target_ds, specs.translation_ds, specs.quat_ds, topology=plan, owner=owner)
+    return (*align_exact_for_plan(
         plan,
         owner=owner,
         what="pose apply",
-    )
+    ), plan, valid)
 
 
 def _resolve_pose_position_plan(
@@ -281,6 +293,7 @@ def _apply_pose_position_kernel(
     quat_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    target_da, translation_da, quat_da = share_lazy_numerical_coordinates(target_da, translation_da, quat_da, owner=owner)
     kernel = _wrap_pose_apply_position_kernel
     try:
         output = xr.apply_ufunc(
@@ -302,7 +315,7 @@ def _apply_pose_position_kernel(
 
 
 def _apply_pose_to_position(
-    pose: "Pose",
+    pose: Pose,
     target: Position,
     *,
     parent: str | None,
@@ -315,10 +328,11 @@ def _apply_pose_to_position(
         target,
         owner=owner,
     )
+    valid = resolved.valid
     output = _apply_pose_position_kernel(
         resolved.target_da,
         resolved.translation_da,
-        resolved.quat_da,
+        safe_rotation_values(resolved.quat_da, core_dims=(resolved.specs.quat_dim,), valid=valid),
         target_dim=resolved.specs.target_dim,
         translation_dim=resolved.specs.translation_dim,
         quat_dim=resolved.specs.quat_dim,
@@ -328,18 +342,17 @@ def _apply_pose_to_position(
         resolved.specs.target_ds[resolved.specs.target_var],
         output,
     )
-    out_ds = output.to_dataset(name=resolved.specs.target_var)
-    out_ds = transfer_dataset_attrs(
-        resolved.specs.target_ds,
-        out_ds,
-        validate=False,
+    out_ds = mask_numerical_result(output, valid).to_dataset(name=resolved.specs.target_var)
+    out_ds = finalize_numerical_result(
+        resolved.specs.target_ds, out_ds, valid,
+        topology=resolved.topology, other=resolved.specs.quat_ds, owner=owner,
     )
     out_ds = set_frames(out_ds, parent=parent, child=child, validate=False)
     return wrap_like(target, out_ds, validate=validate)
 
 
 def _apply_pose_to_spatial_target(
-    pose: "Pose",
+    pose: Pose,
     target: object,
     *,
     parent: str | None,
@@ -360,7 +373,7 @@ def _apply_pose_to_spatial_target(
         strict_policy=STRICT_NON_CORE_POLICY,
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
-    rotation = _rotation_with_selection_intents(rotation, selection=selection)
+    rotation = rotation_with_selection_intents(rotation, selection=selection)
     out = _rotation_apply_with_owner(
         rotation,
         target,
@@ -372,23 +385,8 @@ def _apply_pose_to_spatial_target(
     return wrap_like(target, out_ds, validate=validate)
 
 
-def _rotation_with_selection_intents(rotation: "Rotation", *, selection):
-    out = rotation
-    alignment = selection.alignment
-    if alignment is not None:
-        out = out.a(
-            on=alignment.on,
-            sequence_join=alignment.sequence_join,
-            batch_join=alignment.batch_join,
-            core_policy=alignment.core_policy,
-        )
-    if selection.policy.mode == "semantic_broadcast":
-        out = out.b()
-    return out
-
-
 def _pose_apply_with_owner(
-    pose: "Pose",
+    pose: Pose,
     target: object,
     *,
     validate: bool,
@@ -429,7 +427,7 @@ def _pose_apply_with_owner(
     return attach_spatial_association(result, result_association)
 
 
-def pose_apply(pose: "Pose", target: object, *, validate: bool) -> object:
+def pose_apply(pose: Pose, target: object, *, validate: bool) -> object:
     return _pose_apply_with_owner(
         pose,
         target,

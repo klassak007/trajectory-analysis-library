@@ -9,10 +9,10 @@ from tal.core.orchestration.runtime_checks import (
     require_var_contains_dims,
     select_single_numeric_var,
 )
-from tal.core.schema_read import read_roles, read_sequence_size_coord_name
-from tal.core.validity_mask import resolve_structural_valid_mask_base
+from tal.core.schema_read import read_roles
 
 from ..kernels.rigid_matrix_validation import validate_pose_matrix_block
+from .numerical_validity import numerical_valid_mask
 
 
 def select_pose_matrix_payload(
@@ -59,14 +59,7 @@ def _validation_scope(
     *,
     owner: str,
 ) -> xr.DataArray:
-    _, sequence_dim, _, _ = read_roles(ds)
-    size_name = read_sequence_size_coord_name(ds)
-    mask = resolve_structural_valid_mask_base(
-        ds,
-        sequence_dim=sequence_dim,
-        sequence_size_coord=size_name,
-        owner=owner,
-    )
+    mask = numerical_valid_mask(ds)
     if mask is None:
         return xr.DataArray(True)
     omitted = tuple(dim for dim in mask.dims if dim not in matrix.dims)
@@ -94,12 +87,7 @@ def _validate_matrix(
         keep_attrs=True,
         dask_gufunc_kwargs={"allow_rechunk": True},
     ).transpose(*matrix.dims)
-    coords = {
-        name: coord
-        for name, coord in matrix.coords.items()
-        if set(coord.dims).issubset(out.dims)
-    }
-    out = out.assign_coords(coords)
+    out = out.assign_coords(matrix.coords)
     out.name = matrix.name
     out.encoding = matrix.encoding.copy()
     return var_name, out
@@ -108,7 +96,7 @@ def _validate_matrix(
 def validate_pose_matrix_dataset(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     """Attach eager or lazy pass-through validation to a matrix-layout dataset."""
     var_name, matrix = _validate_matrix(ds, owner=owner, sanitize_invalid=False)
-    return ds.assign({var_name: matrix})
+    return ds.assign({var_name: matrix.variable})
 
 
 def prepare_pose_matrix_for_conversion(ds: xr.Dataset, *, owner: str) -> xr.DataArray:

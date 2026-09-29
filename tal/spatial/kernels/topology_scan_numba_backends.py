@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from ._topology_scan_common import prepare_chain_pose_rows, raise_chain_pose_status
 from ._topology_scan_constants import (
@@ -19,7 +17,7 @@ from .fixed_size_primitives import inverse_pose as _inverse_pose
 from .fixed_size_primitives import normalize_quat_row as _normalize_quat
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_chain_pose_block():
     numba = require_numba("spatial.topology_scan.pose_backend")
     _jit_kernel_helpers(numba)

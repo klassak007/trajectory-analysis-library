@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from . import fixed_size_primitives as _fixed
 from .path_kernel_status import (
@@ -120,13 +118,13 @@ def _fused_parallel_impl(translation, quaternion, directions, i0, i1, alpha, val
     return output
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_fused():
     numba = require_numba("spatial.path_solve.pose")
     global _shared_slerp, _compiled_edge_value, _compiled_query_value
     global _compiled_inverse, _compiled_compose, _parallel_range
     global _compiled_empty_result, _compiled_fused_row
-    _, _, _shared_slerp = _compile_slerp_dependencies(numba)
+    _, _, _shared_slerp = _compile_slerp_dependencies()
     _compiled_inverse = njit_kernel(numba, _fixed.inverse_pose)
     _compiled_compose = njit_kernel(numba, _fixed.compose_pose)
     _compiled_edge_value = njit_kernel(numba, _edge_value)

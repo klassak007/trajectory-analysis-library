@@ -68,6 +68,7 @@ from tal.linalg import (
     sub,
 )
 from tal.spatial import Pose, Position, Rotation
+from tests.docs_examples._illustrated_example import example_guide_illustrated_workflow
 
 
 def _scalar_signal_ao() -> AnalysisObject:
@@ -921,6 +922,7 @@ def example_guide_creating_reusable_layout() -> None:
 
 USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
     "UG-OVERVIEW-BASIC-WORKFLOW": example_guide_overview_basic_workflow,
+    "UG-ILLUSTRATED-WORKFLOW": example_guide_illustrated_workflow,
     "UG-CORE-CONCEPTS-ROLES": example_guide_core_concepts_roles,
     "UG-CREATING-SEQUENCE-AO": example_guide_creating_sequence_ao,
     "UG-CREATING-SPATIAL-FIELDS": example_guide_creating_spatial_fields,

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from . import fixed_size_primitives as _fixed
 from .path_kernel_status import (
@@ -151,12 +149,12 @@ def _apply_position_impl(values, pose_t, pose_q, pose_valid, caller_valid, outpu
             output[row, axis] = rotated[axis] + pose_t[row, axis]
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_kernels():
     numba = require_numba("spatial.path_solve.pose")
     global _shared_normalize, _shared_slerp, _compiled_sample_edge, _compiled_edge_row
     global _compiled_inverse, _compiled_compose, _compiled_rotate, _parallel_range
-    _shared_normalize, _, _shared_slerp = _compile_slerp_dependencies(numba)
+    _shared_normalize, _, _shared_slerp = _compile_slerp_dependencies()
     _compiled_inverse = njit_kernel(numba, _fixed.inverse_pose)
     _compiled_compose = njit_kernel(numba, _fixed.compose_pose)
     _compiled_rotate = njit_kernel(numba, _fixed.rotate_vec3)

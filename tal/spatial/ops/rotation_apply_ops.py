@@ -10,13 +10,13 @@ from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
-from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.orchestration.runtime_checks import (
     resolve_single_numeric_var_single_core_dim,
 )
 from tal.core.orchestration.topology import (
     SEMANTIC_NON_CORE_POLICY,
     STRICT_NON_CORE_POLICY,
+    ResolvedTopologyPlan,
     TopologyOperand,
     TopologyPolicy,
     resolve_binary_topology,
@@ -55,6 +55,13 @@ from ..policies.wrap import wrap_like
 from ..position import Position
 from ..velocity import AngularVelocity, LinearVelocity, Velocity
 from .core_chunks import single_core_chunk
+from .numerical_coordinates import share_lazy_numerical_coordinates
+from .numerical_validity import (
+    combined_numerical_mask,
+    finalize_numerical_result,
+    mask_numerical_result,
+    safe_rotation_values,
+)
 
 if TYPE_CHECKING:
     from ..rotation import Rotation
@@ -256,13 +263,14 @@ def _apply_to_vector_target(
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
     policy = selection.policy
-    target_var, target_dim, quat_dim, target_da, quat_da = _resolve_vector_apply_inputs(
+    target_var, target_dim, quat_dim, target_da, quat_da, plan, valid = _resolve_vector_apply_inputs(
         target_ds,
         quat_ds,
         owner=owner,
         target_name=type(target).__name__,
         policy=policy,
     )
+    quat_da = safe_rotation_values(quat_da, core_dims=(quat_dim,), valid=valid)
     rotated = _apply_vector_rotation_kernel(
         target_da,
         quat_da,
@@ -270,8 +278,9 @@ def _apply_to_vector_target(
         quat_dim=quat_dim,
         owner=owner,
     )
+    rotated = mask_numerical_result(rotated, valid)
     out_ds = rotated.to_dataset(name=target_var)
-    out_ds = transfer_dataset_attrs(target_ds, out_ds, validate=False)
+    out_ds = finalize_numerical_result(target_ds, out_ds, valid, topology=plan, other=quat_ds, owner=owner)
     parent, child = resolve_apply_output_frames(analysis_object_dataset(rotation), target_ds, owner=owner)
     out_ds = set_frames(out_ds, parent=parent, child=child, validate=False)
     return wrap_like(target, out_ds, validate=validate)
@@ -284,7 +293,7 @@ def _resolve_vector_apply_inputs(
     owner: str,
     target_name: str,
     policy: TopologyPolicy,
-) -> tuple[str, str, str, xr.DataArray, xr.DataArray]:
+) -> tuple[str, str, str, xr.DataArray, xr.DataArray, ResolvedTopologyPlan, xr.DataArray | None]:
     target_var, target_dim = resolve_single_numeric_var_single_core_dim(
         target_ds,
         owner=owner,
@@ -318,8 +327,9 @@ def _resolve_vector_apply_inputs(
         what="rotation apply",
         policy=policy,
     )
-    target_da, quat_da = align_exact_for_plan(plan, owner=owner, what="rotation apply")
-    return target_var, target_dim, quat_dim, target_da, quat_da
+    valid = combined_numerical_mask(target_ds, quat_ds, topology=plan, owner=owner)
+    target_da, quat_da = share_lazy_numerical_coordinates(*align_exact_for_plan(plan, owner=owner, what="rotation apply"), owner=owner)
+    return target_var, target_dim, quat_dim, target_da, quat_da, plan, valid
 
 
 def _apply_vector_rotation_kernel(

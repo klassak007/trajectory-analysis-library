@@ -7,14 +7,14 @@ import xarray as xr
 from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
-from ..param_ops.guards import dataset_namespace_names
+from ..param_ops.guards import dataset_namespace_names, mark_reserved_coord
 from ..param_ops.types import ParamEvalOptions
 from .boundary import extract_event_boundaries
 from .boundary_select import select_event_boundaries
 from .evaluate import evaluate_mask
 from .pack import pack_event_table
 from .resolve import EventEvalContext, resolve_event_eval_context
-from .types import Condition, EventExtractOptions, AtBoundariesOptions
+from .types import AtBoundariesOptions, Condition, EventExtractOptions
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
@@ -94,32 +94,32 @@ def _metadata_namespace_safe(ds: xr.Dataset, *, owner: str) -> None:
 
 
 def _attach_boundary_metadata(
-    out: "AnalysisObject",
+    out: AnalysisObject,
     *,
     table: xr.Dataset,
     validate: bool,
     owner: str,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     out_ds = analysis_object_dataset(out)
     _metadata_namespace_safe(out_ds, owner=owner)
     ds = out_ds.assign_coords(
         {
-            "event_edge_code": table["edge_code"].astype("int8"),
-            "event_sample_index_before": table["sample_index_before"].astype("int64"),
-            "event_sample_index_after": table["sample_index_after"].astype("int64"),
+            "event_edge_code": mark_reserved_coord(table["edge_code"].astype("int8"), name="event_edge_code"),
+            "event_sample_index_before": mark_reserved_coord(table["sample_index_before"].astype("int64"), name="event_sample_index_before"),
+            "event_sample_index_after": mark_reserved_coord(table["sample_index_after"].astype("int64"), name="event_sample_index_after"),
         }
     )
     return finalize_like(out, ds, validate=validate, owner=owner)
 
 
 def evaluate_at_boundaries_condition(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     condition: Condition,
     *,
     opts: AtBoundariesOptions,
     validate: bool = True,
     owner: str = "events.at_boundaries",
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Evaluate an AO at selected enter/exit boundary times for a condition.
 
     Parameters

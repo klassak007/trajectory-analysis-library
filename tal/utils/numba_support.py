@@ -1,6 +1,35 @@
 from __future__ import annotations
 
 import importlib
+from functools import wraps
+from threading import RLock
+
+_COMPILATION_LOCK = RLock()
+
+
+def _cached_compilation(factory):
+    """Publish one successful initialization, including nested dependencies.
+
+    A normal lru_cache may run a cold factory concurrently. These factories
+    install shared numerical helpers, so publication must be serialized across
+    owners. Warm access and execution of the returned dispatchers stay unlocked.
+    This helper imports no optional dependency and does not retry failures.
+    """
+    ready = False
+    result = None
+
+    @wraps(factory)
+    def compiled():
+        nonlocal ready, result
+        if ready:
+            return result
+        with _COMPILATION_LOCK:
+            if not ready:
+                result = factory()
+                ready = True
+        return result
+
+    return compiled
 
 
 def _import_numba():

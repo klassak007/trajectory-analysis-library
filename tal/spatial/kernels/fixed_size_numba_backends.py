@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from ._fixed_size_common import (
     DET_ATOL,
@@ -68,42 +66,42 @@ def _jit_kernel_helpers(numba) -> None:
     _HELPERS_JITTED = True
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_quat_compose():
     return _compile(_quat_compose_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_quat_inverse():
     return _compile(_quat_inverse_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_quat_to_matrix():
     return _compile(_quat_to_matrix_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_matrix_to_quat():
     return _compile(_matrix_to_quat_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_rotate_vec3():
     return _compile(_rotate_vec3_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_pose_compose_translation():
     return _compile(_pose_compose_translation_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_pose_inverse_translation():
     return _compile(_pose_inverse_translation_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_pose_components_to_matrix():
     return _compile(_pose_components_to_matrix_impl)
 

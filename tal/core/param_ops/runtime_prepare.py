@@ -20,7 +20,7 @@ def _without_sequence_size_coordinate(
     *,
     name: str | None,
 ) -> xr.DataArray:
-    if name is None or name not in value.coords:
+    if name is None or name not in value.coords or name in value.dims or name in value.xindexes:
         return value
     return value.drop_vars(name)
 

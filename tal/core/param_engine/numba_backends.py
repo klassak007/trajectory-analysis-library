@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-from threading import Lock
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from .block_prep import prepare_bounds_block_rows, prepare_map_block_rows
 from .map_failures import (
@@ -29,17 +26,16 @@ _DUPLICATE_BRACKET_ERROR = (
     "build_param_map: duplicate parameter bracket encountered for linear interpolation."
 )
 _HELPERS_JITTED = False
-_HELPERS_LOCK = Lock()
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_map_block():
     numba = require_numba("build_param_map")
     _jit_kernel_helpers(numba)
     return njit_kernel(numba, _map_block_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_bounds_block():
     numba = require_numba("build_param_bounds_map")
     _jit_kernel_helpers(numba)
@@ -54,24 +50,21 @@ def _jit_kernel_helpers(numba) -> None:
     global _write_bounds_span, _write_constant, _write_duplicate
     if _HELPERS_JITTED:
         return
-    with _HELPERS_LOCK:
-        if _HELPERS_JITTED:
-            return
-        _fill_source = njit_kernel(numba, _fill_source)
-        _search_left = njit_kernel(numba, _search_left)
-        _search_right = njit_kernel(numba, _search_right)
-        _write_constant = njit_kernel(numba, _write_constant)
-        _write_duplicate = njit_kernel(numba, _write_duplicate)
-        _nearest_pick = njit_kernel(numba, _nearest_pick)
-        _map_nearest_row = njit_kernel(numba, _map_nearest_row)
-        _map_linear_interior = njit_kernel(numba, _map_linear_interior)
-        _map_linear_query = njit_kernel(numba, _map_linear_query)
-        _map_linear_row = njit_kernel(numba, _map_linear_row)
-        _map_row = njit_kernel(numba, _map_row)
-        _write_bounds_empty = njit_kernel(numba, _write_bounds_empty)
-        _write_bounds_edge = njit_kernel(numba, _write_bounds_edge)
-        _write_bounds_span = njit_kernel(numba, _write_bounds_span)
-        _HELPERS_JITTED = True
+    _fill_source = njit_kernel(numba, _fill_source)
+    _search_left = njit_kernel(numba, _search_left)
+    _search_right = njit_kernel(numba, _search_right)
+    _write_constant = njit_kernel(numba, _write_constant)
+    _write_duplicate = njit_kernel(numba, _write_duplicate)
+    _nearest_pick = njit_kernel(numba, _nearest_pick)
+    _map_nearest_row = njit_kernel(numba, _map_nearest_row)
+    _map_linear_interior = njit_kernel(numba, _map_linear_interior)
+    _map_linear_query = njit_kernel(numba, _map_linear_query)
+    _map_linear_row = njit_kernel(numba, _map_linear_row)
+    _map_row = njit_kernel(numba, _map_row)
+    _write_bounds_empty = njit_kernel(numba, _write_bounds_empty)
+    _write_bounds_edge = njit_kernel(numba, _write_bounds_edge)
+    _write_bounds_span = njit_kernel(numba, _write_bounds_span)
+    _HELPERS_JITTED = True
 
 
 def _method_code(method: str) -> int:

@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
+
 from .block_prep import prepare_lstsq_matrix_block_rows, prepare_lstsq_vector_block_rows
-from tal.utils.numba_support import njit_kernel, require_numba
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_lstsq_vector_block():
     numba = require_numba("linalg.solve")
     return njit_kernel(numba, _lstsq_vector_block_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_lstsq_matrix_block():
     numba = require_numba("linalg.solve")
     return njit_kernel(numba, _lstsq_matrix_block_impl)

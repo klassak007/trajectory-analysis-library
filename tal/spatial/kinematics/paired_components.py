@@ -30,6 +30,8 @@ from tal.core.schema_read import (
 )
 from tal.core.schema_update import source_schema_view
 
+from ..ops.numerical_coordinates import share_lazy_numerical_coordinates
+
 
 @dataclass(frozen=True)
 class PairAssemblyOptions:
@@ -171,14 +173,31 @@ def merge_component_payloads(
     owner: str,
 ) -> xr.Dataset:
     try:
+        left, right = share_lazy_numerical_coordinates(
+            left_ds[left_var], right_ds[right_var], owner=owner, component_agreement=True,
+        )
         return xr.merge(
-            [left_ds[[left_var]], right_ds[[right_var]]],
+            [_prepared_component_dataset(left_ds, left_var, left), _prepared_component_dataset(right_ds, right_var, right)],
             join="exact",
             compat="equals",
             combine_attrs="drop_conflicts",
         )
     except ValueError as exc:
         raise ValueError(f"{owner}: {left_var}/{right_var} coordinates must align exactly: {exc}") from exc
+
+
+def _prepared_component_dataset(ds: xr.Dataset, name: str, values: xr.DataArray) -> xr.Dataset:
+    # The equality guard only replaces non-indexed auxiliaries. Keep the already
+    # aligned index groups and avoid re-merging unchanged coordinate containers.
+    changed = {
+        coord: values.coords[coord].variable for coord in values.coords
+        if coord not in values.xindexes
+        and (coord not in ds.coords or values.coords[coord].variable is not ds.coords[coord].variable)
+    }
+    out = ds[[name]]
+    if changed:
+        out = out.assign_coords(changed)
+    return out.assign({name: values.variable})
 
 
 def _component_topology_operand(

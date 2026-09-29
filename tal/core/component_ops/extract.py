@@ -5,10 +5,14 @@ from collections.abc import Mapping
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
-from ..dataset_ownership import analysis_object_dataset
-from ..orchestration.finalize import finalize_like
+from ..ao_internal import finalize_structural
+from ..dataset_ownership import (
+    analysis_object_dataset,
+    couple_dataset_resource,
+    metadata_isolated_dataset,
+)
+from ..orchestration.finalize import transfer_dataset_attrs
 from ..orchestration.inputs import coerce_analysis_object_input
-from ..schema import merge_schema
 from .options import coerce_component_extract_options
 from .registry import read_components
 from .runtime_checks import require_core_dim_in_data, select_component_var
@@ -51,10 +55,7 @@ def _attach_source_schema(
     *,
     source: AnalysisObject,
 ) -> xr.Dataset:
-    tal = analysis_object_dataset(source).attrs.get("tal")
-    if not isinstance(tal, Mapping):
-        return ds_out
-    return merge_schema(ds_out, patch=dict(tal), validate=False)
+    return transfer_dataset_attrs(analysis_object_dataset(source), ds_out, validate=False)
 
 
 def _rename_output_var_after_finalize(
@@ -89,7 +90,7 @@ def extract_components(
     Returns
     -------
     dict[str, AnalysisObject]
-        Mapping-like result produced by this operation.
+        Registered components as base AnalysisObjects, regardless of source subtype.
 
     Notes
     -----
@@ -117,6 +118,7 @@ def extract_components(
     registry = read_components(source)
     names = _resolve_component_names(registry, names=options.names, owner=owner)
     source_ds = analysis_object_dataset(source)
+    prototype = AnalysisObject._from_validated(source_ds)
     out: dict[str, AnalysisObject] = {}
     for name in names:
         spec = registry[name]
@@ -127,13 +129,17 @@ def extract_components(
             var_name=var_name,
         )
         ds_out = _attach_source_schema(ds_out, source=source)
-        finalized = finalize_like(source, ds_out, validate=validate, owner=owner)
+        ds_out = metadata_isolated_dataset(ds_out, owner=owner)
+        finalized = finalize_structural(
+            prototype, ds_out, validate=validate, preserve_sequence_topology=True,
+        )
         out[name] = _rename_output_var_after_finalize(
             finalized,
             source_var=var_name,
             output_var=options.output_var,
             validate=validate,
         )
+        couple_dataset_resource(source_ds, analysis_object_dataset(out[name]))
     return out
 
 

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
 from tal.utils.block_rows import BlockInputSpec, prepare_block_rows
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 _STATUS_OK = 0
 _STATUS_LEFT_PACKED = 1
@@ -13,7 +11,7 @@ _STATUS_EMPTY = 2
 _STATUS_MONOTONIC = 3
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_smoothing_blocks():
     numba = require_numba("spatial.kinematics.temporal.smoothing_backend")
     _jit_kernel_helpers(numba)
@@ -54,7 +52,7 @@ def _validate_window(window: int, *, owner: str) -> int:
 
 def _validate_sigma(sigma: float, *, owner: str) -> float:
     sigma_value = float(sigma)
-    if not (sigma_value > 0.0 and sigma_value == sigma_value and abs(sigma_value) != float("inf")):
+    if not (sigma_value > 0.0 and np.isfinite(sigma_value)):
         raise ValueError(f"{owner}: sigma must be positive and finite.")
     return sigma_value
 

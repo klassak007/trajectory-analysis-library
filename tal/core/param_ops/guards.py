@@ -161,6 +161,7 @@ def assert_reserved_metadata_safe(
     names = tuple(str(name) for name in reserved)
     collisions = [name for name in names if name in ds.dims]
     collisions.extend(name for name in names if name in ds.data_vars)
+    collisions.extend(name for name in names if name in ds.xindexes)
     for name in names:
         if name not in ds.coords:
             continue

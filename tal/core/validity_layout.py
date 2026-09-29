@@ -59,6 +59,8 @@ def sequence_size_from_mask(
     out = valid.fillna(False).astype("int64")
     if sequence_dim in out.dims:
         out = out.sum(dim=sequence_dim)
+    if valid.size == 0:
+        out = out.copy(data=np.broadcast_to(np.int64(0), out.shape))
     if batch_dims:
         return out.transpose(*batch_dims)
     if out.dims:

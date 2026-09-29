@@ -102,3 +102,7 @@ label count is small enough and uses grouping otherwise.
 
 - User guide: {doc}`../user-guide/viewing`
 - {doc}`components`
+
+Generic component extraction returns base `AnalysisObject` instances, including
+for composite source types. Use domain methods such as `Pose.decompose()` when
+you need typed components. Component plotting uses the generic extraction owner.

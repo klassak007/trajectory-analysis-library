@@ -1,23 +1,37 @@
 from __future__ import annotations
 
-import numpy as np
 import xarray as xr
 
 from tal.core.dataset_ownership import analysis_object_dataset
+from tal.core.orchestration.alignment_intent import OperationTopologyIntent
 from tal.core.orchestration.runtime_checks import (
     resolve_single_numeric_var_single_core_dim,
 )
-from tal.core.param_ops.guards import reserved_coord_is_owned
-from tal.core.schema_read import read_roles, read_sequence_size_coord_name
-from tal.core.validity_mask import resolve_validated_structural_mask_base
 
 from ..position import Position
 from ..rotation import Rotation
+from .numerical_validity import numerical_valid_mask, safe_rotation_values
 
 
-def compose_rotation(left: Rotation, right: Rotation, *, owner: str) -> Rotation:
+def rotation_with_selection_intents(rotation: Rotation, *, selection: OperationTopologyIntent) -> Rotation:
+    """Carry a composite operation's resolved intent into its Rotation delegate."""
+    out = rotation
+    alignment = selection.alignment
+    if alignment is not None:
+        out = out.a(
+            on=alignment.on,
+            sequence_join=alignment.sequence_join,
+            batch_join=alignment.batch_join,
+            core_policy=alignment.core_policy,
+        )
+    if selection.policy.mode == "semantic_broadcast":
+        out = out.b()
+    return out
+
+
+def compose_rotation(left: Rotation, right: Rotation, *, selection: OperationTopologyIntent, owner: str) -> Rotation:
     try:
-        return left.compose(right, validate=False)
+        return rotation_with_selection_intents(left, selection=selection).compose(right, validate=False)
     except ValueError as exc:
         raise ValueError(f"{owner}: pose rotation compose failed: {exc}") from exc
 
@@ -29,17 +43,6 @@ def inverse_rotation(rotation: Rotation, *, owner: str) -> Rotation:
         raise ValueError(f"{owner}: pose inverse rotation failed: {exc}") from exc
 
 
-def _runtime_valid_mask(ds: xr.Dataset) -> xr.DataArray | None:
-    if "valid" in ds.coords and reserved_coord_is_owned(ds, name="valid"):
-        return ds.coords["valid"].astype(bool)
-    _, sequence_dim, _, _ = read_roles(ds)
-    return resolve_validated_structural_mask_base(
-        ds,
-        sequence_dim=sequence_dim,
-        sequence_size_coord=read_sequence_size_coord_name(ds),
-    )
-
-
 def safe_pose_operands(
     position_ds: xr.Dataset,
     rotation_ds: xr.Dataset,
@@ -49,17 +52,12 @@ def safe_pose_operands(
     quat_dim: str,
 ) -> tuple[xr.DataArray, Rotation]:
     """Prepare finite placeholders for unreachable Pose numerical rows."""
-    valid = _runtime_valid_mask(rotation_ds)
+    valid = numerical_valid_mask(rotation_ds)
     if valid is None:
         return position_ds[pos_var], Rotation._from_unvalidated(rotation_ds)
-    translation = position_ds[pos_var].where(valid.broadcast_like(position_ds[pos_var]), 0.0)
-    identity = xr.DataArray(
-        np.asarray([0.0, 0.0, 0.0, 1.0]),
-        dims=(quat_dim,),
-        coords={quat_dim: rotation_ds.coords[quat_dim]},
-    )
-    quaternion = xr.where(valid.broadcast_like(rotation_ds[quat_var]), rotation_ds[quat_var], identity)
-    safe_rotation = Rotation._from_unvalidated(rotation_ds.assign({quat_var: quaternion}))
+    translation = position_ds[pos_var].where(valid, 0.0)
+    quaternion = safe_rotation_values(rotation_ds[quat_var], core_dims=(quat_dim,), valid=valid)
+    safe_rotation = Rotation._from_unvalidated(rotation_ds.assign({quat_var: quaternion.variable}))
     return translation, safe_rotation
 
 
@@ -85,5 +83,5 @@ def safe_pose_components(
         quat_var=quat_var,
         quat_dim=quat_dim,
     )
-    safe_position = Position._from_unvalidated(position_ds.assign({pos_var: translation}))
+    safe_position = Position._from_unvalidated(position_ds.assign({pos_var: translation.variable}))
     return safe_position, safe_rotation

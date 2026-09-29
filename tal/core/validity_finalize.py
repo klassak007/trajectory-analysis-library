@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Literal
 import xarray as xr
 
 from .dataset_ownership import analysis_object_dataset
+from .orchestration.indexing import lane_index_groups
 from .orchestration.lazy import is_chunked_dataarray
 from .schema import set_validity
 from .schema_errors import SchemaError
 from .schema_read import read_roles, read_sequence_size_coord_name
+from .schema_validate.finalize import transfer_dataarray_metadata
 from .validity_layout import is_left_packed_mask, sequence_size_from_mask
 
 if TYPE_CHECKING:
@@ -39,12 +41,12 @@ def assign_sequence_size_from_valid_mask(
 
 
 def set_left_packed_validity_or_prune_from_size_coord(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     *,
     size_name: str,
     validate: bool,
     owner: str,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     ds = analysis_object_dataset(ao)
     if size_name not in ds.coords:
         raise ValueError(f"{owner}: missing sequence_size_coord {size_name!r}.")
@@ -68,24 +70,15 @@ def _try_read_validity_name(ds: xr.Dataset) -> str | None | Literal["__invalid__
         return "__invalid__"
 
 
-def _read_sequence_index(ds: xr.Dataset, sequence_dim: str):
-    if sequence_dim not in ds.dims:
-        return None
-    if sequence_dim not in ds.indexes:
-        return None
-    try:
-        return ds.get_index(sequence_dim)
-    except Exception:
-        return None
+def _lane_indexes(ds: xr.Dataset, dim: str) -> dict[tuple[object, ...], xr.Index]:
+    return {group.coordinate_names: group.index for group in lane_index_groups(ds, lane_dim=dim)}
 
 
-def _read_dim_index(ds: xr.Dataset, dim: str):
-    if dim not in ds.dims or dim not in ds.indexes:
-        return None
-    try:
-        return ds.get_index(dim)
-    except Exception:
-        return None
+def _equal_lane_indexes(source: xr.Dataset, candidate: xr.Dataset, dim: str) -> bool:
+    left, right = _lane_indexes(source, dim), _lane_indexes(candidate, dim)
+    return bool(left) and left.keys() == right.keys() and all(
+        index.equals(right[names]) for names, index in left.items()
+    )
 
 
 def _batch_topology_matches(
@@ -103,11 +96,7 @@ def _batch_topology_matches(
     if mapped_source_dims != candidate_batch_dims:
         return False
     for source_dim, candidate_dim in zip(source_batch_dims, candidate_batch_dims, strict=True):
-        source_index = _read_dim_index(source_ds, source_dim)
-        candidate_index = _read_dim_index(candidate_ds, candidate_dim)
-        if source_index is None or candidate_index is None:
-            return False
-        if not source_index.equals(candidate_index):
+        if source_dim != candidate_dim or not _equal_lane_indexes(source_ds, candidate_ds, source_dim):
             return False
     return True
 
@@ -119,17 +108,21 @@ def _classify_sequence_transform(
     source_sequence_dim: str,
     candidate_sequence_dim: str,
 ) -> TransformKind:
-    source_index = _read_sequence_index(source_ds, source_sequence_dim)
-    candidate_index = _read_sequence_index(candidate_ds, candidate_sequence_dim)
-    if source_index is None or candidate_index is None:
+    if source_sequence_dim != candidate_sequence_dim:
         return "unsafe"
-    if source_index.equals(candidate_index):
+    if _equal_lane_indexes(source_ds, candidate_ds, source_sequence_dim):
         return "identity"
-    if len(candidate_index) > len(source_index):
+    size = candidate_ds.sizes[candidate_sequence_dim]
+    if size > source_ds.sizes[source_sequence_dim]:
         return "unsafe"
-    if source_index[: len(candidate_index)].equals(candidate_index):
-        return "prefix"
-    return "unsafe"
+    source, candidate = _lane_indexes(source_ds, source_sequence_dim), _lane_indexes(candidate_ds, candidate_sequence_dim)
+    if not source or source.keys() != candidate.keys():
+        return "unsafe"
+    for names, index in source.items():
+        prefix = index.isel({source_sequence_dim: slice(0, size)})
+        if prefix is None or not prefix.equals(candidate[names]):
+            return "unsafe"
+    return "prefix"
 
 
 def _clamp_sequence_size_coord(
@@ -142,6 +135,7 @@ def _clamp_sequence_size_coord(
     clamped = xr.where(coord > max_size, max_size, coord)
     if coord.name is not None:
         clamped = clamped.rename(coord.name)
+    clamped = transfer_dataarray_metadata(coord, clamped)
     return ds.assign_coords({coord_name: clamped})
 
 
@@ -158,6 +152,7 @@ def reconcile_sequence_validity_after_structure(
     validate: bool,
     owner: str,
     rename_map: Mapping[str, str] | None = None,
+    preserve_topology: bool = False,
 ) -> xr.Dataset:
     _ = (validate, owner)
     candidate_roles = _try_read_roles(candidate_ds)
@@ -171,6 +166,11 @@ def reconcile_sequence_validity_after_structure(
         return candidate_ds
     if _coord_is_chunked(candidate_ds, candidate_size_name):
         return set_validity(candidate_ds, sequence_size_coord=None, validate=False)
+    # These callers only select core components or rename identifiers. Schema
+    # repair has already checked surviving roles and optional-coordinate shapes;
+    # no sequence/batch rows moved, even when those axes have no indexes.
+    if preserve_topology or rename_map is not None:
+        return candidate_ds
     source_roles = _try_read_roles(source_ds)
     source_size_name = _try_read_validity_name(source_ds)
     if source_roles is None or source_size_name in (None, "__invalid__"):
@@ -190,6 +190,20 @@ def reconcile_sequence_validity_after_structure(
         rename_map=rename_map,
     ):
         return set_validity(candidate_ds, sequence_size_coord=None, validate=False)
+    return _finalize_sequence_transform(
+        source_ds, candidate_ds, source_sequence_dim=source_sequence_dim,
+        candidate_sequence_dim=candidate_sequence_dim, size_name=candidate_size_name,
+    )
+
+
+def _finalize_sequence_transform(
+    source_ds: xr.Dataset,
+    candidate_ds: xr.Dataset,
+    *,
+    source_sequence_dim: str,
+    candidate_sequence_dim: str,
+    size_name: str,
+) -> xr.Dataset:
     transform = _classify_sequence_transform(
         source_ds,
         candidate_ds,
@@ -202,7 +216,7 @@ def reconcile_sequence_validity_after_structure(
         max_size = int(candidate_ds.sizes.get(candidate_sequence_dim, 0))
         return _clamp_sequence_size_coord(
             candidate_ds,
-            coord_name=candidate_size_name,
+            coord_name=size_name,
             max_size=max_size,
         )
     return set_validity(candidate_ds, sequence_size_coord=None, validate=False)

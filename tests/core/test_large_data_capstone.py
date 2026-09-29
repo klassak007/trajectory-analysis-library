@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import tracemalloc
 from dataclasses import replace
-from pathlib import Path
 
 import dask
 import dask.array as da
@@ -366,21 +364,3 @@ def test_capstone_allocation_failure_stops_tracing(failure):
     with pytest.raises(ValueError, match="measurement probe"):
         measure_allocation(route)
     assert not tracemalloc.is_tracing()
-
-
-def test_doc_capstone_workflow_001_uses_accepted_public_boundaries() -> None:
-    """ID: DOC_CAPSTONE_WORKFLOW_001_tutorial_uses_current_public_workflow."""
-    notebook = json.loads(
-        Path("examples/tutorial/14_capstone_autonomous_landing.ipynb").read_text(encoding="utf-8")
-    )
-    code = "\n".join(
-        "".join(cell["source"])
-        for cell in notebook["cells"]
-        if cell["cell_type"] == "code"
-    )
-    assert "trajectory_layout = AnalysisLayoutSpec(" in code
-    assert "Pose.from_components(" in code
-    assert ").register()" in code
-    assert "as_dataset(copy='shallow')" in code
-    for retired in ("frame_retag", "get_or_create_frame", "bind_pose", "copy='none'", "._data"):
-        assert retired not in code

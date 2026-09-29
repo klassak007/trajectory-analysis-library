@@ -13,6 +13,9 @@ dist/
 # Jupyter
 .ipynb_checkpoints/
 
+# Generated tutorial data
+/examples/tutorial/data/**/*.csv
+
 # Sphinx docs build / autosummary
 docs/_build/
 docs/api/_generated/

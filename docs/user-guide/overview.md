@@ -9,13 +9,18 @@ the meaning of each dimension matters.
 TAL keeps data in ordinary `xarray.Dataset` objects and adds a small semantic
 schema so analysis code can stay labeled, validated, and frame-aware.
 
-```{figure} ../images/AnalysisObject.png
-:alt: An AnalysisObject wraps an xarray Dataset with TAL metadata for sequence, batch, core, parameter, validity, components, and frames.
-:width: 90%
+```{figure} ../images/AnalysisObject.svg
+:name: analysis-object-diagram
+:alt: Three Pose trajectories with position and quaternion components, six sample slots, valid lengths of six, four, and five, and different time coordinates for each trial.
+:width: 100%
 :align: center
 
-An `AnalysisObject` is an `xarray.Dataset` plus TAL metadata.
+An `AnalysisObject` with three trials, two component variables, and a two-dimensional
+parameter coordinate. Solid cells are valid samples; pale cells are padding.
 ```
+
+The {doc}`illustrated_example` constructs these exact trajectories and shows how
+selection, interpolation, component extraction, and reduction act on them.
 
 ## What TAL Means By Trajectory
 

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 import xarray as xr
 
 from tal.core.analysis_object import AnalysisObject
 from tal.core.component_ops import ComponentRegistryOptions, define_components
 from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
-from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
+from tal.core.orchestration.alignment_intent import (
+    OperationTopologyIntent,
+    select_topology_policy_with_intents,
+)
 from tal.core.orchestration.runtime_checks import (
     resolve_single_numeric_var_single_core_dim,
 )
@@ -18,7 +20,6 @@ from tal.core.orchestration.topology import (
     STRICT_NON_CORE_POLICY,
     TopologyPolicy,
     resolve_binary_topology,
-    resolve_nary_topology,
 )
 from tal.core.param_ops.guards import mark_reserved_coord, reserved_coord_is_owned
 from tal.core.schema_errors import SchemaError
@@ -41,7 +42,6 @@ from ..association import (
     resolve_passive_association,
 )
 from ..conversion.finalize import allocate_dim_pair, dataset_dim_names
-from ..kernels.pose_kernels import _matrix_to_components_prevalidated_kernel
 from ..metadata import get_pose_rep, set_pose_rep, set_position_rep
 from ..policies.frame import (
     resolve_components_shared_frames,
@@ -50,13 +50,14 @@ from ..policies.frame import (
 from ..position import Position
 from ..rotation import Rotation
 from . import pose_context
-from .core_chunks import single_core_chunk
 from .frame_owner_common import (
     frame_inverse_component_datasets,
     require_parent_basis_for_inverse,
 )
+from .numerical_validity import mask_numerical_result, numerical_valid_mask
 from .pose_kernel_adapters import (
     apply_components_to_matrix_kernel,
+    apply_matrix_to_components_kernel,
     apply_pose_compose_translation_kernel,
     apply_pose_inverse_translation_kernel,
 )
@@ -86,7 +87,7 @@ _POSE_KERNEL_PARTIAL_SENTINEL = "partial(_wrap_compose_translation_kernel, owner
 _POSE_KERNEL_PARTIAL_INVERSE_SENTINEL = "partial(_wrap_inverse_translation_kernel, owner=owner)"
 
 
-def _pose_cls() -> type["Pose"]:
+def _pose_cls() -> type[Pose]:
     from ..pose import Pose
 
     return Pose
@@ -98,7 +99,7 @@ def _wrap_pose_output(
     validate: bool,
     owner: str,
     association: SpatialAssociationPlan,
-) -> "Pose":
+) -> Pose:
     cls = _pose_cls()
     if not validate:
         return finalize_spatial_as(
@@ -113,7 +114,7 @@ def _wrap_pose_output(
     return attach_spatial_association(result, association)
 
 
-def _coerce_pose_operand(value: object, *, owner: str) -> "Pose":
+def _coerce_pose_operand(value: object, *, owner: str) -> Pose:
     cls = _pose_cls()
     if isinstance(value, cls):
         return value
@@ -135,7 +136,7 @@ def _normalize_target_rep(rep: str, *, owner: str) -> str:
     return rep
 
 
-def _canonical_components(pose: "Pose", *, owner: str) -> tuple[Position, Rotation]:
+def _canonical_components(pose: Pose, *, owner: str) -> tuple[Position, Rotation]:
     try:
         position, rotation = pose.decompose(validate=False)
     except ValueError as exc:
@@ -198,23 +199,13 @@ def _matrix_to_components_arrays(
     owner: str,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     matrix = prepare_pose_matrix_for_conversion(source, owner=owner)
-    matrix = single_core_chunk(single_core_chunk(matrix, dim=row_dim), dim=col_dim)
     try:
-        position_da, rotation_da = xr.apply_ufunc(
-            _matrix_to_components_prevalidated_kernel,
-            matrix,
-            input_core_dims=[[row_dim, col_dim]],
-            output_core_dims=[[axis_dim], [quat_dim]],
-            vectorize=False,
-            dask="parallelized",
-            output_dtypes=[np.float64, np.float64],
-            dask_gufunc_kwargs={"output_sizes": {axis_dim: 3, quat_dim: 4}},
+        return apply_matrix_to_components_kernel(
+            matrix, row_dim=row_dim, col_dim=col_dim,
+            pos_dim=axis_dim, quat_dim=quat_dim,
         )
     except ValueError as exc:
         raise ValueError(f"{owner}: pose matrix->components conversion failed: {exc}") from exc
-    position_da = position_da.assign_coords({axis_dim: list(_XYZ_LABELS)})
-    rotation_da = rotation_da.assign_coords({quat_dim: list(_QUAT_LABELS)})
-    return position_da, rotation_da
 
 
 def _wrap_components_from_arrays(
@@ -257,7 +248,7 @@ def _wrap_components_from_arrays(
     return set_pose_rep(analysis_object_dataset(components), rep="components", validate=False, owner=owner)
 
 
-def _components_to_matrix_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
+def _components_to_matrix_dataset(pose: Pose, *, owner: str) -> xr.Dataset:
     selection = select_topology_policy_with_intents(
         (pose,),
         owner=owner,
@@ -294,6 +285,7 @@ def _components_to_matrix_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
         col_dim=col_dim,
         owner=owner,
     )
+    matrix = mask_numerical_result(matrix, numerical_valid_mask(analysis_object_dataset(pose)))
     return _build_pose_matrix_output(
         matrix,
         row_dim=row_dim,
@@ -308,12 +300,12 @@ def _components_to_matrix_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
 
 
 def _resolve_components_to_matrix_inputs(
-    pose: "Pose",
+    pose: Pose,
     *,
     owner: str,
     policy: TopologyPolicy,
 ) -> tuple[Position, Rotation, str, str, xr.DataArray, xr.DataArray, str | None, tuple[str, ...]]:
-    position, rotation = _canonical_components(pose, owner=owner)
+    position, rotation = safe_pose_components(*_canonical_components(pose, owner=owner), owner=owner)
     position_ds = analysis_object_dataset(position)
     rotation_ds = analysis_object_dataset(rotation)
     pos_var, pos_dim = resolve_single_numeric_var_single_core_dim(position_ds, owner=owner, what="Pose position")
@@ -349,7 +341,7 @@ def _resolve_components_to_matrix_inputs(
     return position, rotation, pos_dim, quat_dim, pos_da, rot_da, plan.sequence_dim, plan.batch_dims
 
 
-def _matrix_to_components_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
+def _matrix_to_components_dataset(pose: Pose, *, owner: str) -> xr.Dataset:
     source = analysis_object_dataset(pose)
     declared, seq_dim, batch_dims, core_dims = read_roles(source)
     if not declared:
@@ -387,14 +379,16 @@ def _matrix_to_components_dataset(pose: "Pose", *, owner: str) -> xr.Dataset:
     )
 
 
-def _pose_to_rep_dataset(pose: "Pose", *, target_rep: str, owner: str) -> xr.Dataset:
+def _pose_to_rep_dataset(pose: Pose, *, target_rep: str, owner: str) -> xr.Dataset:
     source = analysis_object_dataset(pose)
     current = get_pose_rep(source, owner=owner)
     if current == target_rep:
         return source
     if target_rep == "components":
-        return _matrix_to_components_dataset(pose, owner=owner)
-    return _components_to_matrix_dataset(pose, owner=owner)
+        output = _matrix_to_components_dataset(pose, owner=owner)
+    else:
+        output = _components_to_matrix_dataset(pose, owner=owner)
+    return _retain_owned_runtime_coords(source, output)
 
 
 def _retain_owned_runtime_coords(source: xr.Dataset, output: xr.Dataset) -> xr.Dataset:
@@ -407,12 +401,11 @@ def _retain_owned_runtime_coords(source: xr.Dataset, output: xr.Dataset) -> xr.D
     return output.assign_coords(owned) if owned else output
 
 
-def pose_to_rep(pose: "Pose", rep: str, *, validate: bool) -> "Pose":
+def pose_to_rep(pose: Pose, rep: str, *, validate: bool) -> Pose:
     owner = "spatial.pose.to_rep"
     target = _normalize_target_rep(rep, owner=owner)
     pose._enforce_invariants(owner=owner)
     output = _pose_to_rep_dataset(pose, target_rep=target, owner=owner)
-    output = _retain_owned_runtime_coords(analysis_object_dataset(pose), output)
     output = preserve_spatial_basis(pose, output, owner=owner)
     association = SpatialAssociationPlan(associated_graph(pose))
     return _wrap_pose_output(
@@ -423,57 +416,22 @@ def pose_to_rep(pose: "Pose", rep: str, *, validate: bool) -> "Pose":
     )
 
 
-def pose_as_components(pose: "Pose", *, validate: bool) -> "Pose":
+def pose_as_components(pose: Pose, *, validate: bool) -> Pose:
     return pose_to_rep(pose, rep="components", validate=validate)
 
 
-def pose_as_matrix(pose: "Pose", *, validate: bool) -> "Pose":
+def pose_as_matrix(pose: Pose, *, validate: bool) -> Pose:
     return pose_to_rep(pose, rep="matrix", validate=validate)
 
 
-def pose_compose(pose: "Pose", other: object, *, validate: bool) -> "Pose":
+def pose_compose(pose: Pose, other: object, *, validate: bool) -> Pose:
     owner = "spatial.pose.compose"
     right = _coerce_pose_operand(other, owner=owner)
     return _pose_compose_with_owner(pose, right, validate=validate, owner=owner)
 
 
-def _prepare_pose_compose_inputs(
-    left_pos: Position,
-    left_rot: Rotation,
-    right_pos: Position,
-    right_rot: Rotation,
-    *,
-    owner: str,
-    policy: TopologyPolicy,
-) -> pose_context.PreparedPoseComposeInputs:
-    specs = pose_context.resolve_pose_compose_specs(left_pos, right_pos, right_rot, owner=owner)
-    operands = pose_context.pose_compose_topology_operands(
-        specs,
-        left_pos,
-        right_pos,
-        right_rot,
-        owner=owner,
-        policy=policy,
-    )
-    plan = resolve_nary_topology(
-        operands,
-        owner=owner,
-        what="pose compose",
-        policy=policy,
-    )
-    left_t, right_t, right_q = align_exact_for_plan(plan, owner=owner, what="pose compose")
-    return pose_context.PreparedPoseComposeInputs(
-        specs=specs,
-        left_translation=left_t,
-        right_translation=right_t,
-        right_quaternion=right_q,
-        sequence_dim=plan.sequence_dim,
-        batch_dims=plan.batch_dims,
-    )
-
-
-def _pose_compose_policy(*, pose: "Pose", right: "Pose", owner: str) -> TopologyPolicy:
-    selection = select_topology_policy_with_intents(
+def _pose_compose_selection(*, pose: Pose, right: Pose, owner: str) -> OperationTopologyIntent:
+    return select_topology_policy_with_intents(
         (pose, right),
         owner=owner,
         operation_family="spatial.pose.compose",
@@ -481,16 +439,15 @@ def _pose_compose_policy(*, pose: "Pose", right: "Pose", owner: str) -> Topology
         strict_policy=STRICT_NON_CORE_POLICY,
         semantic_policy=SEMANTIC_NON_CORE_POLICY,
     )
-    return selection.policy
 
 
 def _pose_compose_with_owner(
-    pose: "Pose",
-    right: "Pose",
+    pose: Pose,
+    right: Pose,
     *,
     validate: bool,
     owner: str,
-) -> "Pose":
+) -> Pose:
     association = resolve_passive_association((pose, right), owner=owner)
     pose._enforce_invariants(owner=owner)
     right._enforce_invariants(owner=owner)
@@ -498,14 +455,13 @@ def _pose_compose_with_owner(
     parent, child = resolve_compose_output_frames(source, analysis_object_dataset(right), owner=owner)
     left_pos, left_rot = safe_pose_components(*_canonical_components(pose, owner=owner), owner=owner)
     right_pos, right_rot = safe_pose_components(*_canonical_components(right, owner=owner), owner=owner)
-    policy = _pose_compose_policy(pose=pose, right=right, owner=owner)
-    prepared = _prepare_pose_compose_inputs(
+    selection = _pose_compose_selection(pose=pose, right=right, owner=owner)
+    prepared = pose_context.prepare_pose_compose_inputs(
         left_pos,
-        left_rot,
         right_pos,
         right_rot,
         owner=owner,
-        policy=policy,
+        policy=selection.policy,
     )
     out_t = apply_pose_compose_translation_kernel(
         prepared.left_translation,
@@ -516,14 +472,13 @@ def _pose_compose_with_owner(
         right_quat_dim=prepared.specs.right_quat_dim,
         owner=owner,
     )
-    out_rot = compose_rotation(left_rot, right_rot, owner=owner)
+    out_rot = compose_rotation(left_rot, right_rot, selection=selection, owner=owner)
     out_pos_ds = pose_context.build_composed_position_dataset(
         prepared,
         out_t,
         left_pos,
-        right_pos,
+        analysis_object_dataset(out_rot),
         frames=(parent, child),
-        policy=policy,
         owner=owner,
     )
     out_rot_ds = set_frames(analysis_object_dataset(out_rot), parent=parent, child=child, validate=False)
@@ -536,17 +491,17 @@ def _pose_compose_with_owner(
     )
 
 
-def pose_inverse(pose: "Pose", *, validate: bool) -> "Pose":
+def pose_inverse(pose: Pose, *, validate: bool) -> Pose:
     owner = "spatial.pose.inverse"
     return _pose_inverse_with_owner(pose, validate=validate, owner=owner)
 
 
 def _pose_inverse_with_owner(
-    pose: "Pose",
+    pose: Pose,
     *,
     validate: bool,
     owner: str,
-) -> "Pose":
+) -> Pose:
     association = SpatialAssociationPlan(associated_graph(pose))
     pose._enforce_invariants(owner=owner)
     require_parent_basis_for_inverse(pose, owner=owner)
@@ -571,6 +526,7 @@ def _pose_inverse_with_owner(
         quat_dim=quat_dim,
         owner=owner,
     )
+    out_t = mask_numerical_result(out_t, numerical_valid_mask(rotation_ds))
     out_rot = inverse_rotation(safe_rotation, owner=owner)
     declared, seq_dim, batch_dims, _ = read_roles(position_ds)
     if not declared:

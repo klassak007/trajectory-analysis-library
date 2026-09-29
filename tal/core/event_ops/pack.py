@@ -132,11 +132,12 @@ def pack_event_table(
     packed = _rename_payload_dim(payload, event_dim=event_dim)
     ds = xr.Dataset(
         data_vars={
-            "time": packed.time.astype("float64"),
-            "edge_code": packed.edge_code.astype("int8"),
-            "sample_index_before": packed.sample_index_before.astype("int64"),
-            "sample_index_after": packed.sample_index_after.astype("int64"),
-        }
+            "time": packed.time.astype("float64").variable,
+            "edge_code": packed.edge_code.astype("int8").variable,
+            "sample_index_before": packed.sample_index_before.astype("int64").variable,
+            "sample_index_after": packed.sample_index_after.astype("int64").variable,
+        },
+        coords=packed.time.drop_vars(_REQUIRED_EVENT_VARS, errors="ignore").coords,
     )
     if event_dim in ds.coords:
         return ds

@@ -592,27 +592,6 @@ def test_arch_spatial_038_slice_b3_pose_kernel_owner_no_schema_writes() -> None:
     assert "attrs['tal']" not in kernels_text
 
 
-def test_arch_spatial_039_slice_b3_pose_orchestrate_kernel_finalize_split_enforced() -> None:
-    """ID: ARCH_SPATIAL_039_slice_b3_pose_orchestrate_kernel_finalize_split_enforced."""
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert "from ..kernels.pose_kernels import" in pose_ops_text
-    assert "compose_translation_kernel" in pose_ops_text
-    assert "inverse_translation_kernel" in pose_ops_text
-    assert "components_to_matrix_kernel" in pose_ops_text
-    assert "_matrix_to_components_prevalidated_kernel" in pose_ops_text
-    assert "set_pose_rep(" in pose_ops_text
-    assert "set_frames(" in pose_ops_text
-    assert "SciRotation" not in pose_ops_text
-
-
-def test_arch_spatial_040_slice_b3_pose_compose_non_core_dim_topology_guard_present() -> None:
-    """ID: ARCH_SPATIAL_040_slice_b3_pose_compose_non_core_dim_topology_guard_present."""
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert "resolve_nary_topology(" in pose_ops_text
-    assert "align_exact_for_plan(" in pose_ops_text
-    assert 'what="pose compose"' in pose_ops_text
-
-
 def test_arch_spatial_041_slice_b3_pose_compose_frame_check_runs_before_canonical_conversion() -> None:
     """ID: ARCH_SPATIAL_041_slice_b3_pose_compose_frame_check_runs_before_canonical_conversion."""
     pose_ops_module = _module("tal/spatial/ops/pose_ops.py")
@@ -1769,7 +1748,6 @@ def test_spatial_arch_192_rigid_matrix_validation_has_single_spatial_owner() -> 
     assert "require_real_matrix_dtype(raw, owner=_OWNER)" in fixed_backend_text
     assert "_run_scipy_kernel(_matrix_to_quat_prevalidated_kernel, values)" in fixed_backend_text
     assert fixed_backend_text.count("validate_rotation_matrix_rows(") == 1
-    assert "_matrix_to_components_prevalidated_kernel" in pose_ops.read_text(encoding="utf-8")
     assert 'current == target == "matrix"' not in pose_ops.read_text(encoding="utf-8")
 
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 from tests.docs_examples._user_guide_registry import (
     USER_GUIDE_EXAMPLES_BY_CHAPTER,
     example_ids_in_chapter,
 )
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 USER_GUIDE_DIR = REPO_ROOT / "docs" / "user-guide"
@@ -23,8 +22,8 @@ LEGACY_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bao\.interp_like\(", "Use `ao.param.interp_like(...)` instead of `ao.interp_like(...)`."),
     (r"\bao\.index_coord\(", "Use `ao.param.index(...)` instead of `ao.index_coord(...)`."),
     (r"\bao\.groupby\(", "Use `ao.group.groupby(...)` instead of direct `ao.groupby(...)`."),
-    (r"examples/0[3-9]_\*", "Use `examples/release/` paths instead of legacy notebook globs."),
-    (r"examples/1[0-9]_\*", "Use `examples/release/` paths instead of legacy notebook globs."),
+    (r"examples/0[3-9]_\*", "Use `examples/tutorial/` paths instead of legacy notebook globs."),
+    (r"examples/1[0-9]_\*", "Use `examples/tutorial/` paths instead of legacy notebook globs."),
 )
 
 

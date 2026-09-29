@@ -6,16 +6,13 @@ import numpy as np
 import xarray as xr
 
 from . import validity_values
+from .orchestration.indexing import dimension_coordinates
 
 
 def _sequence_index(ds: xr.Dataset, *, sequence_dim: str) -> xr.DataArray:
     size = int(ds.sizes[sequence_dim])
-    if sequence_dim in ds.coords and tuple(ds.coords[sequence_dim].dims) == (sequence_dim,):
-        coord = ds.coords[sequence_dim]
-    else:
-        coord = xr.DataArray(np.arange(size, dtype=np.int64), dims=(sequence_dim,))
     values = np.arange(size, dtype=np.int64)
-    return xr.DataArray(values, dims=(sequence_dim,), coords={sequence_dim: coord})
+    return xr.DataArray(values, dims=(sequence_dim,), coords=dimension_coordinates(ds, dims=(sequence_dim,)))
 
 
 def _sequence_size_array(

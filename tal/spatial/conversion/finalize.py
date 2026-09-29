@@ -92,7 +92,16 @@ def conversion_dataset_from_array(
     # those coordinates and their xarray indexes while replacing the core layout.
     core_dims = tuple(dim for dim in source_ds[var_name].dims if dim not in converted.dims)
     topology = source_ds.drop_dims(core_dims).drop_vars(var_name, errors="ignore")
-    out = topology.assign({var_name: converted})
+    # Retained coordinates already belong to the source. Add only newly
+    # generated core coordinates, then insert the coordinate-free payload;
+    # Dataset.assign(DataArray) may discard part of a shared native index group.
+    generated = tuple(name for name in converted.coords if name not in topology.coords)
+    coordinates = xr.Coordinates(
+        {name: converted.coords[name].variable for name in generated},
+        indexes={name: converted.xindexes[name] for name in generated if name in converted.xindexes},
+    )
+    out = topology.assign_coords(coordinates)
+    out = out.assign({var_name: converted.variable})
     return transfer_dataset_attrs(source_ds, out, validate=False)
 
 

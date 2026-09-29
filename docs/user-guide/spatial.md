@@ -9,6 +9,11 @@ arrays cannot express safely.
 Use spatial types when the payload is not just "three numbers," but a vector,
 rotation, transform, or kinematic quantity with a coordinate-frame contract.
 
+The {doc}`illustrated_example` shows how a Pose stores position and rotation as
+separate variables with `axis` and `quat` core dimensions, sharing trial, sample,
+time, and validity information. Its `decompose()` example extracts those two
+typed components.
+
 ## Minimal Example
 
 <!-- example-id: UG-SPATIAL-POSE -->

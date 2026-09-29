@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from . import higher_order_interp_primitives as _interp_primitives
 from ._fixed_size_constants import STATUS_INVALID_QUAT, STATUS_OK
@@ -20,14 +18,14 @@ _STATUS_ALPHA_RANGE = 2
 _HELPERS_JITTED = False
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_squad_block():
     numba = require_numba("spatial.rotation.higher_order_interp_backend")
     _jit_kernel_helpers(numba)
     return njit_kernel(numba, _squad_block_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_pose_block():
     numba = require_numba("spatial.pose.higher_order_interp_backend")
     _jit_kernel_helpers(numba)
@@ -46,7 +44,7 @@ def _jit_kernel_helpers(numba) -> None:
 
 
 def _jit_primitive_helpers(numba) -> None:
-    normalize, multiply, slerp = _compile_slerp_dependencies(numba)
+    normalize, multiply, slerp = _compile_slerp_dependencies()
     _interp_primitives._shared_slerp_quat = slerp
     _interp_primitives.normalize_quat_tuple = normalize
     _interp_primitives.quat_multiply = multiply

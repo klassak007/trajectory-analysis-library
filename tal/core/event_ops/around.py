@@ -16,6 +16,7 @@ from tal.utils.xarray_namespace import (
 from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import transfer_dataset_attrs
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
+from ..param_ops.query_metadata import without_inherited_query_metadata
 from ..param_ops.types import ParamEvalOptions
 from .boundary import EventBoundaryPayload, extract_event_boundaries
 from .boundary_select import select_event_boundaries
@@ -103,7 +104,7 @@ def _source_time_dataarray(
     else:
         data = source
     try:
-        out = data.astype("float64")
+        out = without_inherited_query_metadata(data).astype("float64")
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{owner}: explicit event times must be numeric (coercible to float64).") from exc
     return out

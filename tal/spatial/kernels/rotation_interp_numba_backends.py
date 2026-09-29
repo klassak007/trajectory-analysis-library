@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from . import quaternion_interp_primitives as _quat_interp_primitives
 from .fixed_size_primitives import normalize_quat_tuple as _normalize_quat_tuple
@@ -23,7 +21,7 @@ _STATUS_ALPHA_RANGE = 2
 _STATUS_AMBIGUOUS_HALF_TURN = 3
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_slerp_block():
     numba = require_numba("spatial.rotation.interp_backend")
     _jit_kernel_helpers(numba)
@@ -32,12 +30,14 @@ def _compiled_slerp_block():
 
 def _jit_kernel_helpers(numba) -> None:
     global _fill_nan, _shared_slerp_quat, _slerp_sample
-    _, _, _shared_slerp_quat = _compile_slerp_dependencies(numba)
+    _, _, _shared_slerp_quat = _compile_slerp_dependencies()
     _fill_nan = njit_kernel(numba, _fill_nan)
     _slerp_sample = njit_kernel(numba, _slerp_sample)
 
 
-def _compile_slerp_dependencies(numba):
+@_cached_compilation
+def _compile_slerp_dependencies():
+    numba = require_numba("spatial.rotation.interp_backend")
     normalize = getattr(_normalize_quat_tuple, "py_func", _normalize_quat_tuple)
     multiply = getattr(_quat_multiply, "py_func", _quat_multiply)
     normalize_compiled = njit_kernel(numba, normalize)

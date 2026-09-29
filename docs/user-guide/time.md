@@ -67,6 +67,11 @@ synced_imu, synced_gps = synchronize(
 The example keeps the fast IMU stream and slower GPS stream in their original
 sample layouts until a query asks for a common parameter grid.
 
+The {doc}`illustrated_example` shows a two-dimensional `time(trial, sample)`
+coordinate with different timestamps and valid lengths per trial. A shared time
+query evaluates each row independently; it does not assume that matching sample
+indexes represent simultaneous observations.
+
 ## Parameter Operations
 
 | Operation | Use When |

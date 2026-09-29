@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 from .rotation_mean_backends import prepare_quat_mean_rows
 
@@ -12,7 +10,7 @@ _QUAT_SIZE = 4
 _HELPERS_JITTED = False
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_quat_mean_block():
     numba = require_numba("spatial.rotation.mean_backend")
     _jit_kernel_helpers(numba)

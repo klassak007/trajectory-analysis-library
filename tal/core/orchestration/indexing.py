@@ -121,6 +121,23 @@ def restore_index_topology(
     return cleared.assign_coords(snapshot.coordinates)
 
 
+def dimension_coordinates(value: XarrayObject, *, dims: tuple[str, ...]) -> xr.Coordinates:
+    """Capture axis coordinates and complete native index groups without values.
+
+    Positional masks and semantic expansion supply numerical positions/sizes;
+    this owner supplies labels without reconstructing their index types.
+    Ordinary auxiliary coordinates are not part of this axis projection.
+    """
+    indexed = capture_index_topology(value, dims=dims).coordinates
+    variables = {name: coord.variable for name, coord in indexed.items()}
+    variables.update({
+        dim: value.coords[dim].variable for dim in dims
+        if dim in value.coords and dim not in value.xindexes
+        and value.coords[dim].dims == (dim,)
+    })
+    return xr.Coordinates(variables, indexes=dict(indexed.xindexes))
+
+
 def without_index_topology(
     value: XarrayObject,
     *,
@@ -421,6 +438,7 @@ __all__ = [
     "capture_index_topology",
     "capture_result_coordinates",
     "coordinate_variables_compatible",
+    "dimension_coordinates",
     "index_group_for_coordinate",
     "isel_rows",
     "lane_index_groups",

@@ -46,6 +46,10 @@ interp = ao.param.at([0.18, 0.52], on="time_s", opts=ParamEvalOptions(method="li
 The first three operations are structural xarray-style operations. The last
 three ask TAL to interpret `time_s` as the query domain.
 
+For a visual comparison, see the {doc}`illustrated_example`: sample index 2
+corresponds to times 0.20, 0.31, and 0.23 seconds across its three trials.
+Interpolation at 0.20 seconds instead evaluates each trial on its own time grid.
+
 ## Choosing The Right Selection API
 
 | API | Query space | Typical use |

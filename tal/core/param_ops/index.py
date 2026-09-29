@@ -20,6 +20,7 @@ from .guards import (
     reserved_coord_is_owned,
 )
 from .options import validate_select_options
+from .query_metadata import inherited_query_metadata_names
 from .runtime_prepare import prepare_runtime_param_evaluation
 from .types import ParamIndexResult, ParamRuntimeContext, ParamSelectOptions
 
@@ -43,16 +44,9 @@ def _index_query_without_consumed_metadata(
 ) -> tuple[xr.DataArray | np.ndarray | Sequence[float] | float, tuple[str, ...]]:
     if not isinstance(query, xr.DataArray):
         return query, ()
-    size_name = str(size_coord.name) if size_coord is not None else None
+    generated = inherited_query_metadata_names(query, size_coord=size_coord)
     inherited_sizes = tuple(
-        name for name in query.coords
-        if isinstance(name, str)
-        and name not in query.dims
-        and name not in ("valid", "sample_index")
-        and (
-            reserved_coord_is_owned(query, name=name)
-            or (name == size_name and query.coords[name].dims == size_coord.dims)
-        )
+        name for name in generated if name not in ("valid", "sample_index")
     )
     remove = list(inherited_sizes)
     for name in ("valid", "sample_index"):
@@ -60,6 +54,8 @@ def _index_query_without_consumed_metadata(
             continue
         if not reserved_coord_is_owned(query, name=name):
             raise ValueError(f"param index: query coordinate {name!r} is reserved for TAL runtime metadata.")
+        if name in query.dims or name in query.xindexes:
+            raise ValueError(f"param index: query axis or index {name!r} conflicts with consumed runtime metadata.")
         remove.append(name)
     return (query.drop_vars(remove) if remove else query), inherited_sizes
 
@@ -71,7 +67,8 @@ def _index_source_for_preflight(context: ParamRuntimeContext) -> xr.DataArray:
         name for name in ("valid", "sample_index")
         if name in source.coords and reserved_coord_is_owned(context.ds, name=name)
     )
-    return source.drop_vars(names) if names else source
+    auxiliary = tuple(name for name in names if name not in source.dims and name not in source.xindexes)
+    return source.drop_vars(auxiliary) if auxiliary else source
 
 
 def _preflight_index_request(
@@ -121,7 +118,10 @@ def _without_index_output_metadata(
     *,
     consumed_names: tuple[str, ...],
 ) -> xr.DataArray:
-    consumed = tuple(name for name in consumed_names if name in index.coords)
+    consumed = tuple(
+        name for name in consumed_names
+        if name in index.coords and name not in index.dims and name not in index.xindexes
+    )
     return index.drop_vars(consumed) if consumed else index
 
 

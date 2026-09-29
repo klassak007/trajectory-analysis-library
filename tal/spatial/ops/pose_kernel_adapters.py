@@ -12,6 +12,7 @@ from ..kernels.fixed_size_backends import (
 )
 from ..kernels.pose_kernels import _matrix_to_components_prevalidated_kernel
 from .core_chunks import single_core_chunk
+from .numerical_coordinates import share_lazy_numerical_coordinates
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 _MATRIX_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
@@ -64,6 +65,7 @@ def apply_components_to_matrix_kernel(
     col_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    pos_da, rot_da = share_lazy_numerical_coordinates(pos_da, rot_da, owner=owner)
     pos_da = single_core_chunk(pos_da, dim=pos_dim)
     rot_da = single_core_chunk(rot_da, dim=quat_dim)
     matrix = xr.apply_ufunc(
@@ -98,6 +100,7 @@ def apply_matrix_to_components_kernel(
         exclude_dims={row_dim} if pos_dim == row_dim else set(),
         vectorize=False,
         dask="parallelized",
+        keep_attrs=True,
         output_dtypes=[np.float64, np.float64],
         dask_gufunc_kwargs={"output_sizes": {pos_dim: 3, quat_dim: 4}},
     )
@@ -117,6 +120,7 @@ def apply_pose_compose_translation_kernel(
     right_quat_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    left_t, right_t, right_q = share_lazy_numerical_coordinates(left_t, right_t, right_q, owner=owner)
     left_t = single_core_chunk(left_t, dim=left_dim)
     right_t = single_core_chunk(right_t, dim=right_dim)
     right_q = single_core_chunk(right_q, dim=right_quat_dim)
@@ -145,6 +149,7 @@ def apply_pose_inverse_translation_kernel(
     quat_dim: str,
     owner: str,
 ) -> xr.DataArray:
+    translation, quat = share_lazy_numerical_coordinates(translation, quat, owner=owner)
     translation = single_core_chunk(translation, dim=pos_dim)
     quat = single_core_chunk(quat, dim=quat_dim)
     out_t = xr.apply_ufunc(

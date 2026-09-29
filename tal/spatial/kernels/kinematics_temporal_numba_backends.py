@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
 from tal.utils.numba_scan import ScanAxisSpec, ScanInputSpec, prepare_scan_rows
-from tal.utils.numba_support import njit_kernel, require_numba
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
 
 _STATUS_OK = 0
 _STATUS_LEFT_PACKED = 1
@@ -15,14 +13,14 @@ _STATUS_MONOTONIC = 3
 _HELPERS_JITTED = False
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_trapezoid_block():
     numba = require_numba("spatial.kinematics.temporal.integral_backend")
     _jit_kernel_helpers(numba)
     return njit_kernel(numba, _trapezoid_block_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_simpson_block():
     numba = require_numba("spatial.kinematics.temporal.integral_backend")
     _jit_kernel_helpers(numba)

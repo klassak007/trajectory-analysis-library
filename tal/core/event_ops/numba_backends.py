@@ -1,26 +1,31 @@
 from __future__ import annotations
 
-from functools import lru_cache
-
 import numpy as np
 
-from ._event_constants import EDGE_ENTER, EDGE_EXIT, EDGE_INVALID, EDGE_TRIGGER, SAMPLE_SENTINEL
+from tal.utils.numba_support import _cached_compilation, njit_kernel, require_numba
+
+from ._event_constants import (
+    EDGE_ENTER,
+    EDGE_EXIT,
+    EDGE_INVALID,
+    EDGE_TRIGGER,
+    SAMPLE_SENTINEL,
+)
 from .block_prep import prepare_boundary_block_rows, prepare_intervals_block_rows
-from tal.utils.numba_support import njit_kernel, require_numba
 
 _STATUS_OK = 0
 _STATUS_NONFINITE_TIME = 1
 _HELPERS_JITTED = False
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_boundary_block():
     numba = require_numba("events.boundaries")
     _jit_kernel_helpers(numba)
     return njit_kernel(numba, _boundary_block_impl)
 
 
-@lru_cache(maxsize=1)
+@_cached_compilation
 def _compiled_intervals_block():
     numba = require_numba("events.intervals")
     _jit_kernel_helpers(numba)

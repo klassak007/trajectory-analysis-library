@@ -222,7 +222,7 @@ def assemble_reduced_dataset(
     sequence_size_coord: str | None,
 ) -> xr.Dataset:
     """Attach reduced variables to the source coordinate-only topology."""
-    out = ds.drop_vars(tuple(ds.data_vars)).assign(reduced)
+    out = ds.drop_vars(tuple(ds.data_vars)).assign({name: data.variable for name, data in reduced.items()})
     reduced_dims = set(reduce_dims)
     invalid_optional: set[str] = set()
     if sequence_dim is not None and sequence_dim in reduced_dims:

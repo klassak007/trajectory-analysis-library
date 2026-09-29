@@ -6,7 +6,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..param_ops.guards import dataset_namespace_names, mark_reserved_coord, unique_temp_dim
+from ..orchestration.indexing import without_dimension_coordinate
+from ..param_ops.guards import (
+    dataset_namespace_names,
+    mark_reserved_coord,
+    unique_temp_dim,
+)
 from .concat_overlap import validate_grouped_sort_payload
 from .concat_plan import ConcatSequencePlan
 from .concat_sort import apply_overlap_sort as _apply_overlap_sort_rows
@@ -14,23 +19,22 @@ from .types import SequenceConcatOptions
 
 
 def _build_packing_index(lengths: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    segments, batch = lengths.shape
+    _, batch = lengths.shape
     total = lengths.sum(axis=0)
     width = int(total.max(initial=0))
     seg_idx = np.zeros((batch, width), dtype="int64")
     sample_idx = np.zeros((batch, width), dtype="int64")
     valid = np.zeros((batch, width), dtype=bool)
     starts = np.cumsum(lengths, axis=0) - lengths
-    for seg in range(segments):
-        for row in range(batch):
-            length = int(lengths[seg, row])
-            if length <= 0:
-                continue
-            start = int(starts[seg, row])
-            stop = start + length
-            seg_idx[row, start:stop] = seg
-            sample_idx[row, start:stop] = np.arange(length, dtype="int64")
-            valid[row, start:stop] = True
+    for seg, row in np.ndindex(lengths.shape):
+        length = int(lengths[seg, row])
+        if length <= 0:
+            continue
+        start = int(starts[seg, row])
+        stop = start + length
+        seg_idx[row, start:stop] = seg
+        sample_idx[row, start:stop] = np.arange(length, dtype="int64")
+        valid[row, start:stop] = True
     return seg_idx, sample_idx, valid
 
 
@@ -44,12 +48,14 @@ def _mask_invalid_slots(
     out = ds
     for name, var in list(out.data_vars.items()):
         if sequence_dim in var.dims:
-            out[name] = var.where(valid.broadcast_like(var))
-    for name, coord in list(out.coords.items()):
-        if name in {sequence_dim, "valid", "sample_index", *protected_names} or sequence_dim not in coord.dims:
-            continue
-        out = out.assign_coords({name: coord.where(valid.broadcast_like(coord))})
-    return out
+            out[name] = var.where(valid.broadcast_like(var)).variable
+    updates = {
+        name: coord.where(valid.broadcast_like(coord)).variable
+        for name, coord in out.coords.items()
+        if name not in {sequence_dim, "valid", "sample_index", *protected_names}
+        and sequence_dim in coord.dims
+    }
+    return out.assign_coords(updates)
 
 
 def _normalize_runtime_reserved_coords(
@@ -65,7 +71,7 @@ def _normalize_runtime_reserved_coords(
             mask = valid.broadcast_like(sample)
             sample = sample.where(mask, other=np.int64(-1))
         updates["sample_index"] = mark_reserved_coord(sample.astype("int64"), name="sample_index")
-    return ds.assign_coords(updates)
+    return ds.assign_coords({name: coord.variable for name, coord in updates.items()})
 
 
 def _broadcast_sequence_only_payload(
@@ -79,12 +85,12 @@ def _broadcast_sequence_only_payload(
     for name, var in list(out.data_vars.items()):
         if tuple(var.dims) != (sequence_dim,):
             continue
-        out[name] = var.expand_dims({flat_dim: labels}).transpose(flat_dim, sequence_dim)
+        out[name] = var.expand_dims({flat_dim: labels}).transpose(flat_dim, sequence_dim).variable
     for name, coord in list(out.coords.items()):
         if name in {sequence_dim, flat_dim} or tuple(coord.dims) != (sequence_dim,):
             continue
         expanded = coord.expand_dims({flat_dim: labels}).transpose(flat_dim, sequence_dim)
-        out = out.assign_coords({name: expanded})
+        out = out.assign_coords({name: expanded.variable})
     return out
 
 
@@ -108,11 +114,20 @@ def _concat_segment_inputs(
     aligned: list[xr.Dataset],
     *,
     size_name: str | None,
+    sequence_dim: str,
     sequence_coord_names: list[str],
 ) -> list[xr.Dataset]:
     out: list[xr.Dataset] = []
     for ds in aligned:
         prepared = ds.drop_vars(size_name, errors="ignore") if size_name else ds
+        indexes = tuple(
+            name for _, coordinates in prepared.xindexes.group_by_index()
+            if any(sequence_dim in var.dims for var in coordinates.values())
+            for name in coordinates
+        )
+        prepared = prepared.drop_indexes(indexes)
+        prepared = without_dimension_coordinate(prepared, dim=sequence_dim)
+        prepared = prepared.assign_coords({sequence_dim: np.arange(ds.sizes[sequence_dim])})
         prepared = prepared.reset_coords(
             names=[name for name in sequence_coord_names if name in prepared.coords],
             drop=False,
@@ -142,7 +157,9 @@ def _packed_concat_dataset(
     smp_da = xr.DataArray(sample_idx, dims=(flat_dim, out_dim), coords=coords)
     valid = xr.DataArray(valid_arr, dims=(flat_dim, out_dim), coords=coords).rename({out_dim: sequence_dim})
     sequence_coord_names = _sequence_coord_names(aligned, sequence_dim=sequence_dim, flat_dim=flat_dim)
-    concat_inputs = _concat_segment_inputs(aligned, size_name=size_name, sequence_coord_names=sequence_coord_names)
+    concat_inputs = _concat_segment_inputs(
+        aligned, size_name=size_name, sequence_dim=sequence_dim, sequence_coord_names=sequence_coord_names,
+    )
     stacked_ds = xr.concat(
         concat_inputs,
         dim=seg_dim,
@@ -153,13 +170,20 @@ def _packed_concat_dataset(
         combine_attrs="drop_conflicts",
         fill_value=fill_value,
     )
-    out = stacked_ds.isel({seg_dim: seg_da, sequence_dim: smp_da}).drop_vars(seg_dim, errors="ignore")
+    out = _gather_segments(stacked_ds, seg_da, smp_da, seg_dim=seg_dim, sequence_dim=sequence_dim, out_dim=out_dim)
     out = out.drop_vars(sequence_dim, errors="ignore").rename_dims({out_dim: sequence_dim})
     out = out.drop_vars(out_dim, errors="ignore").assign_coords({sequence_dim: np.arange(out.sizes[sequence_dim], dtype="int64")})
     for name in sequence_coord_names:
         if name in out.data_vars:
             out = out.set_coords(name)
     return out, valid
+
+
+def _gather_segments(ds, segments, samples, *, seg_dim, sequence_dim, out_dim):
+    if samples.size == 0:
+        # Dask vectorized indexing cannot gather an empty index array.
+        return ds.isel({seg_dim: 0, sequence_dim: slice(0, 0)}, drop=True).rename({sequence_dim: out_dim})
+    return ds.isel({seg_dim: segments, sequence_dim: samples}).drop_vars(seg_dim, errors="ignore")
 
 
 def _apply_valid_mask(

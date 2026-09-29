@@ -324,7 +324,6 @@ def test_orch_arch_013_sequence_size_value_contract_has_shared_core_owner() -> N
     owner_tree = _module_tree(owner_path)
     consumer_calls = {
         Path("tal/core/schema_validate/phase_validity.py"): "normalize_sequence_size_values",
-        Path("tal/core/param_engine/validity_mask.py"): "require_valid_sequence_size_values",
         Path("tal/core/validity_mask.py"): "require_valid_sequence_size_values",
         Path("tal/core/combine_ops/align.py"): "require_valid_sequence_size_values",
         Path("tal/core/combine_ops/concat_batch.py"): "require_valid_sequence_size_values",

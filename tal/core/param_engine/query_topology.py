@@ -19,6 +19,7 @@ from ..orchestration.indexing import (
     sequence_dependent_coordinate_names,
     without_index_topology,
 )
+from ..param_ops.query_metadata import without_inherited_query_metadata
 from ..schema import _transfer_dataset_attrs_for_finalize
 from ..schema_read import read_sequence_size_coord_name
 from ..schema_validate.finalize import transfer_dataarray_metadata
@@ -215,6 +216,7 @@ def preflight_query_output_namespace(
     retain_sequence_coords: bool = False,
 ) -> QueryOutputPlan:
     """Reject deterministic caller/output name conflicts before mapping."""
+    query = without_inherited_query_metadata(query)
     data_vars, protected_dims, surviving_coords, source_groups = _surviving_source_names(
         source, sequence_dim=sequence_dim, batch_dims=batch_dims, intent=intent,
         consumed_names=consumed_names, retain_sequence_coords=retain_sequence_coords,

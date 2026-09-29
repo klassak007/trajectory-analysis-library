@@ -31,6 +31,11 @@ Ragged batches use `sequence_size_coord` to record the valid prefix length for
 each batch lane. This lets rectangular arrays carry variable-length trajectories
 without letting padded tails participate in reducers, events, or interpolation.
 
+In the {ref}`AnalysisObject diagram <analysis-object-diagram>`, all three trials
+have six storage slots, but their valid lengths are six, four, and five.
+`time(trial, sample)` gives each trial its own timestamps. The
+{doc}`illustrated_example` builds that layout and applies operations to it.
+
 ## Components And Extensions
 
 Some payload axes contain named pieces. A pose may contain rotation and
