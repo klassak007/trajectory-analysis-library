@@ -5,7 +5,7 @@ import pytest
 import xarray as xr
 
 from tal.core import AnalysisObject
-from tal.core.event_ops import Condition, AtBoundariesOptions
+from tal.core.event_ops import AtBoundariesOptions, Condition
 
 
 def _ao_series(*, values: list[float], time: list[float]) -> AnalysisObject:
@@ -239,3 +239,31 @@ def test_event_hard_019_boundary_select_bounded_blockwise_selection_parity() -> 
     np.testing.assert_allclose(out_first.as_dataset(copy="none")["time"].values, np.asarray([1.0], dtype="float64"))
     np.testing.assert_allclose(out_last.as_dataset(copy="none")["time"].values, np.asarray([4.0], dtype="float64"))
     np.testing.assert_allclose(out_first_n.as_dataset(copy="none")["time"].values, np.asarray([1.0, 2.0], dtype="float64"))
+
+
+@pytest.mark.parametrize("lazy,empty", [(False, False), (True, False), (False, True), (True, True)])
+def test_tut_009_boundary_selection_temporary_axis_namespace(lazy, empty):
+    """TUT-009: bounded boundary selection allocates its temporary axis before construction."""
+    from dask.callbacks import Callback
+
+    batch = "__tal_selected_event__"
+    n = 0 if empty else 4
+    raw = xr.Dataset({"value": ((batch, "sample"), np.tile([0., 3., 4., 0.][:n], (2, 1)))},
+                     coords={batch: ["a", "b"], "time": ("sample", np.array([0., .2, .7, 1.5])[:n]),
+                             "__tal_selected_event___": "occupied"})
+    source = AnalysisObject.from_data(raw.chunk({"sample": 2}) if lazy else raw,
+                                     sequence_dim="sample", batch_dims=(batch,), param_coord="time")
+    snapshot = source.as_dataset(copy="deep")
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.events.at_boundaries(Condition.compare(Condition.var("value"), "gt", 2.),
+                                            opts=AtBoundariesOptions(max_events=2)).as_dataset()
+    assert tasks == []
+    actual = result.compute(scheduler="synchronous")
+    if not empty:
+        np.testing.assert_allclose(actual.value, [[3., 4.], [3., 4.]])
+        np.testing.assert_allclose(actual.time, [[.2, .7], [.2, .7]])
+    else:
+        assert bool(actual.value.isnull().all())
+    assert set(actual.data_vars) == {"value"} and actual.xindexes[batch].equals(snapshot.xindexes[batch])
+    xr.testing.assert_identical(source.as_dataset(), snapshot)

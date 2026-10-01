@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import xarray as xr
 
@@ -19,7 +19,12 @@ from .options import (
     coerce_interval_extract_options,
     coerce_when_options,
 )
-from .pack import pack_event_table, pack_interval_table
+from .pack import (
+    _assert_event_var_namespace_safe,
+    _assert_interval_var_namespace_safe,
+    pack_event_table,
+    pack_interval_table,
+)
 from .resolve import resolve_event_eval_context
 from .types import (
     AroundOptions,
@@ -32,6 +37,9 @@ from .types import (
 )
 from .when import evaluate_when_condition
 
+if TYPE_CHECKING:
+    from ..analysis_object import AnalysisObject
+
 
 class EventsAccessor:
     """Accessor for condition evaluation and event operations.
@@ -41,7 +49,7 @@ class EventsAccessor:
     Public TAL class surface. See class methods/properties for operational semantics.
     """
 
-    def __init__(self, ao: "AnalysisObject") -> None:
+    def __init__(self, ao: AnalysisObject) -> None:
         self._ao = ao
 
     def mask(
@@ -49,7 +57,7 @@ class EventsAccessor:
         condition: Condition,
         *,
         opts: ConditionEvalOptions | None = None,
-    ) -> "xr.DataArray":
+    ) -> xr.DataArray:
         """Evaluate a condition and return the boolean mask.
 
         Parameters
@@ -99,7 +107,7 @@ class EventsAccessor:
         condition: Condition,
         *,
         opts: EventExtractOptions | None = None,
-    ) -> "xr.Dataset":
+    ) -> xr.Dataset:
         """Extract event boundary table from a condition.
 
         Parameters
@@ -146,6 +154,7 @@ class EventsAccessor:
                 f"events.events: truth_eval={options.truth_eval!r} is not supported."
             )
         context = resolve_event_eval_context(self._ao, opts=options.eval, owner="events.events")
+        _assert_event_var_namespace_safe(context, owner="events.events")
         effective = evaluate_mask(condition, context=context, owner="events.events")
         payload = extract_event_boundaries(
             condition,
@@ -161,7 +170,7 @@ class EventsAccessor:
         condition: Condition,
         *,
         opts: IntervalExtractOptions | None = None,
-    ) -> "xr.Dataset":
+    ) -> xr.Dataset:
         """Extract interval table from a condition.
 
         Parameters
@@ -208,6 +217,7 @@ class EventsAccessor:
                 f"events.intervals: truth_eval={options.truth_eval!r} is not supported."
             )
         context = resolve_event_eval_context(self._ao, opts=options.eval, owner="events.intervals")
+        _assert_interval_var_namespace_safe(context, owner="events.intervals")
         effective = evaluate_mask(condition, context=context, owner="events.intervals")
         payload = extract_intervals(
             condition,
@@ -223,7 +233,7 @@ class EventsAccessor:
         condition: Condition,
         *,
         opts: AtBoundariesOptions | None = None,
-    ) -> "AnalysisObject":
+    ) -> AnalysisObject:
         """Sample AO values at event boundaries.
 
         Parameters
@@ -279,7 +289,7 @@ class EventsAccessor:
         condition: Condition,
         *,
         opts: WhenOptions | None = None,
-    ) -> "AnalysisObject":
+    ) -> AnalysisObject:
         """Extract condition-selected windows from an AO.
 
         Parameters
@@ -340,7 +350,7 @@ class EventsAccessor:
         post: float | _AroundUnsetType = _AROUND_UNSET,
         dt: float | None | _AroundUnsetType = _AROUND_UNSET,
         layout: Literal["segments", "stacked"] | _AroundUnsetType = _AROUND_UNSET,
-    ) -> "AnalysisObject":
+    ) -> AnalysisObject:
         """Extract around-event windows from explicit events or a condition.
 
         Parameters

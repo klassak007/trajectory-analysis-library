@@ -7,9 +7,19 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
+from tal.utils.xarray_namespace import dataarray_namespace_names, unique_temp_dim
+
+from ..orchestration.indexing import dimension_coordinates
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from .boundary import EventBoundaryPayload
-from .event_primitives import EDGE_ENTER, EDGE_EXIT, EDGE_INVALID, SAMPLE_SENTINEL, batch_dims, lane_data
+from .event_primitives import (
+    EDGE_ENTER,
+    EDGE_EXIT,
+    EDGE_INVALID,
+    SAMPLE_SENTINEL,
+    batch_dims,
+    lane_data,
+)
 from .resolve import EventEvalContext
 
 
@@ -182,10 +192,9 @@ def _build_selected_array(
 ) -> xr.DataArray:
     context_batch_dims = batch_dims(context)
     dims = context_batch_dims + (event_dim,)
-    coords: dict[str, object] = {event_dim: np.arange(values.shape[-1], dtype="int64")}
-    for dim in context_batch_dims:
-        coords[dim] = context.clock.coords[dim]
-    return xr.DataArray(values, dims=dims, coords=coords, name=name)
+    coords = xr.Dataset(coords=dimension_coordinates(context.clock, dims=context_batch_dims))
+    coords = coords.assign_coords({event_dim: np.arange(values.shape[-1], dtype="int64")})
+    return xr.DataArray(values, dims=dims, coords=coords.coords, name=name)
 
 
 def _dynamic_shape(context: EventEvalContext, *, out_len: int) -> tuple[int, ...]:
@@ -311,7 +320,7 @@ def _select_boundaries_bounded(
     mode: str,
     max_events: int,
 ) -> EventBoundaryPayload:
-    out_dim = "__tal_selected_event__"
+    out_dim = unique_temp_dim("__tal_selected_event__", taken_dims=dataarray_namespace_names(payload.time))
     out_len = _selection_output_len(mode=mode, max_events=max_events, max_selected=0)
     chunked = any(
         is_chunked_dataarray(da)

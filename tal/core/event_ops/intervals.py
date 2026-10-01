@@ -5,12 +5,20 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
+from tal.utils.numba_support import _numba_available
+from tal.utils.xarray_namespace import (
+    dataarray_namespace_names,
+    dataset_namespace_names,
+    unique_temp_dim,
+)
+
+from ..orchestration.indexing import dimension_coordinates
+from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from .backends import (
     EVENT_INTERVALS_BACKEND_NUMBA,
     EVENT_INTERVALS_BACKEND_NUMPY_BLOCK,
     intervals_bounded_block_backend,
 )
-from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
 from .boundary import (
     EventBoundaryPayload,
     extract_event_boundaries,
@@ -26,7 +34,6 @@ from .event_primitives import (
 )
 from .resolve import EventEvalContext
 from .types import Condition, EventExtractOptions, IntervalExtractOptions
-from tal.utils.numba_support import _numba_available
 
 _INTERNAL_SEGMENT_DIM = "__tal_segment__"
 _INTERNAL_EDGE_DIM = "__tal_edge__"
@@ -201,13 +208,9 @@ def _build_edge_array(
 ) -> xr.DataArray:
     context_batch_dims = batch_dims(context)
     dims = context_batch_dims + (segment_dim, edge_dim)
-    coords: dict[str, object] = {
-        segment_dim: np.arange(values.shape[-2], dtype="int64"),
-        edge_dim: _EDGE_COORDS,
-    }
-    for dim in context_batch_dims:
-        coords[dim] = context.clock.coords[dim]
-    return xr.DataArray(values, dims=dims, coords=coords, name=name)
+    coords = xr.Dataset(coords=dimension_coordinates(context.clock, dims=context_batch_dims))
+    coords = coords.assign_coords({segment_dim: np.arange(values.shape[-2], dtype="int64"), edge_dim: _EDGE_COORDS})
+    return xr.DataArray(values, dims=dims, coords=coords.coords, name=name)
 
 
 def _build_segment_array(
@@ -219,10 +222,9 @@ def _build_segment_array(
 ) -> xr.DataArray:
     context_batch_dims = batch_dims(context)
     dims = context_batch_dims + (segment_dim,)
-    coords: dict[str, object] = {segment_dim: np.arange(values.shape[-1], dtype="int64")}
-    for dim in context_batch_dims:
-        coords[dim] = context.clock.coords[dim]
-    return xr.DataArray(values, dims=dims, coords=coords, name=name)
+    coords = xr.Dataset(coords=dimension_coordinates(context.clock, dims=context_batch_dims))
+    coords = coords.assign_coords({segment_dim: np.arange(values.shape[-1], dtype="int64")})
+    return xr.DataArray(values, dims=dims, coords=coords.coords, name=name)
 
 
 def _dynamic_rows(
@@ -298,6 +300,8 @@ def _extract_dynamic(
     *,
     context: EventEvalContext,
     owner: str,
+    segment_dim: str,
+    edge_dim: str,
 ) -> IntervalPayload:
     lane_count, rows = _dynamic_rows(payload, context=context, owner=owner)
     time_out, sample_out, trigger_out, valid_out, max_segments = _pack_dynamic_rows(rows, lane_count=lane_count)
@@ -305,29 +309,31 @@ def _extract_dynamic(
         time=_build_edge_array(
             _reshape_dynamic(time_out, context=context, max_segments=max_segments, with_edge=True),
             context=context,
-            segment_dim=_INTERNAL_SEGMENT_DIM,
-            edge_dim=_INTERNAL_EDGE_DIM,
+            segment_dim=segment_dim,
+            edge_dim=edge_dim,
             name="time",
         ),
         sample_index=_build_edge_array(
             _reshape_dynamic(sample_out, context=context, max_segments=max_segments, with_edge=True),
             context=context,
-            segment_dim=_INTERNAL_SEGMENT_DIM,
-            edge_dim=_INTERNAL_EDGE_DIM,
+            segment_dim=segment_dim,
+            edge_dim=edge_dim,
             name="sample_index",
         ),
         is_trigger=_build_segment_array(
             _reshape_dynamic(trigger_out, context=context, max_segments=max_segments, with_edge=False),
             context=context,
-            segment_dim=_INTERNAL_SEGMENT_DIM,
+            segment_dim=segment_dim,
             name="is_trigger",
         ),
         valid_segment=_build_segment_array(
             _reshape_dynamic(valid_out, context=context, max_segments=max_segments, with_edge=False),
             context=context,
-            segment_dim=_INTERNAL_SEGMENT_DIM,
+            segment_dim=segment_dim,
             name="valid_segment",
         ),
+        segment_dim=segment_dim,
+        edge_dim=edge_dim,
     )
 
 
@@ -342,6 +348,8 @@ def _extract_bounded(
     *,
     max_segments: int,
     owner: str,
+    segment_dim: str,
+    edge_dim: str,
 ) -> IntervalPayload:
     chunked = any(
         is_chunked_dataarray(da)
@@ -356,7 +364,7 @@ def _extract_bounded(
     ufunc_kwargs: dict[str, object] = {}
     if chunked:
         ufunc_kwargs["dask_gufunc_kwargs"] = {
-            "output_sizes": {_INTERNAL_SEGMENT_DIM: max_segments, _INTERNAL_EDGE_DIM: 2},
+            "output_sizes": {segment_dim: max_segments, edge_dim: 2},
             "allow_rechunk": True,
         }
     time, sample, is_trigger, valid = xr.apply_ufunc(
@@ -367,10 +375,10 @@ def _extract_bounded(
         payload.sample_index_after.astype("int64"),
         input_core_dims=[[payload.event_dim]] * 4,
         output_core_dims=[
-            [_INTERNAL_SEGMENT_DIM, _INTERNAL_EDGE_DIM],
-            [_INTERNAL_SEGMENT_DIM, _INTERNAL_EDGE_DIM],
-            [_INTERNAL_SEGMENT_DIM],
-            [_INTERNAL_SEGMENT_DIM],
+            [segment_dim, edge_dim],
+            [segment_dim, edge_dim],
+            [segment_dim],
+            [segment_dim],
         ],
         kwargs=kwargs,
         vectorize=False,
@@ -378,16 +386,20 @@ def _extract_bounded(
         output_dtypes=[np.float64, np.int64, np.bool_, np.bool_],
         **ufunc_kwargs,
     )
+    return _bounded_payload((time, sample, is_trigger, valid), segment_dim=segment_dim, edge_dim=edge_dim,
+                            max_segments=max_segments)
+
+
+def _bounded_payload(
+    arrays: tuple[xr.DataArray, ...], *, segment_dim: str, edge_dim: str, max_segments: int,
+) -> IntervalPayload:
     segment_coord = np.arange(max_segments, dtype="int64")
-    edge_coord = _EDGE_COORDS
-    return IntervalPayload(
-        time=time.assign_coords({_INTERNAL_SEGMENT_DIM: segment_coord, _INTERNAL_EDGE_DIM: edge_coord}).rename("time"),
-        sample_index=sample.assign_coords(
-            {_INTERNAL_SEGMENT_DIM: segment_coord, _INTERNAL_EDGE_DIM: edge_coord}
-        ).rename("sample_index"),
-        is_trigger=is_trigger.assign_coords({_INTERNAL_SEGMENT_DIM: segment_coord}).rename("is_trigger"),
-        valid_segment=valid.assign_coords({_INTERNAL_SEGMENT_DIM: segment_coord}).rename("valid_segment"),
+    names = ("time", "sample_index", "is_trigger", "valid_segment")
+    outputs = tuple(
+        array.assign_coords({segment_dim: segment_coord, **({edge_dim: _EDGE_COORDS} if edge_dim in array.dims else {})}).rename(name)
+        for array, name in zip(arrays, names)
     )
+    return IntervalPayload(*outputs, segment_dim=segment_dim, edge_dim=edge_dim)
 
 
 def _max_events(max_segments: int | None) -> int | None:
@@ -467,12 +479,19 @@ def extract_intervals(
         owner=owner,
         emit_triggers=emit_triggers,
     )
+    names = set(dataset_namespace_names(context.runtime.ds))
+    names.update(dataarray_namespace_names(boundaries.time))
+    segment_dim = unique_temp_dim(_INTERNAL_SEGMENT_DIM, taken_dims=tuple(names))
+    names.add(segment_dim)
+    edge_dim = unique_temp_dim(_INTERNAL_EDGE_DIM, taken_dims=tuple(names))
     if opts.max_segments is None:
-        return _extract_dynamic(boundaries, context=context, owner=owner)
+        return _extract_dynamic(boundaries, context=context, owner=owner, segment_dim=segment_dim, edge_dim=edge_dim)
     return _extract_bounded(
         boundaries,
         max_segments=int(opts.max_segments),
         owner=owner,
+        segment_dim=segment_dim,
+        edge_dim=edge_dim,
     )
 
 

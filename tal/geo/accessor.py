@@ -182,7 +182,7 @@ class PositionGeoAccessor:
 
         Notes
         -----
-        This method is the public ENU-to-ECEF inverse in G2. It rejects ECEF
+        This method converts ENU coordinates to ECEF. It rejects ECEF
         inputs rather than returning them unchanged.
 
         Examples

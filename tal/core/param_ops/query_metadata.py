@@ -11,7 +11,7 @@ def inherited_query_metadata_names(
     query: object, *, size_coord: xr.DataArray | None = None,
 ) -> tuple[str, ...]:
     """Identify generated auxiliaries without consuming caller axes or indexes."""
-    if not isinstance(query, xr.DataArray):
+    if not isinstance(query, (xr.DataArray, xr.Dataset)):
         return ()
     size_name = str(size_coord.name) if size_coord is not None else None
     return tuple(

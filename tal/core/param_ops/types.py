@@ -105,7 +105,7 @@ class ParamSyncOptions:
     returned AOs are evaluated on that grid according to ``join`` and ``how``.
     Numeric param coordinates use numeric ``tol`` values. Datetime64 param
     coordinates accept timedelta-like ``tol`` values for synchronization only;
-    selection and indexing remain tolerance-free in T1.
+    selection and indexing remain tolerance-free.
 
     Examples
     --------

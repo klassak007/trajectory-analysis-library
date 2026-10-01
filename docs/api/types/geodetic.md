@@ -56,7 +56,7 @@ where x=east, y=north, and z=up.
 objects. Geodetic `param.at(...)`, `param.resample_to(...)`, and
 `param.interp_like(...)` preserve `GeodeticPosition` identity and use geodesic
 interpolation defaults.
-`to_crs(...)` and `tal.geo.transform_crs(...)` are explicit G4 CRS transforms.
+`to_crs(...)` and `tal.geo.transform_crs(...)` perform explicit CRS transforms.
 Projected destinations return `ProjectedPosition` with `easting`, `northing`,
 and optional `height` labels.
 

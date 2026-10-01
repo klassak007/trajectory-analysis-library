@@ -1,0 +1,13 @@
+trial,guidance,weight
+flight_01,baseline,1.0
+flight_02,baseline,1.1
+flight_03,baseline,1.2
+flight_04,baseline,1.0
+flight_05,baseline,1.1
+flight_06,baseline,1.2
+flight_07,revised,1.0
+flight_08,revised,1.1
+flight_09,revised,1.2
+flight_10,revised,1.0
+flight_11,revised,1.1
+flight_12,revised,1.2

@@ -34,7 +34,11 @@ def _execute(number):
             if cell["cell_type"] != "code":
                 continue
             exec(compile("".join(cell["source"]), f"{path}:cell-{index}", "exec"), namespace)  # noqa: S102
-            for name in ("observations", "ship_log", "drone_log", "source", "declared", "ship_pose", "position"):
+            for name in (
+                "observations", "ship_log", "drone_log", "source", "declared", "ship_pose", "position",
+                "selection_demo", "event_demo", "ragged_demo", "memory_source", "plot_demo", "association_point",
+                "batch_axis_samples", "lazy_event_demo", "orientation_source",
+            ):
                 value = namespace.get(name)
                 if isinstance(value, AnalysisObject) and name not in snapshots:
                     snapshots[name] = value.as_dataset(copy="shallow").copy(deep=True)
@@ -63,6 +67,7 @@ def _check_landing(namespace):
     windows = namespace["windows"].as_dataset(copy="shallow")
     report = namespace["report"]
     lengths, eligible = [], np.zeros(3, dtype=int)
+    sensitivity = np.zeros((3, 3), dtype=int)
     for trial in report.index:
         time, expected, crossing = _reference_trial(trial)
         lengths.append(len(time))
@@ -77,12 +82,14 @@ def _check_landing(namespace):
         point = expected[index]
         np.testing.assert_allclose(report.loc[trial, ["along_m", "across_m", "height_m"]].astype(float), point, atol=1e-10)
         eligible += (abs(point[1]) <= np.array([1., 1.5, 2.])) & (abs(point[0]) <= 2.)
+        sensitivity += (abs(point[0]) <= np.array([1., 2., 3.])[:, None]) & (abs(point[1]) <= np.array([1., 1.5, 2.])[None, :])
         np.testing.assert_allclose(windows["event_time"].sel(trial=trial), [time[index]])
         query = time[index] + windows["tau"].to_numpy()
         expected_window = np.column_stack([np.interp(query, time, expected[:, axis]) for axis in range(3)])
         np.testing.assert_allclose(windows["position"].sel(trial=trial).isel(event=0).transpose("tau", "axis"), expected_window, atol=1e-10)
     np.testing.assert_array_equal(relative["sequence_size"], lengths)
     np.testing.assert_array_equal(namespace["width_comparison"]["eligible"], eligible)
+    np.testing.assert_array_equal(namespace["corridor_sensitivity"], sensitivity)
     assert read_roles(relative) == (True, "sample", ("trial",), ("axis",))
     assert read_param_coord_name(relative) == "time"
     assert read_sequence_size_coord_name(relative) == "sequence_size"
@@ -179,6 +186,167 @@ def _check_lazy_lifecycle(namespace):
     xr.testing.assert_identical(namespace["decoded"], namespace["observations"].as_dataset(copy="shallow"))
 
 
+def _check_construction_and_selection(number, ns):
+    """ID: DOC_TUTORIAL_TEACHING_001; roles, ownership, and labeled query decisions."""
+    if number == 2:
+        assert read_roles(ns["core_only"].as_dataset()) == (True, None, (), ("axis",))
+        assert read_roles(ns["batch_core"].as_dataset()) == (True, None, ("run",), ("axis",))
+        np.testing.assert_allclose(ns["valid_mean"].to_dataarray(), [[1., 2., 3.]])
+        np.testing.assert_allclose(ns["missing_skip"].to_dataarray(), 1.)
+        assert np.isnan(ns["missing_keep"].to_dataarray())
+        assert read_roles(ns["renamed_demo"].as_dataset()) == (True, "sample", ("run",), ("axis",))
+        np.testing.assert_allclose(ns["declared"].to_dataarray(), [[[1., 2., 3.], [99., 99., 99.]]])
+    if number == 3:
+        assert ns["one_run"].as_dataset().sizes == {"step": 3}
+        assert ns["kept_run"].as_dataset().sizes == {"run": 1, "step": 3}
+        np.testing.assert_array_equal(ns["sample_map"], [1])
+        np.testing.assert_allclose(ns["nearest_demo"].to_dataarray(), [10.])
+        np.testing.assert_allclose(ns["nearest_demo"].as_dataset()["clock"], [1.])
+        np.testing.assert_allclose(ns["axis_selected"].as_dataset()["sample"], [1.])
+        np.testing.assert_allclose(ns["axis_evaluated"].as_dataset()["sample"], [1.4])
+        np.testing.assert_allclose(ns["axis_selected"].to_dataarray(), [10.])
+        np.testing.assert_allclose(ns["axis_evaluated"].to_dataarray(), [14.])
+        assert "sample" not in ns["axis_selected"].as_dataset().xindexes
+        np.testing.assert_allclose(ns["batch_axis_selected"]["sample"], [[1., 3.], [2., 2.]])
+        np.testing.assert_allclose(ns["batch_axis_evaluated"].signal, [[12., 25.], [12., 25.]])
+        np.testing.assert_allclose(ns["axis_grid_selected"]["sample"], [[0., 1.], [3., 3.]])
+        np.testing.assert_allclose(ns["axis_grid_evaluated"].signal, [[2.5, 12.], [25., 28.]])
+        assert ns["axis_grid_evaluated"]["sample"].dims == ("sample", "column")
+        assert "sample" not in ns["axis_grid_evaluated"].xindexes
+        assert read_param_coord_name(ns["axis_grid_evaluated"]) is None
+        np.testing.assert_allclose(ns["auxiliary_grid_selected"].clock, [[1., 1.], [1., 3.]])
+        np.testing.assert_allclose(ns["auxiliary_grid_evaluated"].signal, [[6., 14.], [16., 28.]])
+        assert "clock" not in ns["auxiliary_grid_evaluated"].xindexes
+        assert read_param_coord_name(ns["auxiliary_grid_evaluated"]) is None
+        assert ns["typed_label_tasks"] == []
+        np.testing.assert_array_equal(ns["lazy_typed_display"].row, [100, 100, 200, 200])
+        np.testing.assert_allclose(ns["lazy_typed_display"].time, [.2, .3, 1.2, 1.3])
+        np.testing.assert_allclose(ns["lazy_typed_result"].as_matrix().to_dataarray().compute(), np.tile(np.eye(3), (4, 1, 1)))
+        assert "row" not in ns["lazy_typed_display"].xindexes
+        assert ns["masked_demo"].as_dataset().sizes == ns["selection_demo"].as_dataset().sizes
+        np.testing.assert_allclose(ns["evaluated_demo"].to_dataarray(), [14.])
+        np.testing.assert_allclose(ns["evaluated_demo"].as_dataset()["clock"], [1.4])
+        np.testing.assert_array_equal(ns["inner_demo"].as_dataset().step, [20])
+        np.testing.assert_allclose(ns["inner_demo"].to_dataarray(), [20.])
+        np.testing.assert_allclose(ns["outer_demo"].to_dataarray(), [np.nan, 20., np.nan])
+        xr.testing.assert_identical(ns["broadcast_demo"].as_dataset(), ns["scalar_demo"].as_dataset())
+    if number == 4:
+        np.testing.assert_allclose(ns["linear_demo"].to_dataarray(), [np.nan, 1.1, 2.6, np.nan])
+        np.testing.assert_allclose(ns["domain_difference"].to_dataarray(), 0.1)
+        np.testing.assert_allclose(ns["distance_at"].to_dataarray(), [[5., 20.], [10., 30.]])
+        np.testing.assert_array_equal(ns["distance_at"].as_dataset().location, ["near", "far"])
+        np.testing.assert_allclose(ns["calendar_at"].to_dataarray(), [1.])
+
+
+def _check_events_and_statistics(number, ns):
+    """ID: DOC_TUTORIAL_TEACHING_002; event topology and explicit statistical populations."""
+    if number == 5:
+        assert ns["window_planning_tasks"] == []
+        empty = ns["empty_windows"]
+        assert empty.sizes[ns["empty_event_dim"]] == 0
+        assert empty.time.dims == empty.signal.dims == empty.valid.dims
+        assert empty.valid.dtype == np.dtype(bool)
+        packed = ns["packing_display"]
+        np.testing.assert_allclose(packed.time, [[.5, 1., 1.5, 4.5, 5., 5.5, np.nan, np.nan, np.nan]] * 2, equal_nan=True)
+        np.testing.assert_array_equal(packed.window_event_index, [[0, 0, 0, 2, 2, 2, -1, -1, -1]] * 2)
+        np.testing.assert_array_equal(packed.window_size, [6, 6])
+        np.testing.assert_array_equal(packed.valid, [[True] * 6 + [False] * 3] * 2)
+        assert packed.window_event_index.dtype == np.dtype("int64")
+        assert packed.valid.dtype == np.dtype(bool)
+        assert not ns["label_planning_tasks"]
+        assert "sample" not in ns["unindexed_lazy_mask"].xindexes
+        np.testing.assert_array_equal(ns["unindexed_lazy_mask"].compute(), ns["event_values"] > 2)
+        np.testing.assert_array_equal(ns["labeled_stack"].window_event_index, [[0, 0, 0, 1, 1, 1]] * 2)
+        np.testing.assert_allclose(ns["labeled_stack"].time, [[.5, 1., 1.5, 4.5, 5., 5.5]] * 2)
+        assert isinstance(ns["labeled_windows"].xindexes[ns["labeled_event_dim"]], xr.indexes.RangeIndex)
+        assert ns["condition_planning_tasks"] == []
+        np.testing.assert_array_equal(ns["lazy_mask_values"], [[True, True, True], [False, False, False]])
+        assert ns["lazy_reused_mask"].dims == ("run", "sample")
+        np.testing.assert_array_equal(ns["lazy_reused_mask"].coords["time"].compute(), [1., 2., 5.])
+        np.testing.assert_allclose(ns["initial_events_demo"].time, [1., 2.])
+        np.testing.assert_allclose(ns["irregular_stream"].as_dataset().time.isel(run=0), [.2, .7, 3., 4.])
+        np.testing.assert_allclose(ns["irregular_segments"].as_dataset().time.isel(run=0, sample=slice(0, 2)), [[.2, .7], [3., 4.]])
+        np.testing.assert_allclose(ns["axis_segments"]["sample"][:, :2], [[.2, .7], [3., 4.]])
+        np.testing.assert_allclose(ns["axis_stream"]["sample"][:4], [.2, .7, 3., 4.])
+        assert "sample" not in ns["axis_segments"].xindexes
+        np.testing.assert_array_equal(ns["axis_stream"].orig_index[4:], [-1] * 12)
+        assert np.isnan(ns["axis_stream"]["sample"][4:]).all()
+        entries = ns["episode_entries"].as_dataset()
+        np.testing.assert_allclose(entries.time, [[1., 5.], [np.nan, np.nan]])
+        np.testing.assert_allclose(entries.signal, [[3., 3.], [np.nan, np.nan]])
+        stream = ns["episode_stream"].as_dataset()
+        np.testing.assert_allclose(stream.signal, [[3., 4., 3., 4.], [np.nan] * 4])
+        np.testing.assert_array_equal(stream.stream_size, [4, 0])
+        np.testing.assert_array_equal(stream.orig_index.isel(run=0), [1, 2, 5, 6])
+        segments = ns["episode_segments"].as_dataset()
+        np.testing.assert_array_equal(segments.segment_size, [[2, 2], [0, 0]])
+        np.testing.assert_allclose(segments.signal.isel(run=0, sample=slice(0, 2)), [[3., 4.], [3., 4.]])
+        windows = ns["episode_windows"].as_dataset()
+        assert read_roles(windows)[1] == "tau"
+        assert ns["window_event_dim"] != "event"  # Inherited anchor coordinate cannot be replaced.
+        np.testing.assert_allclose(windows.event_time.isel(run=0), [1., 5.])
+        np.testing.assert_allclose(windows.signal.sel(run="episodes"), [[1.5, 3., 3.5]] * 2)
+        assert np.isnan(windows.signal.sel(run="none")).all()
+    if number == 6:
+        np.testing.assert_allclose(ns["per_trial_demo"].to_dataarray(), [2., 6.])
+        np.testing.assert_allclose(ns["equal_trial_demo"].to_dataarray(), 4.)
+        np.testing.assert_allclose(ns["pooled_demo"].to_dataarray(), 4.4)
+        np.testing.assert_allclose(ns["weighted_demo"].to_dataarray(), 3.)
+        sequence = ns["sequence_demo"].as_dataset()
+        np.testing.assert_allclose(sequence.signal, [1., 2., 3., 4.])
+        np.testing.assert_allclose(sequence.time, [0., 1., 2., 3.])
+        assert ns["batch_demo"].as_dataset().sizes == {"recording": 2, "sample": 2}
+        assert set(ns["merged_demo"].as_dataset().data_vars) == {"signal", "other"}
+        np.testing.assert_allclose(ns["padded_group_demo"].sum().to_dataarray(), 22.)
+        np.testing.assert_allclose(ns["padded_group_demo"].count().to_dataarray(), 5.)
+
+
+def _check_numeric_and_frame_examples(number, ns):
+    """ID: DOC_TUTORIAL_TEACHING_003; labeled kernels, representations, and frame meaning."""
+    if number == 7:
+        np.testing.assert_allclose(ns["assembled_demo"].to_dataarray().transpose("sample", "channel_axis"), [[1., 2.], [3., 4.]])
+        np.testing.assert_allclose(ns["xyz_demo"].to_dataarray().transpose("sample", "axis"), [[1., 0., 1.], [3., 0., 1.]])
+        np.testing.assert_allclose(ns["least_squares_demo"].to_dataarray(), [4/3, 7/3])
+        np.testing.assert_allclose(ns["fitted_rhs"].to_dataarray(), [4/3, 7/3, 11/3])
+    if number == 8:
+        np.testing.assert_allclose(ns["raw_recipe_pose"].as_matrix().to_dataarray(), ns["ship_pose"].as_matrix().to_dataarray())
+        np.testing.assert_allclose(ns["negative_turn"].as_matrix().to_dataarray(), ns["turn"].as_matrix().to_dataarray(), atol=1e-12)
+        result = ns["typed_query_demo"].as_dataset()
+        assert result.sizes == {"trial": 12, "sample": 4, "quat": 4}
+        np.testing.assert_array_equal(result["case"], ["first", "first", "second", "second"])
+        np.testing.assert_array_equal(result["when"], ["early", "late", "early", "late"])
+    if number == 9:
+        expected = np.column_stack((2 * ns["irregular_time"], np.full(5, 2.), np.zeros(5)))
+        np.testing.assert_allclose(ns["irregular_velocity"].to_dataarray(), expected, atol=1e-10)
+        t = ns["time"][35:46]
+        expected_smooth = np.mean(t**2 + 0.02 * np.sin(30*t))
+        np.testing.assert_allclose(ns["moving_average_demo"].to_dataarray().sel(axis="x").isel(sample=40), expected_smooth)
+    if number == 10:
+        assert ns["reverse_total"] == 5. and ns["identity_total"] == 0.
+        assert ns["tagged_value"].frames.ids() == ("ship", "camera")
+        assert ns["remapped_value"].frames.ids() == ("ship", "camera_renamed")
+    if number == 11:
+        np.testing.assert_allclose(ns["relative_demo"].to_dataarray(), [1., -1., 0.], atol=1e-12)
+        np.testing.assert_allclose(ns["basis_demo"].to_dataarray(), [1., -3., 0.], atol=1e-12)
+        assert ns["relative_demo"].frames.ids() == ("sensor", "target")
+        assert ns["basis_demo"].frames.ids() == ("lab", "target")
+        assert ns["detached_demo"].graph is None
+        assert ns["coverage_rejected"]
+
+
+def _check_execution_and_presentation(number, ns):
+    """ID: DOC_TUTORIAL_TEACHING_004; lazy planning and plotting validity."""
+    if number == 12:
+        assert ns["memory_tasks"] == []
+        assert ns["memory_plan"].to_dataarray(copy="shallow").chunks is not None
+        np.testing.assert_allclose(ns["computed_memory"].signal, 5.5)
+        assert ns["dataset_position"].graph is None
+        assert ns["reattached_position"].graph is ns["runtime_graph"]
+    if number == 13:
+        assert np.nanmax(ns["valid_plot"].data["signal"]) == 2.
+        assert np.nanmax(ns["storage_plot"].data["signal"]) == 99.
+
+
 @pytest.mark.parametrize("cwd", [ROOT, TUTORIAL], ids=["root", "tutorial"])
 @pytest.mark.parametrize("number", range(1, 15))
 def test_doc_tutorials_001_public_notebooks_execute(number, cwd, monkeypatch):
@@ -186,6 +354,10 @@ def test_doc_tutorials_001_public_notebooks_execute(number, cwd, monkeypatch):
     monkeypatch.chdir(cwd)
     namespace = _execute(number)
     _check_tabular(number, namespace)
+    _check_construction_and_selection(number, namespace)
+    _check_events_and_statistics(number, namespace)
+    _check_numeric_and_frame_examples(number, namespace)
+    _check_execution_and_presentation(number, namespace)
     if number == 8:
         _check_spatial_components_and_alignment(namespace)
     if number == 11:

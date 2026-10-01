@@ -95,6 +95,7 @@ def prepare_path_query_output_plan(
     plan = preflight_query_output_namespace(
         projected_source,
         None if retain_sequence_coords else query,
+        param_name=topology.param_name,
         sequence_dim=topology.sequence_dim,
         batch_dims=topology.batch_dims,
         owner=owner,

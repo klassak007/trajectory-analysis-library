@@ -26,17 +26,17 @@ _DUPLICATE_POLICIES = frozenset({"invalid", "left", "right", "raise"})
 
 @dataclass(frozen=True)
 class GeodeticOptions:
-    """Options controlling G1 geodetic CRS metadata and conversion policy.
+    """Options controlling geodetic CRS metadata and conversion policy.
 
     Parameters
     ----------
     datum : str, optional
         Allowed values: ``'WGS84'``.
-        Supported geodetic datum for G1.
+        Supported geodetic datum.
     crs : str, optional
-        Geographic 3D CRS. G1 supports ``"EPSG:4979"``.
+        Geographic 3D CRS. Supports ``"EPSG:4979"``.
     ecef_crs : str, optional
-        ECEF CRS. G1 supports ``"EPSG:4978"``.
+        ECEF CRS. Supports ``"EPSG:4978"``.
     angular_unit : str, optional
         Allowed values: ``'degree'``.
         Angular unit for latitude and longitude.

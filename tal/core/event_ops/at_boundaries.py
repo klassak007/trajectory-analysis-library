@@ -12,7 +12,7 @@ from ..param_ops.types import ParamEvalOptions
 from .boundary import extract_event_boundaries
 from .boundary_select import select_event_boundaries
 from .evaluate import evaluate_mask
-from .pack import pack_event_table
+from .pack import _assert_event_var_namespace_safe, pack_event_table
 from .resolve import EventEvalContext, resolve_event_eval_context
 from .types import AtBoundariesOptions, Condition, EventExtractOptions
 
@@ -104,9 +104,9 @@ def _attach_boundary_metadata(
     _metadata_namespace_safe(out_ds, owner=owner)
     ds = out_ds.assign_coords(
         {
-            "event_edge_code": mark_reserved_coord(table["edge_code"].astype("int8"), name="event_edge_code"),
-            "event_sample_index_before": mark_reserved_coord(table["sample_index_before"].astype("int64"), name="event_sample_index_before"),
-            "event_sample_index_after": mark_reserved_coord(table["sample_index_after"].astype("int64"), name="event_sample_index_after"),
+            "event_edge_code": mark_reserved_coord(table["edge_code"].astype("int8"), name="event_edge_code").variable,
+            "event_sample_index_before": mark_reserved_coord(table["sample_index_before"].astype("int64"), name="event_sample_index_before").variable,
+            "event_sample_index_after": mark_reserved_coord(table["sample_index_after"].astype("int64"), name="event_sample_index_after").variable,
         }
     )
     return finalize_like(out, ds, validate=validate, owner=owner)
@@ -145,6 +145,7 @@ def evaluate_at_boundaries_condition(
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
     context = resolve_event_eval_context(ao, opts=opts.eval, owner=owner)
+    _assert_event_var_namespace_safe(context, owner=owner)
     effective = evaluate_mask(condition, context=context, owner=owner)
     chunked = _chunked_boundary_inputs(effective, context=context)
     _preflight_boundary_extraction(chunked=chunked, opts=opts, owner=owner)

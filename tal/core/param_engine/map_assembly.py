@@ -10,13 +10,11 @@ from ..orchestration.indexing import (
     ResultCoordinateSnapshot,
     capture_result_coordinates,
     restore_result_coordinates,
-    without_index_topology,
 )
 from .blocking import (
     LogicalRowBlock,
     LogicalRowBlockPlan,
     assemble_logical_blocks,
-    without_logical_scalar_collisions,
 )
 from .map_failures import (
     attach_map_failure_dependency,
@@ -51,12 +49,9 @@ def _map_output_template(
     *,
     sequence_dim: str,
     query_dim: str,
-    logical_dims: tuple[str, ...],
 ) -> xr.DataArray:
-    inputs = tuple(
-        without_logical_scalar_collisions(without_index_topology(value, dims=logical_dims), logical_dims)
-        for value in (param, mask, query)
-    )
+    # This is a shape prototype; reviewed coordinates are restored by assembly.
+    inputs = tuple(xr.DataArray(value.variable) for value in (param, mask, query))
     sources = (_map_outer_source(inputs[0], sequence_dim=sequence_dim), _map_outer_source(inputs[1], sequence_dim=sequence_dim))
     template = xr.broadcast(*sources, inputs[2])[0]
     dims = [dim for dim in param.dims if dim != sequence_dim]
@@ -233,7 +228,6 @@ def assemble_empty_param_map(
         query,
         sequence_dim=sequence_dim,
         query_dim=query_dim,
-        logical_dims=output_plan.dims,
     )
     sources = (param, mask, query)
     snapshot = capture_result_coordinates(
@@ -297,7 +291,6 @@ def assemble_param_map_blocks(
         query,
         sequence_dim=sequence_dim,
         query_dim=query_dim,
-        logical_dims=plan.dims,
     )
     sources = (param, mask, query)
     snapshot = capture_result_coordinates(

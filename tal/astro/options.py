@@ -67,8 +67,8 @@ class AstroOptions:
     ----------
     backend : str, optional
         Allowed values: ``'astropy'``, ``'spice'``.
-        Requested astronomy backend. A1 records this option but does not
-        dispatch Sun calculations.
+        Requested astronomy backend. These options record the backend choice;
+        they do not dispatch Sun calculations.
     time : AstroTimeOptions | None, optional
         Observation-time interpretation options.
     iers : AstroIERSOptions | None, optional

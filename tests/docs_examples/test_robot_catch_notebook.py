@@ -112,6 +112,17 @@ def test_robot_catch_notebook_executes_and_matches_independent_reference(monkeyp
     _check_topology(namespace, snapshots)
     np.testing.assert_allclose(namespace["closest"].to_dataarray(copy="shallow"), expected_minima, atol=1e-10)
     controllers = namespace["catalog"]["controller"].to_numpy()
+    np.testing.assert_allclose(namespace["sphere_distance"].to_dataarray(), np.sqrt(0.0132))
+    for radius in namespace["radius_values"]:
+        for label in ("predictive", "reactive"):
+            expected = (expected_minima[controllers == label] < radius).mean()
+            np.testing.assert_allclose(namespace["radius_table"].loc[radius, label], expected)
+    assert namespace["capture_anchor_count"] == 6
+    for throw in range(1, 7):
+        for label in ("predictive", "reactive"):
+            trial = f"{label}_{throw:02d}"
+            index = list(namespace["catalog"].index).index(trial)
+            np.testing.assert_allclose(namespace["paired_closest"].loc[throw, label], expected_minima[index])
     for label, count in (("predictive", 5), ("reactive", 1)):
         selected = expected_minima[controllers == label]
         assert (selected < 0.08).sum() == count

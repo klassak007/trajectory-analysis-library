@@ -1,5 +1,6 @@
 """Public coordinate restoration guarantees from Contracts 009 and 012."""
 
+import itertools
 import warnings
 from contextlib import nullcontext
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import numpy as np
 import pytest
 import xarray as xr
+from dask.callbacks import Callback
 
 from tal.core import AnalysisObject
 
@@ -950,6 +952,8 @@ def test_query_axis_cannot_erase_generated_coordinate(
     """ID: PARAM_HARD_QUERY_OUTPUT_003_generated_axis_conflict_preflight."""
     source = _source(lazy=lazy)
     query = xr.DataArray(np.full((2, width), 0.5), dims=(name, "col"))
+    if name == "time":
+        query = query.assign_coords({name: [20, 21]})
     before = source.as_dataset(copy="none").copy(deep=True)
     tasks: list[object] = []
     with _task_counter(tasks, lazy=lazy), pytest.raises(
@@ -1336,3 +1340,434 @@ def test_zero_sample_point_selection_does_not_execute_source_graph() -> None:
     )
     result = source.param.sel([0.5]).as_dataset(copy="none")
     assert bool(result.compute(scheduler="synchronous")["value"].isnull().all())
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("validate", (False, True))
+@pytest.mark.parametrize("kind", ("numeric", "datetime"))
+@pytest.mark.parametrize("form", ("scalar", "numpy", "labeled", "grid", "repeated", "empty", "invalid"))
+def test_tut_002_nearest_selection_preserves_recorded_timestamp(lazy, validate, kind, form):
+    """TUT-002 / Contracts 012/125: selection gathers the clock; evaluation owns query time."""
+    source_time = np.array([0., 1., 3.])
+    requested = np.array([1.4])
+    indices = np.array([1])
+    if form == "repeated":
+        requested, indices = np.array([1.4, 1.4, 0.2]), np.array([1, 1, 0])
+    elif form == "empty":
+        requested, indices = np.array([], dtype=float), np.array([], dtype=int)
+    elif form == "invalid":
+        requested, indices = np.array([np.nan, 1.4, np.nan]), np.array([-1, 1, -1])
+    if kind == "datetime":
+        origin = np.datetime64("2026-01-01", "ns")
+        source_time = origin + (source_time * 1e9).astype("timedelta64[ns]")
+        requested = origin + (requested * 1e9).astype("timedelta64[ns]")
+    ds = xr.Dataset({"value": ("sample", [0., 10., 30.])},
+                    coords={"time": ("sample", source_time), "tag": ("sample", [4, 5, 6]), "length": 3})
+    ds["time"].attrs["units"] = "fixture convention"
+    source = AnalysisObject.from_data(ds.chunk({"sample": 2}) if lazy else ds,
+        sequence_dim="sample", param_coord="time", sequence_size_coord="length")
+    query = requested
+    if form == "scalar":
+        query = requested[0]
+    elif form == "labeled":
+        query = xr.DataArray(requested, dims="request", coords={"request": ["middle"], "note": ("request", [7])})
+    elif form == "grid":
+        query = xr.DataArray(requested.reshape(1, 1), dims=("row", "col"), coords={"row": ["a"], "col": ["b"]})
+    snapshot = source.as_dataset(copy="deep")
+    query_snapshot = query.copy(deep=True) if isinstance(query, xr.DataArray) else np.array(query, copy=True)
+    tasks = []
+    with _task_counter(tasks, lazy=lazy):
+        result = source.param.sel(query, validate=validate).as_dataset(copy="none")
+    assert tasks == []
+    actual = result.compute(scheduler="synchronous")
+    output_shape = () if form == "scalar" else (1, 1) if form == "grid" else (len(indices),)
+    expected_values = np.where(indices >= 0, np.array([0., 10., 30.])[indices.clip(min=0)], np.nan)
+    expected_time = source_time[indices.clip(min=0)].copy()
+    expected_time[indices < 0] = np.datetime64("NaT", "ns") if kind == "datetime" else np.nan
+    np.testing.assert_allclose(actual["value"], expected_values.reshape(output_shape))
+    if form == "scalar":
+        assert actual["value"].dims == ()
+        assert not {"time", "tag", "sample_index", "valid", "sample"}.intersection(actual.variables)
+        xr.testing.assert_identical(source.as_dataset(), snapshot)
+        return
+    if kind == "datetime":
+        np.testing.assert_array_equal(actual["time"], expected_time.reshape(output_shape))
+    else:
+        np.testing.assert_allclose(actual["time"], expected_time.reshape(output_shape))
+    np.testing.assert_array_equal(actual["sample_index"], indices.reshape(output_shape))
+    np.testing.assert_array_equal(actual["valid"], (indices >= 0).reshape(output_shape))
+    np.testing.assert_allclose(actual["tag"], np.where(indices >= 0, np.array([4., 5., 6.])[indices.clip(min=0)], np.nan).reshape(output_shape))
+    assert set(actual.data_vars) == {"value"}
+    assert actual["time"].attrs == snapshot["time"].attrs
+    assert actual["time"].dims == actual["value"].dims
+    if form == "grid":
+        for dim in query.dims:
+            assert actual.xindexes[dim].equals(query.xindexes[dim])
+    elif form == "labeled":
+        np.testing.assert_array_equal(actual["note"], [7])
+    if form not in ("empty", "invalid"):
+        evaluated = source.param.at(query, validate=validate).as_dataset().compute(scheduler="synchronous")
+        np.testing.assert_array_equal(evaluated["time"], np.asarray(query).reshape(evaluated["time"].shape))
+    xr.testing.assert_identical(source.as_dataset(), snapshot)
+    if isinstance(query, xr.DataArray):
+        xr.testing.assert_identical(query, query_snapshot)
+    else:
+        np.testing.assert_array_equal(query, query_snapshot)
+
+
+_TUT_AUDIT_CLOCK=np.array([0.,.2,.7,1.5,2.,3.,4.,5.])
+_TUT_AUDIT_VALUES=np.array([0.,3.,4.,0.,0.,3.,4.,0.])
+
+def _tut_audit_ao(ds,*,batch=(),sequence='sample',param='time',lazy=False):
+    if lazy: ds=ds.chunk({sequence:2})
+    return AnalysisObject.from_data(ds,sequence_dim=sequence,batch_dims=batch,param_coord=param)
+
+@pytest.mark.parametrize('lazy',[False,True])
+@pytest.mark.parametrize('validate',[False,True])
+@pytest.mark.parametrize('datetime',[False,True])
+@pytest.mark.parametrize('form',['list','labeled','grid','invalid'])
+def test_tut_004_axis_parameter_selection(lazy,validate,datetime,form):
+    times=_TUT_AUDIT_CLOCK if not datetime else np.datetime64('2025-01-01','ns')+(_TUT_AUDIT_CLOCK*1e9).astype('timedelta64[ns]')
+    ds=xr.Dataset({'value':('sample',_TUT_AUDIT_VALUES)},coords={'sample':times})
+    ao=_tut_audit_ao(ds,param='sample',lazy=lazy)
+    snapshot=ao.as_dataset(copy='deep')
+    query=times[[1,5]]+(np.timedelta64(50000000,'ns') if datetime else .05)
+    query=list(query) if form=='list' else xr.DataArray(query,dims='request') if form=='labeled' else xr.DataArray(query[None,:],dims=('r','c')) if form=='grid' else [np.datetime64('NaT','ns') if datetime else np.nan]
+    tasks=[]
+    with Callback(pretask=lambda key,*_:tasks.append(key)):result=ao.param.sel(query,validate=validate)
+    assert tasks==[]
+    actual=result.as_dataset().compute()
+    expected=times[[1,5]][None,:] if form=='grid' else times[[1,5]] if form!='invalid' else np.array([np.datetime64('NaT','ns') if datetime else np.nan])
+    np.testing.assert_equal(actual['sample'],expected)
+    xr.testing.assert_identical(ao.as_dataset(),snapshot)
+
+
+
+@pytest.mark.parametrize("axis", [False, True])
+@pytest.mark.parametrize("lazy_part", ["payload", "clock", "query", "all"])
+@pytest.mark.parametrize("operation", ["at", "sel", "resample_to"])
+@pytest.mark.parametrize("validate", [False, True])
+def test_tut_004_lazy_generated_parameter_topology(axis, lazy_part, operation, validate):
+    """TUT-004: generated clocks stay lazy and axis parameters deliberately have no index."""
+    import dask.array as da
+
+    parameter = "sample" if axis else "time"
+    clock = da.from_array([0., 1., 3.], chunks=2) if lazy_part in ("clock", "all") else np.array([0., 1., 3.])
+    payload = da.from_array([0., 10., 30.], chunks=2) if lazy_part in ("payload", "all") else np.array([0., 10., 30.])
+    coords = xr.Coordinates({parameter: xr.Variable("sample", clock)}, indexes={})
+    source = AnalysisObject.from_data(xr.Dataset({"value": ("sample", payload)}, coords=coords),
+                                     sequence_dim="sample", param_coord=parameter)
+    query_data = da.from_array([.25, 2.5], chunks=1) if lazy_part in ("query", "all") else np.array([.25, 2.5])
+    query = xr.DataArray(query_data, dims="request", coords={"note": ("request", [7, 8])})
+    snapshot, query_snapshot = source.as_dataset(copy="deep"), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = getattr(source.param, operation)(query, validate=validate)
+    assert tasks == []
+    actual = result.as_dataset().compute(scheduler="synchronous")
+    expected = [0., 3.] if operation == "sel" else [.25, 2.5]
+    np.testing.assert_allclose(actual[parameter], expected)
+    np.testing.assert_allclose(actual.value, np.array(expected) * 10.)
+    assert set(actual.data_vars) == {"value"}
+    assert actual[parameter].dims == ("sample",)
+    if axis:
+        assert "sample" not in result.as_dataset().xindexes
+    np.testing.assert_array_equal(actual.note, [7, 8])
+    if lazy_part in ("query", "all") and operation != "sel":
+        assert result.as_dataset()[parameter].chunks is not None
+    subsequent = result.param.sel([2.5]).as_dataset().compute(scheduler="synchronous")
+    np.testing.assert_allclose(subsequent.value, [30. if operation == "sel" else 25.])
+    xr.testing.assert_identical(source.as_dataset(), snapshot)
+    xr.testing.assert_identical(query, query_snapshot)
+
+
+@pytest.mark.parametrize("kind", ["numeric", "datetime"])
+@pytest.mark.parametrize("form", ["scalar", "empty", "repeated", "batched"])
+def test_tut_004_axis_selection_shape_controls(kind, form):
+    """TUT-004: scalar collapse and empty, repeated, batched queries retain their public semantics."""
+    clock = np.array([0., 1., 3.])
+    query_values = np.array([1.25, 1.25])
+    if kind == "datetime":
+        origin = np.datetime64("2026-01-01", "ns")
+        clock = origin + (clock * 1e9).astype("timedelta64[ns]")
+        query_values = origin + (query_values * 1e9).astype("timedelta64[ns]")
+    ds = xr.Dataset({"value": (("trial", "sample"), [[0., 10., 30.], [0., 10., 30.]])},
+                    coords={"trial": ["a", "b"], "sample": clock})
+    source = AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=("trial",), param_coord="sample")
+    query = query_values[0] if form == "scalar" else query_values[:0] if form == "empty" else query_values
+    if form == "batched":
+        query = xr.DataArray(query_values[:, None], dims=("trial", "request"), coords={"trial": ["a", "b"]})
+    actual = source.param.sel(query).as_dataset()
+    if form == "scalar":
+        assert "sample" not in actual.dims and "sample" not in actual.variables
+        np.testing.assert_allclose(actual.value, [10., 10.])
+    else:
+        width = 0 if form == "empty" else 1 if form == "batched" else 2
+        np.testing.assert_array_equal(actual["sample"], np.broadcast_to(clock[1], (2, width) if form == "batched" else (width,)))
+        assert "sample" not in actual.xindexes and actual.value.dims == ("trial", "sample")
+
+
+@pytest.mark.parametrize("operation", ["at", "sel", "resample_to"])
+@pytest.mark.parametrize("lazy,validate,form", [(False, True, "ordinary"), (True, False, "ordinary"),
+    (True, True, "repeated"), (False, False, "empty"), (True, True, "invalid")])
+@pytest.mark.parametrize("kind", ["numeric", "datetime"])
+def test_tut_011_consumed_per_batch_axis_query_lane(operation, lazy, validate, form, kind):
+    """TUT-011: source clock rank does not change ownership of a consumed query lane."""
+    clock = np.array([[0., 1., 3.], [0., 2., 4.]])
+    query_values = np.array([[1.2, 2.5], [1.2, 2.5]])
+    positions = np.array([[1, 2], [1, 1]])
+    if form == "repeated":
+        query_values[:, 1] = query_values[:, 0]
+        positions[:, 1] = positions[:, 0]
+    if form == "empty":
+        query_values, positions = query_values[:, :0], positions[:, :0]
+    if form == "invalid":
+        query_values[:, 1] = np.nan
+    if kind == "datetime":
+        origin = np.datetime64("2026-01-01", "ns")
+        clock = origin + (clock * 1e9).astype("timedelta64[ns]")
+        query_values = origin + (np.nan_to_num(query_values) * 1e9).astype("timedelta64[ns]")
+        if form == "invalid":
+            query_values[:, 1] = np.datetime64("NaT", "ns")
+    coordinates = xr.Coordinates({"trial": xr.Variable("trial", [10, 20]),
+                                  "sample": xr.Variable(("trial", "sample"), clock)}, indexes={})
+    ds = xr.Dataset({"value": (("trial", "sample"), [[0., 10., 30.], [0., 20., 40.]])}, coords=coordinates).set_xindex("trial")
+    if lazy:
+        ds = ds.chunk({"sample": 2})
+    source = AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=("trial",), core_dims=(), param_coord="sample")
+    query = xr.DataArray(query_values, dims=("trial", "sample"), coords={"trial": [10, 20]})
+    if lazy:
+        query = query.chunk({"sample": 1})
+    before, query_before = source.as_dataset(copy="deep"), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = getattr(source.param, operation)(query, validate=validate).as_dataset()
+    assert not tasks and "sample" not in result.xindexes
+    actual = result.compute(scheduler="synchronous")
+    expected = np.take_along_axis(clock, positions, axis=1).copy() if operation == "sel" else query_values.copy()
+    if form == "invalid" and operation == "sel":
+        expected[:, 1] = np.datetime64("NaT", "ns") if kind == "datetime" else np.nan
+    np.testing.assert_equal(actual["sample"], expected)
+    assert actual["sample"].dims == ("trial", "sample") and set(actual.data_vars) == {"value"}
+    assert actual.attrs["tal"]["core"]["roles"]["sequence_dim"] == "sample"
+    assert actual.xindexes["trial"].equals(before.xindexes["trial"])
+    np.testing.assert_array_equal(actual.valid, np.isfinite(query_values))
+    if kind == "numeric":
+        np.testing.assert_allclose(actual.value, expected * 10., equal_nan=True)
+    xr.testing.assert_identical(source.as_dataset(), before)
+    xr.testing.assert_identical(query, query_before)
+
+
+@pytest.mark.parametrize("operation", ["at", "sel", "resample_to"])
+@pytest.mark.parametrize("lazy,validate,width", [(False, True, 2), (True, False, 2), (True, True, 0)])
+@pytest.mark.parametrize("kind", ["numeric", "datetime"])
+def test_tut_012_unindexed_grid_retains_generated_axis_clock(operation, lazy, validate, width, kind):
+    """TUT-012: a restored dimension name does not erase its generated N-D parameter."""
+    clock = np.array([0., 1., 3.])
+    values = np.array([[1.2, 2.5]])[:, :width]
+    selected = np.array([[1., 3.]])[:, :width]
+    if kind == "datetime":
+        origin = np.datetime64("2026-01-01", "ns")
+        clock = origin + (clock * 1e9).astype("timedelta64[ns]")
+        values = origin + (values * 1e9).astype("timedelta64[ns]")
+        selected = origin + (selected * 1e9).astype("timedelta64[ns]")
+    source = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [0., 10., 30.])}, coords={"sample": clock}),
+                                     sequence_dim="sample", core_dims=(), param_coord="sample")
+    if lazy:
+        source = AnalysisObject(source.as_dataset().chunk({"sample": 2}))
+    query = xr.DataArray(values, dims=("sample", "column"), coords={"column": np.arange(width) + 20,
+                         "note": ("sample", [7])})
+    if lazy:
+        query = query.chunk({"sample": 1, "column": max(width, 1)})
+    snapshot, query_snapshot = source.as_dataset(copy="deep"), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = getattr(source.param, operation)(query, validate=validate).as_dataset()
+    assert not tasks and "sample" not in result.xindexes
+    actual = result.compute(scheduler="synchronous")
+    np.testing.assert_equal(actual["sample"], selected if operation == "sel" else values)
+    assert actual["sample"].dims == ("sample", "column")
+    assert actual.value.dims == ("sample", "column") and set(actual.data_vars) == {"value"}
+    assert actual.attrs["tal"]["core"]["roles"]["sequence_dim"] == "sample"
+    assert actual.attrs["tal"]["core"].get("param_coord") is None
+    assert actual.xindexes["column"].equals(query.xindexes["column"])
+    np.testing.assert_equal(actual.note, [7])
+    np.testing.assert_equal(actual.valid, np.ones((1, width), dtype=bool))
+    if kind == "numeric":
+        np.testing.assert_allclose(actual.value, (selected if operation == "sel" else values) * 10.)
+    xr.testing.assert_identical(source.as_dataset(), snapshot)
+    xr.testing.assert_identical(query, query_snapshot)
+
+
+@pytest.mark.parametrize("operation", ["at", "sel", "resample_to"])
+@pytest.mark.parametrize("lazy,width", [(False, 2), (True, 2), (True, 0)])
+def test_tut_012_indexed_grid_name_conflict_is_rejected_before_mapping(operation, lazy, width):
+    """TUT-012: incompatible native caller axes must fail before numerical execution."""
+    source = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [0., 10., 30.])}, coords={"sample": [0., 1., 3.]}),
+                                     sequence_dim="sample", core_dims=(), param_coord="sample")
+    query = xr.DataArray(np.full((1, width), 1.2), dims=("sample", "column"), coords={"sample": [20]})
+    if lazy:
+        source, query = AnalysisObject(source.as_dataset().chunk({"sample": 2})), query.chunk({"column": max(width, 1)})
+    snapshot, original = source.as_dataset(copy="deep"), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)), pytest.raises(
+            ValueError, match="^param .*: query axis or index 'sample' conflicts with generated.*rename"):
+        getattr(source.param, operation)(query, validate=False)
+    assert not tasks
+    xr.testing.assert_identical(source.as_dataset(), snapshot)
+    xr.testing.assert_identical(query, original)
+
+
+GRID_CASES = [
+    (op, axis, lazy, kind, width, shared)
+    for op in ["at", "sel", "resample_to"]
+    for axis, lazy, kind, width, shared in [
+        (False, False, "numeric", 2, True),
+        (False, True, "numeric", 0, True),
+        (False, True, "datetime", 2, True),
+        (False, True, "numeric", 2, False),
+        (True, False, "numeric", 2, True),
+        (True, True, "datetime", 0, False),
+    ]
+]
+
+
+@pytest.mark.parametrize("validate", [False, True])
+@pytest.mark.parametrize("operation,axis,lazy,kind,width,shared", GRID_CASES)
+def test_tut_015_generated_parameter_named_grid(
+    tutorial_audit_source, operation, axis, lazy, kind, width, shared, validate
+):
+    """TUT-015: public ownership regression and controls."""
+    a = tutorial_audit_source(
+        clock_values=[0.0, 1.0, 3.0, 5.0, 8.0, 10.0],
+        axis=axis,
+        lazy=lazy,
+        kind=kind,
+        batch=(2,),
+        shared=shared,
+    )
+    name = "sample" if axis else "clock"
+    values = np.array([[1.2, 4.0], [8.0, 9.0]])[:, :width]
+    query_values = (
+        values
+        if kind == "numeric"
+        else np.datetime64("2026-01-01", "ns")
+        + (values * 1e9).astype("timedelta64[ns]")
+    )
+    q = xr.DataArray(
+        query_values,
+        dims=(name, "column"),
+        coords={"caller_only": ((name, "column"), np.zeros(values.shape))},
+    )
+    if lazy:
+        q = q.chunk({name: 1, "column": 1})
+    before = a.as_dataset(copy="deep")
+    original = q.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        out = getattr(a.param, operation)(q, validate=validate).as_dataset(copy="none")
+    assert not tasks
+    expected = query_values
+    if operation == "sel":
+        selected = np.array([[1.0, 3.0], [8.0, 8.0]])[:, :width]
+        expected = (
+            selected
+            if kind == "numeric"
+            else np.datetime64("2026-01-01", "ns")
+            + (selected * 1e9).astype("timedelta64[ns]")
+        )
+    actual = out.compute(scheduler="synchronous")
+    assert actual[name].dims == (
+        ("b0", name, "column")
+        if not shared and operation == "sel"
+        else (name, "column")
+    )
+    np.testing.assert_array_equal(
+        actual[name], np.broadcast_to(expected, actual[name].shape)
+    )
+    assert name not in out.xindexes
+    assert set(out.data_vars) == {"value"}
+    assert "caller_only" in out.coords
+    xr.testing.assert_identical(a.as_dataset(), before)
+    xr.testing.assert_identical(q, original)
+
+
+@pytest.mark.parametrize(
+    "operation,lazy",
+    list(itertools.product(["at", "sel", "resample_to"], [False, True])),
+)
+def test_tut_015_auxiliary_parameter_index_claim_remains_rejected(
+    tutorial_audit_source, operation, lazy
+):
+    """TUT-015: public ownership regression and controls."""
+    a = tutorial_audit_source(clock_values=[0.0, 1.0, 3.0, 5.0, 8.0, 10.0], lazy=lazy)
+    q = xr.DataArray([[1.0, 8.0]], dims=("clock", "column"), coords={"clock": [20]})
+    if lazy:
+        q = q.chunk(column=1)
+    tasks = []
+    with (
+        Callback(pretask=lambda key, *_: tasks.append(key)),
+        pytest.raises(
+            ValueError,
+            match="^param .*: query axis or index.*conflicts with generated.*rename",
+        ),
+    ):
+        getattr(a.param, operation)(q, validate=False)
+    assert not tasks
+
+
+@pytest.mark.parametrize("operation", ["at", "sel", "resample_to"])
+@pytest.mark.parametrize("validate", [False, True])
+def test_tut_015_explicit_parameter_override_owns_grid(
+    tutorial_audit_source, operation, validate
+):
+    """TUT-015: the explicit active declaration owns the generated-name exemption."""
+    source = tutorial_audit_source(lazy=True, batch=())
+    ds = source.as_dataset().assign_coords(
+        xr.Coordinates(
+            {"alternate": source.as_dataset().clock.variable + 0.25}, indexes={}
+        )
+    )
+    source = AnalysisObject.from_data(ds.drop_attrs(), sequence_dim="sample")
+    query = xr.DataArray([[0.4, 2.0]], dims=("alternate", "column")).chunk(column=1)
+    before, original = source.as_dataset(copy="deep"), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = getattr(source.param, operation)(
+            query, on="alternate", validate=validate
+        ).as_dataset()
+    assert not tasks
+    assert (
+        result.alternate.dims == ("alternate", "column")
+        and "alternate" not in result.xindexes
+    )
+    expected = (
+        np.array([[0.25, 1.25]]) if operation == "sel" else np.array([[0.4, 2.0]])
+    )
+    np.testing.assert_allclose(
+        result.alternate.compute(scheduler="synchronous"), expected
+    )
+    assert set(result.data_vars) == {"value"}
+    xr.testing.assert_identical(source.as_dataset(), before)
+    xr.testing.assert_identical(query, original)
+
+
+@pytest.mark.parametrize('operation', ['at', 'sel', 'resample_to'])
+@pytest.mark.parametrize('shape', [(2,), (1,2), (1,0)])
+def test_tut_017_parameter_templates_preserve_lazy_batch_labels(tutorial_audit_source, operation, shape):
+    """TUT-017 adjacent owner: prototypes cannot materialize unindexed batch labels."""
+    source = tutorial_audit_source(lazy=True, batch=(2,), clock_values=[0.,1.,3.,5.,8.,10.])
+    ds = source.as_dataset().drop_indexes('b0')
+    ds = ds.assign_coords(xr.Coordinates({'b0': ds.b0.chunk(b0=1).variable}, indexes={}))
+    source = AnalysisObject.from_data(ds, sequence_dim='sample', batch_dims=('b0',), param_coord='clock')
+    query = xr.DataArray(np.array([1.2,4.])[:int(np.prod(shape))].reshape(shape), dims=tuple(f'q{i}' for i in range(len(shape)))).chunk()
+    before, original = source.as_dataset(copy='deep'), query.copy(deep=True)
+    tasks=[]
+    with Callback(pretask=lambda key,*_:tasks.append(key)):
+        result = getattr(source.param,operation)(query,validate=False).as_dataset()
+    assert not tasks and 'b0' not in result.xindexes
+    np.testing.assert_array_equal(result.b0.compute(scheduler='synchronous'), [0,1])
+    expected_clock = np.array([1.,3.]) if operation == 'sel' else np.array([1.2,4.])
+    np.testing.assert_allclose(result.clock.compute(scheduler='synchronous'), expected_clock[:int(np.prod(shape))].reshape(shape))
+    xr.testing.assert_identical(source.as_dataset(),before)
+    xr.testing.assert_identical(query,original)

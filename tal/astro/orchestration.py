@@ -94,7 +94,7 @@ def _fail_if_raw_lazy_time(value: object, *, owner: str) -> None:
     if not has_chunks and graph is None:
         return
     raise ValueError(
-        f"{owner}: raw lazy time arrays are not supported in astro A1; "
+        f"{owner}: raw lazy time arrays are not supported; "
         "wrap eager datetime data in xr.DataArray or materialize explicitly."
     )
 
@@ -123,7 +123,7 @@ def _time_from_array(value: object, *, owner: str) -> xr.DataArray:
 
 def _require_time_array(coord: xr.DataArray, *, owner: str, allow_numeric: bool = False) -> xr.DataArray:
     if is_chunked_dataarray(coord) and not np.issubdtype(np.dtype(coord.dtype), np.datetime64):
-        raise ValueError(f"{owner}: chunked non-datetime time inputs are not supported in astro A1.")
+        raise ValueError(f"{owner}: chunked non-datetime time inputs are not supported.")
     if np.issubdtype(np.dtype(coord.dtype), np.datetime64):
         return coord
     if allow_numeric and np.issubdtype(np.dtype(coord.dtype), np.number):
@@ -179,7 +179,7 @@ def resolve_time_context(
         raw = _time_from_array(time, owner=owner)
         allow_numeric = False
     else:
-        raise ValueError(f"{owner}: observation time is required in astro A1.")
+        raise ValueError(f"{owner}: observation time is required.")
     coord = _require_time_array(raw, owner=owner, allow_numeric=allow_numeric)
     sequence_dim, batch_dims = _resolve_time_topology(coord, observer, owner=owner)
     return AstroTimeContext(coord=coord, sequence_dim=sequence_dim, batch_dims=batch_dims, scale=time_opts.scale)

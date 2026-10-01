@@ -7,7 +7,6 @@ from ..orchestration.indexing import (
     capture_result_coordinates,
     restore_result_coordinates,
     sequence_dependent_coordinate_names,
-    without_index_topology,
 )
 from ..orchestration.lazy import payload_chunks_for_dim
 from ..schema_validate.finalize import transfer_dataarray_metadata
@@ -121,11 +120,11 @@ def _gather_output_template(
     *,
     sequence_dim: str,
     query_dim: str,
-    logical_dims: tuple[str, ...],
     dtype: np.dtype,
 ) -> xr.DataArray:
-    unindexed_values = without_index_topology(values, dims=logical_dims)
-    unindexed_indexer = without_index_topology(indexer, dims=logical_dims)
+    # Shape-only broadcasting must not construct indexes from lazy labels.
+    unindexed_values = xr.DataArray(values.variable)
+    unindexed_indexer = xr.DataArray(indexer.variable)
     source = unindexed_values.isel({sequence_dim: 0}, drop=True)
     template = xr.broadcast(source, unindexed_indexer)[0]
     outer = [dim for dim in values.dims if dim != sequence_dim]
@@ -214,7 +213,6 @@ def _gather_nonempty(
         indexer,
         sequence_dim=sequence_dim,
         query_dim=query_dim,
-        logical_dims=plan.dims,
         dtype=np.dtype(values.dtype),
     )
     return assemble_logical_blocks(
@@ -381,7 +379,6 @@ def _apply_param_map_blocks(
         param_map.i0,
         sequence_dim=sequence_dim,
         query_dim=query_dim,
-        logical_dims=plan.dims,
         dtype=_mapped_output_dtype(values),
     )
     operands = (values, param_map.i0, param_map.i1, param_map.alpha, param_map.valid)

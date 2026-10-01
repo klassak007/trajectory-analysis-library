@@ -79,6 +79,18 @@ def assign_sampled_query_coordinate(
     return value.assign_coords({name: coordinate})
 
 
+def _attach_trajectory_parameter(
+    ds: xr.Dataset, query: xr.DataArray, *, context: ParamRuntimeContext,
+) -> xr.Dataset:
+    name = context.spec.name
+    if name != context.sequence_dim:
+        return ds.assign_coords({name: query})
+    # This axis has been consumed. An automatic index would compute a lazy
+    # generated parameter merely to construct labels.
+    projected = without_index_topology(ds, dims=(context.sequence_dim,))
+    return projected.assign_coords(xr.Coordinates({name: query.variable}, indexes={}))
+
+
 def _finalize_trajectory_coordinates(
     context: ParamRuntimeContext,
     ds: xr.Dataset,
@@ -105,7 +117,7 @@ def _finalize_trajectory_coordinates(
             sequence_dim=context.sequence_dim,
             sequence_size=int(ds_out.sizes.get(context.sequence_dim, 0)),
         )
-        ds_out = ds_out.assign_coords({context.spec.name: q})
+        ds_out = _attach_trajectory_parameter(ds_out, q, context=context)
     if valid_query is not None and context.sequence_size_coord:
         v = _rename_query_dim(valid_query, query_dim=query_dim, sequence_dim=context.sequence_dim)
         ds_out, _ = assign_sequence_size_from_valid_mask(

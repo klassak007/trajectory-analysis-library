@@ -1,8 +1,10 @@
 # TAL tutorials
 
-These notebooks use short, visible TAL workflows to answer practical questions.
-Run each notebook independently, from top to bottom. Notebooks 01–14 use deterministic
-simulated flight telemetry; 15 is the unchanged robot-catching alternative.
+These notebooks teach TAL through small worked comparisons, visible output topology,
+and plots, then apply the concepts to deterministic simulated logs. Every variation
+is fully worked out; there are no user exercises. Run each notebook independently,
+from top to bottom. Notebook 01 gives a quick result; 02–13 teach specific topics;
+14–15 combine them into investigations.
 
 ## Launch this checkout
 
@@ -41,26 +43,32 @@ are existing core dependencies; no ROS, geo, or astro installation is needed.
 
 ## Learning path
 
-| Notebook | Practical question |
+| Notebook | Topics |
 | --- | --- |
-| [01 Quickstart](01_quickstart_trajectory_workflow.ipynb) | Which flights got close to the deck? |
-| [02 Construction](02_construction_and_semantics.ipynb) | What do fields, roles, validity, and ownership declare? |
-| [03 Selection](03_indexing_and_selection.ipynb) | Do I need positions, labels, recorded samples, or interpolation? |
-| [04 Synchronization](04_timebase_resample_synchronize.ipynb) | Do asynchronously sampled sensors agree? |
-| [05 Events](05_conditions_events_and_windows.ipynb) | When did each approach get low? |
-| [06 Grouping](06_groupby_concat_and_ragged.ipynb) | How do flight scenarios compare? |
-| [07 Linear algebra](07_linalg_array_matrix_vector.ipynb) | How do I calibrate labeled sensor channels? |
-| [08 Spatial objects](08_spatial_position_rotation_pose.ipynb) | How do fields become positions, orientations, and Poses? |
-| [09 Kinematics](09_kinematics_velocity_acceleration.ipynb) | Can I recover known motion by differentiating and integrating? |
-| [10 Topology](10_frames_and_topology.ipynb) | Which frame path connects two sensors? |
-| [11 Frame analysis](11_framegraph_and_spatial_types.ipynb) | Am I changing a relation or just its coordinate basis? |
-| [12 Lazy persistence](12_lazy_data_and_persistence.ipynb) | When is data read, computed, persisted, and closed? |
-| [13 Visualization](13_visualization_holoviews_explorer.ipynb) | Which view answers my question without overplotting? |
-| [14 Landing](14_capstone_autonomous_landing.ipynb) | Would a wider landing corridor recover the observed misses? |
-| [15 Robot catch](15_capstone_robot_catch.ipynb) | Why did the robot miss? |
+| [01 Quickstart](01_quickstart_trajectory_workflow.ipynb) | Loading, inspecting, selecting, reducing, and evaluating trajectories |
+| [02 Construction](02_construction_and_semantics.ipynb) | Roles, parameters, validity, layout specifications, and ownership |
+| [03 Selection and arithmetic](03_indexing_and_selection.ipynb) | Positions, labels, per-run axis/auxiliary queries, unindexed N-D grids, lazy typed labels, masks, alignment, and broadcasting |
+| [04 Parameter operations](04_timebase_resample_synchronize.ipynb) | Evaluation, resampling, synchronization, active domains, and datetime queries |
+| [05 Conditions and events](05_conditions_events_and_windows.ipynb) | Conditions, lazy AO reuse, boundaries, intervals, packed clocks, selected layouts, native anchors, empty windows, and invalid-anchor packing |
+| [06 Ragged statistics](06_groupby_concat_and_ragged.ipynb) | Reductions, populations, grouping, bins, weights, concatenation, and merge |
+| [07 Linear algebra](07_linalg_array_matrix_vector.ipynb) | Labeled arrays, vectors, matrices, core assembly, contraction, and systems |
+| [08 Spatial types](08_spatial_position_rotation_pose.ipynb) | Field recipes, representations, components, transform algebra, and interpolation |
+| [09 Kinematics](09_kinematics_velocity_acceleration.ipynb) | Differentiation, irregular sampling, smoothing, integration, and combined motion |
+| [10 Frame graphs](10_frames_and_topology.ipynb) | Topology, frame metadata, oriented paths, folds, snapshots, and remaps |
+| [11 Frame-aware operations](11_framegraph_and_spatial_types.ipynb) | Association, registration, relation/basis changes, providers, and kinematic support |
+| [12 Lazy execution and storage](12_lazy_data_and_persistence.ipynb) | Planning, compute/persist, Zarr, CSV, graph context, and resource lifetime |
+| [13 Visualization](13_visualization_holoviews_explorer.ipynb) | Coordinates, validity, overlays, selectors, grouping, components, and exploration |
+| [14 Landing capstone](14_capstone_autonomous_landing.ipynb) | Moving frames, sampled crossings, corridor geometry, and width/length sensitivity |
+| [15 Robot-catching capstone](15_capstone_robot_catch.ipynb) | Relative distance, paired/grouped outcomes, anchor populations, and radius sensitivity |
 
-Start with 01–04; use 05–13 as focused references. The landing investigation combines
-these concepts. The robot-catching notebook remains a shorter contrasting capstone.
+Start with 01–04; use 05–13 as focused references. Each notebook states its topics,
+learning outcomes, and prerequisites. Sections explain the distinctions first, make
+their numerical and coordinate consequences visible, then show the decisions they
+inform. Spatial field recipes are concentrated in 08; generic graph topology in 10
+is separate from spatial providers and physical support in 11.
+
+The two capstones use different geometry and comparison populations. Their plots and
+worked sensitivities interpret results produced through visible TAL operations.
 
 ## Data and interpretation
 
@@ -76,4 +84,3 @@ The capstone's threshold crossing is sampled geometry, not contact dynamics.
 
 Saved outputs show the default analysis. Widget callbacks may need a live notebook
 kernel. Zarr output uses temporary directories and is removed before notebook 12 ends.
-See [verification and known library findings](REVIEW.md) for current limitations.

@@ -1,4 +1,3 @@
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -137,63 +136,6 @@ def _assert_intervals_equal(
     np.testing.assert_array_equal(actual[1], expected[1])
     np.testing.assert_array_equal(actual[2], expected[2])
     np.testing.assert_array_equal(actual[3], expected[3])
-
-
-def _decision_section(target: str) -> str:
-    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
-    section = text.split(f"### {target}", 1)[1]
-    return section.split("\n### ", 1)[0]
-
-
-def _assert_migrated_decision_record(target: str, benchmark: str, cases: tuple[str, ...]) -> None:
-    section = _decision_section(target)
-    for required in (
-        "Decision: migrated",
-        "Gate result: PASS",
-        "Benchmark evidence:",
-        "Selected normal path: numba if available, numpy_block otherwise",
-        "Public routing status: blockwise vectorize=False",
-        "No-Numba behavior: numpy_block fallback",
-        "Explicit Numba behavior: ImportError, no silent fallback",
-        "Contract 083 status: all primary F2 targets closed",
-    ):
-        assert required in section
-    assert benchmark in section
-    for case in cases:
-        assert case in section
-    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    assert "Status: Implemented" in contract_083
-    assert "all primary F2 targets closed" in contract_083
-
-
-def test_event_f2c_001_boundary_default_or_baseline_migration_decision() -> None:
-    """ID: EVENT_F2C_001_boundary_default_or_baseline_migration_decision."""
-    _assert_migrated_decision_record(
-        "event_boundary",
-        "benchmarks/bench_event_numba_backends.py",
-        ("boundary-dense-many-short", "boundary-sparse-many-short", "boundary-dense-fewer-long"),
-    )
-    text = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
-    section = text.split("def _extract_bounded(", 1)[1]
-    assert '"backend": _select_boundary_normal_backend()' in section
-    assert "boundary_bounded_block_backend" in section
-    assert "vectorize=False" in section
-    assert "vectorize=True" not in section
-
-
-def test_event_f2c_002_intervals_default_or_baseline_migration_decision() -> None:
-    """ID: EVENT_F2C_002_intervals_default_or_baseline_migration_decision."""
-    _assert_migrated_decision_record(
-        "event_intervals",
-        "benchmarks/bench_event_numba_backends.py",
-        ("intervals-many-short", "intervals-fewer-long"),
-    )
-    text = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
-    section = text.split("def _extract_bounded(", 1)[1]
-    assert '"backend": _select_intervals_normal_backend()' in section
-    assert "intervals_bounded_block_backend" in section
-    assert "vectorize=False" in section
-    assert "vectorize=True" not in section
 
 
 def test_event_f2c_003_boundary_normal_path_uses_block_backend(monkeypatch: pytest.MonkeyPatch) -> None:

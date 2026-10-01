@@ -89,8 +89,8 @@ def _allowed_keys(block: Mapping[str, Any], *, owner: str) -> set[str]:
     if kind != _CARTESIAN_KIND:
         if kind == "ecef_position":
             raise ValueError(
-                f"{owner}: tal.ext.geo.kind='ecef_position' was superseded by "
-                "'cartesian_geo_position' in Geo G2."
+                f"{owner}: tal.ext.geo.kind='ecef_position' is unsupported; use "
+                "'cartesian_geo_position'."
             )
         raise ValueError(f"{owner}: unsupported tal.ext.geo.kind {kind!r}.")
     system = block.get("cartesian_system")

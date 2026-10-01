@@ -217,10 +217,10 @@ def test_geo_from_ecef_opts_none_preserves_inferred_custom_frame(monkeypatch: py
     np.testing.assert_allclose(roundtrip.as_dataset(copy="none")["position"], lla.as_dataset(copy="none")["position"])
 
 
-def test_geo_from_ecef_rejects_superseded_ecef_position_metadata_with_explicit_opts(
+def test_geo_from_ecef_rejects_unsupported_kind_with_explicit_opts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """G2 rejects G1-only ECEF provenance even when explicit opts are supplied."""
+    """Unsupported ECEF metadata is rejected even with explicit options."""
     _install_geo_backend_stub(monkeypatch)
     ds = merge_schema(
         _ecef_dataset(),
@@ -239,7 +239,7 @@ def test_geo_from_ecef_rejects_superseded_ecef_position_metadata_with_explicit_o
         },
         validate=False,
     )
-    with pytest.raises(ValueError, match="superseded"):
+    with pytest.raises(ValueError, match="unsupported"):
         GeodeticPosition.from_ecef(Position(ds), opts=GeodeticOptions(ecef_frame=None))
 
 

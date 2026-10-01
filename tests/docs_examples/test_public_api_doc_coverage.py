@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import re
 from pathlib import Path
 
@@ -210,9 +211,41 @@ def test_docstrings_do_not_expose_internal_example_ids() -> None:
     failures: list[str] = []
     for record in iter_scoped_public_symbols():
         doc = _docstring(record.obj)
-        if re.search(r"Example ID:\s*[A-Z0-9-]+", doc):
+        if _INTERNAL_REFERENCE_RE.search(doc):
             failures.append(record.symbol)
-    assert not failures, f"Docstrings expose internal Example IDs: {failures!r}"
+    assert not failures, f"Docstrings expose internal references: {failures!r}"
+
+
+_INTERNAL_REFERENCE_RE = re.compile(
+    r"Example ID:\s*[A-Z0-9-]+|\b[Cc]ontract(?:s)?\s+\d{3}\b|contracts/|"
+    r"\bTUT[-_]\d+|AGENTS\.md|PRODUCTION_ISSUES|\b(?:A[123]|G[1-4]|D[34]|T1|F2C?)\b"
+)
+
+
+def test_public_learning_materials_avoid_internal_references() -> None:
+    """Review visible content, leaving hidden example-coverage annotations intact."""
+    root = Path(__file__).resolve().parents[2]
+    tutorial = root / "examples/tutorial"
+    paths = [root / "README.md", tutorial / "README.md", *sorted((root / "docs").rglob("*.md"))]
+    failures = []
+    for path in paths:
+        if "_build" in path.parts:
+            continue
+        visible = re.sub(r"<!--.*?-->", "", path.read_text(), flags=re.DOTALL)
+        if _INTERNAL_REFERENCE_RE.search(visible):
+            failures.append(str(path.relative_to(root)))
+    for path in sorted(tutorial.glob("*.ipynb")):
+        for index, cell in enumerate(json.loads(path.read_text())["cells"]):
+            visible = "".join(cell["source"])
+            outputs = []
+            for output in cell.get("outputs", []):
+                outputs.append("".join(output.get("text", [])))
+                for kind in ("text/plain", "text/html", "text/markdown"):
+                    outputs.append("".join(output.get("data", {}).get(kind, [])))
+            outputs = "\n".join(outputs)
+            if _INTERNAL_REFERENCE_RE.search(visible + outputs) or "/Users/" in outputs:
+                failures.append(f"{path.name}:cell-{index}")
+    assert not failures, f"Public learning materials expose internal references: {failures!r}"
 
 
 def test_required_example_ids_have_executable_tests() -> None:

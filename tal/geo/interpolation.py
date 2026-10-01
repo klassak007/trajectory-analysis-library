@@ -137,6 +137,7 @@ def _build_map(
     output_plan = preflight_query_output_namespace(
         context.ds,
         query,
+        param_name=context.spec.name,
         sequence_dim=context.sequence_dim,
         batch_dims=context.batch_dims,
         owner=owner,

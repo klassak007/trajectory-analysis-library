@@ -3,12 +3,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import xarray as xr
+from dask.callbacks import Callback
 
-from tal.core import AnalysisObject
 import tal.core.event_ops.evaluate as event_eval_mod
-from tal.core.event_ops import Condition, ConditionEvalOptions
-from tal.core.orchestration.axis_map import resolve_role_axis_map as resolve_role_axis_map_owner
-from tal.utils.xarray_namespace import rename_dims_collision_safe as rename_dims_collision_safe_owner
+from tal.core import AnalysisObject
+from tal.core.event_ops import (
+    Condition,
+    ConditionEvalOptions,
+    EventExtractOptions,
+    WhenOptions,
+)
+from tal.core.orchestration.axis_map import (
+    resolve_role_axis_map as resolve_role_axis_map_owner,
+)
+from tal.utils.xarray_namespace import (
+    rename_dims_collision_safe as rename_dims_collision_safe_owner,
+)
 
 
 def _ao_series(
@@ -543,21 +553,11 @@ def test_event_cond_014_scalar_operand_dtype_independent_of_context_clock(clock:
     ao = _ao_with_clock(clock)
     scalar = np.float32(0.5)
     context_clock = ao.as_dataset(copy="none").coords["time"]
-    resolved = event_eval_mod._broadcast_scalar_operand(
-        scalar,
-        clock=context_clock,
-        owner="events.mask",
-        field="right operand",
-    )
-
-    assert np.dtype(resolved.dtype) == np.dtype("float32")
-    assert resolved.dims == context_clock.dims
-    assert set(resolved.coords) == set(context_clock.coords)
-    for name in context_clock.coords:
-        xr.testing.assert_identical(resolved.coords[name], context_clock.coords[name])
-
     mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", scalar))
     np.testing.assert_array_equal(mask.values, np.asarray([False, True], dtype=bool))
+    assert mask.dims == context_clock.dims
+    for name in context_clock.coords:
+        xr.testing.assert_identical(mask.coords[name], context_clock.coords[name])
 
     with pytest.raises(ValueError, match="events.mask: right operand must be numeric"):
         ao.events.mask(Condition.compare(Condition.var("value"), "gt", "threshold"))
@@ -606,17 +606,6 @@ def test_event_cond_017_scalar_metadata_does_not_leak_into_mask() -> None:
         param_coord="time",
     )
     clock = ao.as_dataset(copy="none").coords["time"]
-    scalar = event_eval_mod._broadcast_scalar_operand(
-        np.float32(0.5),
-        clock=clock,
-        owner="events.mask",
-        field="left operand",
-    )
-
-    assert scalar.name is None
-    assert scalar.attrs == {}
-    xr.testing.assert_identical(scalar.coords["sample"], clock.coords["sample"])
-
     with xr.set_options(keep_attrs=True):
         left = ao.events.mask(Condition.compare(np.float32(0.5), "lt", Condition.var("value")))
         right = ao.events.mask(Condition.compare(Condition.var("value"), "gt", np.float32(0.5)))
@@ -626,6 +615,7 @@ def test_event_cond_017_scalar_metadata_does_not_leak_into_mask() -> None:
     np.testing.assert_array_equal(right.values, expected)
     assert left.name == right.name
     assert left.attrs == right.attrs == {}
+    xr.testing.assert_identical(left.coords["sample"], clock.coords["sample"])
 
 
 @pytest.mark.parametrize(
@@ -686,36 +676,7 @@ def test_event_cond_016_timedelta_array_ordering_preserved() -> None:
     np.testing.assert_array_equal(array_left.values, expected)
 
 
-def test_event_perf_002_invalid_scalar_fails_before_broadcast(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ID: EVENT_PERF_002_invalid_scalar_fails_before_broadcast."""
-    clock = _ao_with_clock(np.asarray([0, 1], dtype="int64")).as_dataset(copy="none").coords["time"]
-
-    def reject_broadcast(*args: object, **kwargs: object) -> xr.DataArray:
-        raise AssertionError("invalid scalar must fail before xr.full_like")
-
-    monkeypatch.setattr(event_eval_mod.xr, "full_like", reject_broadcast)
-    invalid_scalars = (
-        "threshold",
-        np.bool_(True),
-        np.datetime64("2025-01-01", "ns"),
-        np.timedelta64(1, "s"),
-    )
-    for invalid in invalid_scalars:
-        assert np.isscalar(invalid)
-        with pytest.raises(ValueError, match="events.mask: right operand must be numeric"):
-            event_eval_mod._broadcast_scalar_operand(
-                invalid,
-                clock=clock,
-                owner="events.mask",
-                field="right operand",
-            )
-
-
-def test_event_perf_001_scalar_operand_broadcast_preserves_dask_laziness(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_event_perf_001_scalar_operand_broadcast_preserves_dask_laziness() -> None:
     """ID: EVENT_PERF_001_scalar_operand_broadcast_preserves_dask_laziness."""
     da = pytest.importorskip("dask.array")
     ds = xr.Dataset(
@@ -741,27 +702,14 @@ def test_event_perf_001_scalar_operand_broadcast_preserves_dask_laziness(
         param_coord="time",
     )
 
-    def _fail_compute(*args: object, **kwargs: object) -> object:
-        raise AssertionError("unexpected eager compute")
-
-    monkeypatch.setattr(da.Array, "compute", _fail_compute, raising=True)
-    context_clock = ao.as_dataset(copy="none").coords["time"]
-    scalar_operand = event_eval_mod._broadcast_scalar_operand(
-        np.float32(0.5),
-        clock=context_clock,
-        owner="events.mask",
-        field="right operand",
-    )
-    assert isinstance(scalar_operand.data, da.Array)
-    assert scalar_operand.chunks == context_clock.chunks
-    assert scalar_operand.dtype == np.dtype("float32")
-
-    mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", np.float32(0.5)))
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", np.float32(0.5)))
+    assert not tasks
     assert isinstance(mask.data, da.Array)
     assert mask.dtype == np.dtype(bool)
+    np.testing.assert_array_equal(mask.compute(scheduler="synchronous"), [False, True])
 
-    monkeypatch.undo()
-    np.testing.assert_array_equal(mask.compute().values, np.asarray([False, True], dtype=bool))
 
 
 @pytest.mark.parametrize("invalid", ["x", None])
@@ -772,3 +720,311 @@ def test_event_hard_014_condition_tolerance_invalid_raises_tal_valueerror(invali
     with pytest.raises(ValueError) as err:
         ao.events.mask(cond, opts=ConditionEvalOptions(eq_atol=invalid))  # type: ignore[arg-type]
     assert "events.mask: opts.eq_atol must be a numeric scalar" in str(err.value)
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("operation", ("mask", "events"))
+@pytest.mark.parametrize("sliced", (False, True))
+@pytest.mark.parametrize("native", (False, True))
+def test_tut_001_events_preserve_the_contexts_own_sample_labels(lazy, operation, sliced, native):
+    """TUT-001 / Contract 021: parameter evaluation preserves context correspondence."""
+    from dask.callbacks import Callback
+
+    ds = _ao_series(values=[0., 2., 0., 0.], time=[0., 1., 2., 3.]).as_dataset()
+    axis = (xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(10, 50, 10, dim="sample"))
+            if native else {"sample": [10, 20, 30, 40]})
+    ds = ds.assign_coords(axis)
+    source = AnalysisObject.from_data(ds.chunk({"sample": 2}) if lazy else ds)
+    if sliced:
+        source = source.isel(sample=slice(1, None))
+    snapshot = source.as_dataset(copy="deep")
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = (source.events.events(source > 1., opts=EventExtractOptions(include_initial=True, max_events=2))
+                  if operation == "events" else source.events.mask(source > 1.))
+    assert tasks == []
+    actual = result.compute(scheduler="synchronous")
+    if operation == "mask":
+        np.testing.assert_array_equal(actual, [True, False, False] if sliced else [False, True, False, False])
+        xr.testing.assert_identical(actual["sample"].variable, snapshot["sample"].variable)
+        assert actual.dims == ("sample",)
+        assert actual.xindexes["sample"].equals(snapshot.xindexes["sample"])
+        if native is True:
+            assert isinstance(actual.xindexes["sample"], xr.indexes.RangeIndex)
+    else:
+        np.testing.assert_allclose(actual["time"], [1., 1.])
+        np.testing.assert_array_equal(actual["sample_index_after"], [0, 1] if sliced else [1, 2])
+        np.testing.assert_array_equal(actual["sample_index_before"], [-1, 0] if sliced else [0, 1])
+    xr.testing.assert_identical(source.as_dataset(), snapshot)
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("method", ("linear", "nearest"))
+def test_tut_001_independent_operand_restores_context_roles_and_validity(lazy, method):
+    """TUT-001: independently sampled, renamed operands remain label-safe and lazy."""
+    from dask.callbacks import Callback
+
+    ds = xr.Dataset({"value": (("trial", "sample"), [[0., 10., 99.], [10., 20., 30.]])},
+        coords={"trial": ["a", "b"], "sample": [10, 20, 30], "time": ("sample", [0., 1., 2.]),
+                "length": ("trial", [2, 3])})
+    other_ds = xr.Dataset({"value": (("run", "step"), [[0., 20.], [10., 30.]])},
+        coords={"run": ["a", "b"], "step": [100, 200], "clock": ("step", [0., 2.])})
+    if lazy:
+        ds, other_ds = ds.chunk({"sample": 2}).assign_coords(length=ds["length"]), other_ds.chunk({"step": 1})
+    source = AnalysisObject.from_data(ds, sequence_dim="sample", batch_dims=("trial",),
+                                      param_coord="time", sequence_size_coord="length")
+    other = AnalysisObject.from_data(other_ds, sequence_dim="step", batch_dims=("run",), param_coord="clock")
+    snapshots = source.as_dataset(copy="deep"), other.as_dataset(copy="deep")
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.events.mask(Condition.compare(Condition.var("value"), "eq", other),
+                                    opts=ConditionEvalOptions(ao_interp=method))
+    assert tasks == []
+    np.testing.assert_array_equal(result.compute(scheduler="synchronous"),
+        [[True, True, False], [True, True, True]] if method == "linear" else
+        [[True, False, False], [True, False, True]])
+    assert result.dims == ("trial", "sample")
+    np.testing.assert_array_equal(result["trial"], ["a", "b"])
+    np.testing.assert_array_equal(result["sample"], [10, 20, 30])
+    xr.testing.assert_identical(source.as_dataset(), snapshots[0])
+    xr.testing.assert_identical(other.as_dataset(), snapshots[1])
+
+
+def test_event_clock_name_is_an_explicit_supported_option():
+    """Contract 021: a non-default parameter name needs an explicit clock option."""
+    ds = xr.Dataset({"value": ("sample", [0., 2., 0.])},
+                    coords={"sample": [0, 1, 2], "clock": ("sample", [0., 1., 2.])})
+    source = AnalysisObject.from_data(ds, sequence_dim="sample", param_coord="clock")
+    result = source.events.mask(source > 1., opts=ConditionEvalOptions(coord_name="clock"))
+    np.testing.assert_array_equal(result, [False, True, False])
+
+
+def _tut_audit_ao(ds,*,batch=(),sequence='sample',param='time',lazy=False):
+    if lazy: ds=ds.chunk({sequence:2})
+    return AnalysisObject.from_data(ds,sequence_dim=sequence,batch_dims=batch,param_coord=param)
+
+
+def _tut_audit_grouped(*,shared=False,n=4,lazy=False,native=True):
+    times=np.arange(n,dtype=float)
+    ds=xr.Dataset({'value':(('trial','sample'),np.tile(times,(2,1)))},coords={'trial':['a','b'],'sample':np.arange(n)*10+10,'time':('sample',times) if shared else (('trial','sample'),np.tile(times,(2,1)))})
+    if native: ds=ds.assign_coords(xr.Coordinates.from_xindex(xr.indexes.RangeIndex.arange(2,dim='trial')))
+    return _tut_audit_ao(ds,batch=('trial',),lazy=lazy)
+
+@pytest.mark.parametrize('shared',[False,True])
+@pytest.mark.parametrize('lazy',[False,True])
+@pytest.mark.parametrize('n',[0,4])
+@pytest.mark.parametrize('operation',['mask','segments','stream'])
+def test_tut_007_range_batch_topology(shared,lazy,n,operation):
+    ao=_tut_audit_grouped(shared=shared,n=n,lazy=lazy)
+    cond=Condition.compare(Condition.var('value'),'gt',2.)
+    tasks=[]
+    with Callback(pretask=lambda key,*_:tasks.append(key)):
+        result=ao.events.mask(cond) if operation=='mask' else ao.events.when(cond,opts=WhenOptions(layout=operation,max_segments=2))
+    assert tasks==[]
+    ds=result if isinstance(result,xr.DataArray) else result.as_dataset()
+    assert isinstance(ds.xindexes['trial'],xr.indexes.RangeIndex)
+
+@pytest.mark.parametrize('method',['linear','nearest'])
+@pytest.mark.parametrize('case',['indexed_self','station_data','control'])
+@pytest.mark.parametrize('lazy',[False,True])
+def test_tut_008_context_query_carriers(case,lazy,method):
+    ds=xr.Dataset({'value':('sample',[0.,1.,2.])},coords={'sample':[10,20,30],'time':('sample',[0.,1.,2.]),'station':'lab','tag':('sample',[100.,102.,104.])})
+    if case=='indexed_self':ds=ds.set_xindex('tag')
+    ao=_tut_audit_ao(ds,lazy=lazy)
+    other=ao if case=='indexed_self' else _tut_audit_ao(xr.Dataset({'station' if case=='station_data' else 'value':('sample',[0.,1.,2.])},coords={'sample':[1,2,3],'time':('sample',[0.,1.,2.]),**({'station':'lab'} if case!='station_data' else {})}),lazy=lazy)
+    tasks=[]
+    with Callback(pretask=lambda key,*_:tasks.append(key)):mask=ao.events.mask(Condition.compare(Condition.var('value'),'eq',other), opts=ConditionEvalOptions(ao_interp=method))
+    assert tasks==[]
+    np.testing.assert_equal(mask.compute(),np.ones(3,dtype=bool))
+    assert mask.dims == ("sample",)
+    for name, index in ao.as_dataset().xindexes.items():
+        assert type(mask.xindexes[name]) is type(index) and mask.xindexes[name].equals(index)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("method", ["linear", "nearest"])
+@pytest.mark.parametrize("axis,shared,batch,operand,ragged", [
+    (True, False, (2, 3), "self", False), (True, False, (2,), "independent", True),
+    (True, False, (2, 3), "renamed", False), (False, True, (2, 3), "self", False),
+    (False, True, (2, 3), "independent", True), (False, True, (2, 3), "renamed", False),
+    (False, False, (2,), "self", True), (True, True, (), "self", False)])
+def test_tut_011_013_ao_conditions_preserve_lazy_context(tutorial_audit_source, lazy, method, axis, shared, batch, operand, ragged):
+    """TUT-011/013: interpolation preserves correspondence without evaluating metadata."""
+    source = tutorial_audit_source(lazy=lazy, axis=axis, shared=shared, batch=batch, ragged=ragged)
+    if operand == "independent":
+        original = source.as_dataset()
+        other_ds = original.copy(deep=True).drop_vars("value")
+        other_ds["other"] = xr.Variable(original.value.dims, np.broadcast_to(np.arange(6.), original.value.shape))
+        other = AnalysisObject.from_data(other_ds, sequence_dim="sample", batch_dims=tuple(f"b{i}" for i in range(len(batch))),
+                                        core_dims=(), param_coord="sample" if axis else "clock",
+                                        sequence_size_coord="count" if ragged else None)
+    elif operand == "renamed":
+        other = source.rename({"sample": "record", "b0": "trial", "b1": "subject"})
+    else:
+        other = source
+    snapshot, other_snapshot = source.as_dataset(copy="deep"), other.as_dataset(copy="deep")
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.events.mask(Condition.compare(Condition.var("value"), "eq", other),
+            opts=ConditionEvalOptions(coord_name="sample" if axis else "clock", ao_interp=method))
+    assert not tasks
+    expected = np.ones(snapshot.value.shape, dtype=bool) if operand != "independent" else np.broadcast_to(
+        np.arange(6.) == np.array([0., 1., 1., 0., 1., 0.]), snapshot.value.shape).copy()
+    if ragged:
+        expected = expected & (np.arange(6.) < snapshot["count"].data[..., None])
+    np.testing.assert_array_equal(result.compute(scheduler="synchronous"), expected)
+    assert result.dims == snapshot.value.dims
+    for name, index in snapshot.xindexes.items():
+        assert type(result.xindexes[name]) is type(index) and result.xindexes[name].equals(index)
+    xr.testing.assert_identical(source.as_dataset(), snapshot)
+    xr.testing.assert_identical(other.as_dataset(), other_snapshot)
+
+
+@pytest.mark.parametrize("predecessor", ["sel", "at"])
+@pytest.mark.parametrize("axis,batch,lazy_part", [(False, (), "all"), (False, (2,), "all"),
+    (False, (2, 3), "all"), (False, (2, 3), "clock"), (False, (2,), "payload"), (True, (2, 3), "all")])
+def test_tut_013_chained_conditions_do_not_compute_generated_metadata(tutorial_audit_source, predecessor, axis, batch, lazy_part):
+    """TUT-013: returned Dask backing alone is insufficient; construction executes no tasks."""
+    source = tutorial_audit_source(lazy=True, axis=axis, batch=batch, lazy_part=lazy_part)
+    query = xr.DataArray([1., 2. ** 1.5, 4. ** 1.5], dims="request").chunk(request=1)
+    selected = getattr(source.param, predecessor)(query, validate=False)
+    snapshot, original = selected.as_dataset(copy="deep"), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = selected.events.mask(Condition.compare(Condition.var("value"), "eq", selected),
+                                     opts=ConditionEvalOptions(coord_name="sample" if axis else "clock"))
+    assert not tasks and result.chunks is not None
+    np.testing.assert_array_equal(result.compute(scheduler="synchronous"), np.ones(result.shape, dtype=bool))
+    for name, index in snapshot.xindexes.items():
+        assert type(result.xindexes[name]) is type(index) and result.xindexes[name].equals(index)
+    for name in ("valid", "sample_index", "sample" if axis else "clock"):
+        if name in snapshot.coords:
+            xr.testing.assert_identical(result.coords[name].compute(), snapshot.coords[name].compute())
+    xr.testing.assert_identical(selected.as_dataset(), snapshot)
+    xr.testing.assert_identical(query, original)
+
+
+LABEL_CASES = [
+    (labels, batch, operand)
+    for labels in ["indexed", "unindexed", "lazy"]
+    for batch in [(), (2,), (2, 3)]
+    for operand in ["scalar", "self", "dataarray"]
+]
+
+
+@pytest.mark.parametrize("labels,batch,operand", LABEL_CASES)
+def test_tut_017_lazy_sequence_topology(tutorial_audit_source, labels, batch, operand):
+    """TUT-017: public ownership regression and controls."""
+    a = tutorial_audit_source(
+        clock_values=[0.0, 1.0, 3.0, 5.0, 8.0, 10.0],
+        lazy=True,
+        batch=batch,
+        labels=labels,
+    )
+    ds = a.as_dataset()
+    before = a.as_dataset(copy="deep")
+    tasks = []
+    right = 0.5 if operand == "scalar" else a if operand == "self" else ds.value
+    c = Condition.compare(
+        Condition.var("value"), "gt" if operand == "scalar" else "eq", right
+    )
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = a.events.mask(c, opts=ConditionEvalOptions(coord_name="clock"))
+    assert not tasks
+    assert ("sample" in result.xindexes) == (labels == "indexed")
+    expected = (
+        np.broadcast_to(np.array([0.0, 1.0, 1.0, 0.0, 1.0, 0.0]) > 0.5, ds.value.shape)
+        if operand == "scalar"
+        else np.ones(ds.value.shape, bool)
+    )
+    np.testing.assert_array_equal(result.compute(scheduler="synchronous"), expected)
+    for name, index in ds.xindexes.items():
+        assert type(result.xindexes[name]) is type(index) and result.xindexes[
+            name
+        ].equals(index)
+    xr.testing.assert_identical(a.as_dataset(), before)
+
+
+@pytest.mark.parametrize('case,lazy_part,batch,method', [
+    ('named', 'labels', (), 'linear'), ('reduced', 'all', (2,), 'linear'),
+    ('independent', 'payload', (2,3), 'linear'), ('renamed', 'clock', (2,), 'nearest'),
+    ('named', 'all', (2,3), 'nearest'), ('self', 'labels', (2,), 'linear'),
+])
+def test_tut_017_separate_lazy_labels_and_operand_data(tutorial_audit_source, case, lazy_part, batch, method):
+    """TUT-017: numerical expansion preserves ordinary and native context topology."""
+    source = tutorial_audit_source(lazy=lazy_part != 'labels', lazy_part=lazy_part, labels='lazy', batch=batch, ragged=bool(batch))
+    ds = source.as_dataset()
+    if case == 'reduced':
+        right = ds.value.isel(sample=1, drop=True) / 2
+    elif case in ('independent', 'renamed'):
+        target = ds.copy(deep=False)
+        # f(t)=t is an independent interpolation oracle at the source clock.
+        target['value'] = ds.clock.broadcast_like(ds.value).variable
+        target = target.assign_coords(xr.Coordinates({'sample': xr.Variable('sample', np.arange(6)+300)}, indexes={}))
+        other = AnalysisObject.from_data(target, sequence_dim='sample', batch_dims=tuple(f'b{i}' for i in range(len(batch))), param_coord='clock', sequence_size_coord='count' if batch else None)
+        if case == 'renamed':
+            other = other.rename({'sample':'tick'}, validate=False)
+        right = other
+    else:
+        right = source if case == 'self' else .5
+    condition = Condition.compare(Condition.var('value'), 'eq' if case == 'self' else 'gt', right)
+    before = source.as_dataset(copy='deep')
+    tasks = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.events.mask(condition, opts=ConditionEvalOptions(coord_name='clock', ao_interp=method))
+    assert not tasks
+    actual = result.compute(scheduler='synchronous')
+    expected_right = ds.clock if case in ('independent','renamed') else 1. if case == 'self' else .5
+    expected = xr.ones_like(ds.value, dtype=bool) if case == 'self' else ds.value > expected_right
+    if batch:
+        positions = xr.DataArray(np.arange(6), dims='sample')
+        expected = expected & (positions < ds['count'])
+    np.testing.assert_array_equal(actual, expected.compute(scheduler='synchronous'))
+    assert 'sample' not in result.xindexes
+    xr.testing.assert_identical(actual['sample'], ds['sample'].compute(scheduler='synchronous'))
+    for name, index in ds.xindexes.items():
+        assert type(result.xindexes[name]) is type(index) and result.xindexes[name].equals(index)
+    xr.testing.assert_identical(source.as_dataset(), before)
+
+
+@pytest.mark.parametrize("lane", ["sample", "trial"])
+@pytest.mark.parametrize("claim", ["matching", "reversed", "missing", "extra"])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_tut_021_condition_complete_native_correspondence(
+    window_review_source, lane, claim, lazy
+):
+    ao = window_review_source(lazy, 2 if lane == "trial" else None, extra_index=True)
+    context = ao.as_dataset()
+    operand = context.value.drop_vars("time")
+    if claim == "reversed":
+        operand = (
+            operand.drop_indexes("alias")
+            .assign_coords(alias=(lane, context.alias.data[::-1]))
+            .set_xindex("alias")
+        )
+    if claim == "missing":
+        operand = operand.drop_vars("alias")
+    if claim == "extra":
+        operand = operand.assign_coords(
+            extra=(lane, np.arange(context.sizes[lane]) + 500)
+        ).set_xindex("extra")
+    before = operand.copy(deep=True)
+    expression = Condition.compare(operand, "eq", Condition.var("value"))
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        if claim == "matching":
+            result = ao.events.mask(
+                expression, opts=ConditionEvalOptions(ao_interp="linear")
+            )
+        else:
+            with pytest.raises(ValueError, match="index|topology|label"):
+                ao.events.mask(expression, opts=ConditionEvalOptions(ao_interp="linear"))
+            assert not tasks
+            xr.testing.assert_identical(operand, before)
+            xr.testing.assert_identical(ao.as_dataset(), context)
+            return
+    assert not tasks
+    assert result.xindexes["alias"].equals(context.xindexes["alias"])
+    np.testing.assert_array_equal(result.compute(), True)
+    xr.testing.assert_identical(operand, before)
+    xr.testing.assert_identical(ao.as_dataset(), context)

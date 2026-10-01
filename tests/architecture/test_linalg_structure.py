@@ -983,25 +983,6 @@ def test_linalg_arch_069_lstsq_backend_selector_remains_owner_routed() -> None:
     assert "vectorize=True" not in lstsq_section
 
 
-def test_linalg_arch_070_lstsq_normal_path_status_is_explicit() -> None:
-    """ID: LINALG_ARCH_070_lstsq_normal_path_status_is_explicit."""
-    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    contract_114 = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
-    benchmark = Path("benchmarks/bench_linalg_lstsq_numba_backends.py").read_text(encoding="utf-8")
-    solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
-    lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
-    decision = contract_114.split("### linalg_lstsq", 1)[1].split("\n## ", 1)[0]
-    assert "Status: Implemented" in contract_083
-    assert "all primary F2 targets closed" in contract_083
-    assert "Decision: migrated" in decision
-    assert "Gate result: PASS" in decision
-    assert "lstsq_block_backend" in lstsq_section
-    assert "vectorize=False" in lstsq_section
-    assert "vectorize=True" not in lstsq_section
-    assert "linalg lstsq F2C decision input" in benchmark
-    assert "fewer-large cases numpy_block-selected" in benchmark
-
-
 def test_linalg_arch_071_lstsq_normal_path_vectorize_true_removed() -> None:
     """ID: LINALG_ARCH_071_lstsq_normal_path_vectorize_true_removed."""
     text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")

@@ -82,6 +82,7 @@ def prepare_rotation_temporal_evaluation(
     output_plan = preflight_query_output_namespace(
         context.ds,
         request.query,
+        param_name=context.spec.name,
         sequence_dim=context.sequence_dim,
         batch_dims=context.batch_dims,
         owner=request.owner,

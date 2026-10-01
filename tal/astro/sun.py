@@ -39,14 +39,14 @@ _AZIMUTH_VAR = "azimuth_deg"
 class SpiceSunOptions:
     """Reserved SPICE Sun-direction options.
 
-    No fields are defined in A2. The class is intentionally zero-field until
-    SPICE execution is implemented.
+    This class has no fields because Sun-direction calculation supports only
+    the Astropy backend.
 
     Notes
     -----
     ``SpiceSunOptions`` exists so ``SunDirectionOptions.spice`` has a stable,
     runtime-evaluable annotation. Passing a non-``None`` value to
-    ``direction_to_sun`` fails closed until the SPICE backend phase.
+    ``direction_to_sun`` raises ``ValueError`` because SPICE execution is unsupported.
 
     Examples
     --------
@@ -64,17 +64,17 @@ class SunDirectionOptions:
     ----------
     backend : str, optional
         Allowed values: ``'astropy'``, ``'spice'``.
-        Requested astronomy backend. A2 executes only ``"astropy"``.
+        Requested astronomy backend. Only ``"astropy"`` executes Sun calculations.
     time : AstroTimeOptions | None, optional
         Time scale and optional observer source coordinate.
     iers : AstroIERSOptions | None, optional
         Astropy IERS download and degraded-accuracy policy.
     spice : SpiceSunOptions | None, optional
-        Reserved SPICE backend options. Non-``None`` values fail closed in A2.
+        Reserved SPICE backend options. Non-``None`` values raise ``ValueError``.
 
     Notes
     -----
-    A2 requires absolute datetime-like observation time. Numeric TAL parameter
+    Sun calculations require absolute datetime-like observation time. Numeric TAL parameter
     coordinates are valid for generic TAL param operations but are not
     interpreted as Sun-observation time.
 
@@ -106,9 +106,9 @@ def _coerce_options(opts: SunDirectionOptions | None, *, owner: str) -> SunDirec
         raise TypeError(f"{owner}: options must be SunDirectionOptions or None.")
     backend = _coerce_backend(opts.backend, owner=owner)
     if backend == "spice":
-        raise ValueError(f"{owner}: backend='spice' is reserved for a later astro phase; use backend='astropy'.")
+        raise ValueError(f"{owner}: backend='spice' is reserved and unsupported; use backend='astropy'.")
     if opts.spice is not None:
-        raise ValueError(f"{owner}: spice options are reserved for a later astro phase.")
+        raise ValueError(f"{owner}: spice options are reserved and unsupported; omit them to use Astropy.")
     time = None if opts.time is None else coerce_time_options(opts.time, owner=owner)
     iers = coerce_iers_options(opts.iers, owner=owner)
     return SunDirectionOptions(backend=backend, time=time, iers=iers, spice=None)
@@ -119,7 +119,7 @@ def _fail_if_raw_lazy(value: object, *, owner: str, field: str) -> None:
     graph = getattr(value, "__dask_graph__", None)
     if not has_chunks and graph is None:
         return
-    raise ValueError(f"{owner}: Dask-backed {field} is not supported in astro A2; materialize explicitly.")
+    raise ValueError(f"{owner}: Dask-backed {field} is not supported; materialize explicitly.")
 
 
 def _fail_if_object_dtype(value: object, *, owner: str, field: str) -> None:
@@ -130,7 +130,7 @@ def _fail_if_object_dtype(value: object, *, owner: str, field: str) -> None:
 
 def _require_eager_array(coord: xr.DataArray, *, owner: str, field: str) -> None:
     if is_chunked_dataarray(coord):
-        raise ValueError(f"{owner}: Dask-backed {field} is not supported in astro A2; materialize explicitly.")
+        raise ValueError(f"{owner}: Dask-backed {field} is not supported; materialize explicitly.")
 
 
 def _require_datetime64(coord: xr.DataArray, *, owner: str, field: str) -> None:
@@ -221,13 +221,20 @@ def _align_inputs(
     return out  # type: ignore[return-value]
 
 
+def _coordinate_for_dim(arrays: tuple[xr.DataArray, ...], dim: str) -> xr.DataArray | None:
+    for arr in arrays:
+        coord = arr.coords.get(dim)
+        if coord is not None and coord.dims == (dim,):
+            return coord
+    return None
+
+
 def _coords_for_dims(arrays: tuple[xr.DataArray, ...], dims: tuple[str, ...]) -> dict[str, xr.DataArray]:
     coords: dict[str, xr.DataArray] = {}
     for dim in dims:
-        for arr in arrays:
-            if dim in arr.coords and arr.coords[dim].dims == (dim,):
-                coords[dim] = arr.coords[dim]
-                break
+        coord = _coordinate_for_dim(arrays, dim)
+        if coord is not None:
+            coords[dim] = coord
     return coords
 
 
@@ -290,12 +297,12 @@ def direction_to_sun(
     TypeError
         If options or observer inputs have unsupported types.
     ValueError
-        If time is not absolute datetime64, if SPICE is requested in A2, or if
+        If time is not absolute datetime64, if SPICE is requested, or if
         observer/time topology cannot be aligned.
 
     Notes
     -----
-    A2 executes only the Astropy backend. Dask-backed observer and time arrays
+    Only the Astropy backend executes Sun calculations. Dask-backed observer and time arrays
     fail closed before the Astropy boundary; materialize those arrays
     explicitly before calling this function.
 

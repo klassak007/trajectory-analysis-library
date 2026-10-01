@@ -82,7 +82,7 @@ class ParamAccessor:
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
         Datetime64 param coordinates accept datetime-like queries. Indexing is
-        tolerance-free in T1.
+        tolerance-free.
 
         Examples
         --------
@@ -156,7 +156,7 @@ class ParamAccessor:
         -----
         Uses xarray label-aware alignment and TAL fail-closed schema/runtime guards.
         Datetime64 param coordinates accept datetime-like point and slice
-        queries. Selection is tolerance-free in T1.
+        queries. Selection is tolerance-free.
 
         Examples
         --------

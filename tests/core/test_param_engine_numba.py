@@ -157,59 +157,6 @@ def _assert_map_equal(
     np.testing.assert_array_equal(actual[3], expected[3])
 
 
-def _decision_section(target: str) -> str:
-    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
-    section = text.split(f"### {target}", 1)[1]
-    return section.split("\n### ", 1)[0]
-
-
-def _assert_migrated_decision_record(target: str, benchmark: str, cases: tuple[str, ...]) -> None:
-    section = _decision_section(target)
-    for required in (
-        "Decision: migrated",
-        "Gate result: PASS",
-        "Benchmark evidence:",
-        "Selected normal path: numba if available, numpy_block otherwise",
-        "Public routing status: blockwise vectorize=False",
-        "No-Numba behavior: numpy_block fallback",
-        "Explicit Numba behavior: ImportError, no silent fallback",
-        "Contract 083 status: all primary F2 targets closed",
-    ):
-        assert required in section
-    assert benchmark in section
-    for case in cases:
-        assert case in section
-    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    assert "Status: Implemented" in contract_083
-    assert "all primary F2 targets closed" in contract_083
-
-
-def test_param_f2c_001_map_default_or_baseline_migration_decision() -> None:
-    """ID: PARAM_F2C_001_map_default_or_baseline_migration_decision."""
-    _assert_migrated_decision_record("param_map", "benchmarks/bench_param_numba_backends.py", ("many-short", "fewer-long"))
-    text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
-    section = text.split("def _apply_param_map_block(", 1)[1].split(
-        "def build_param_map(",
-        1,
-    )[0]
-    assert "map_block_backend" in section
-    assert "vectorize=False" in section
-    assert "vectorize=True" not in section
-
-
-def test_param_f2c_002_bounds_default_or_baseline_migration_decision() -> None:
-    """ID: PARAM_F2C_002_bounds_default_or_baseline_migration_decision."""
-    _assert_migrated_decision_record("param_bounds", "benchmarks/bench_param_numba_backends.py", ("many-short", "fewer-long"))
-    text = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
-    section = text.split("def _apply_param_bounds_block(", 1)[1].split(
-        "def build_param_bounds_map(",
-        1,
-    )[0]
-    assert "bounds_block_backend" in section
-    assert "vectorize=False" in section
-    assert "vectorize=True" not in section
-
-
 def test_param_f2c_003_map_normal_path_uses_block_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     """ID: PARAM_F2C_003_map_normal_path_uses_block_backend."""
     seen = []

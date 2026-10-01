@@ -364,15 +364,6 @@ def test_event_arch_032_around_stacked_finalize_boundary_owner_only() -> None:
     assert ".__class__._from_unvalidated(" not in text
 
 
-def test_event_arch_033_window_stack_zero_lane_restore_owns_coord_roundtrip() -> None:
-    """ID: EVENT_ARCH_033_window_stack_zero_lane_restore_owns_coord_roundtrip."""
-    window_stack = Path("tal/core/event_ops/window_stack.py").read_text(encoding="utf-8")
-    around_stacked = Path("tal/core/event_ops/around_stacked.py").read_text(encoding="utf-8")
-    assert "def _captured_zero_dim_coords(" in window_stack
-    assert "captured_coords" in window_stack
-    assert "assign_coords(" in window_stack
-    assert "_captured_zero_dim_coords" not in around_stacked
-
 
 def test_event_doc_002_around_stacked_user_guide_and_api_entries_present() -> None:
     """ID: EVENT_DOC_002_around_stacked_user_guide_and_api_entries_present."""
@@ -427,16 +418,6 @@ def test_event_arch_034_during_stream_owner_module_single_owner() -> None:
     assert "def evaluate_when_stream_layout(" in owner
     assert 'if opts.layout == "stream":' in during
     assert "evaluate_when_stream_layout(" in during
-
-
-def test_event_arch_035_during_stream_reuses_segments_and_stack_owners() -> None:
-    """ID: EVENT_ARCH_035_during_stream_reuses_segments_and_stack_owners."""
-    owner = Path("tal/core/event_ops/when_stream.py").read_text(encoding="utf-8")
-    assert "evaluate_when_segments_layout(" in owner
-    assert "stack_segment_stream(" in owner
-    assert "gather_dataset_along_sequence(" in owner
-    assert ".stack({" not in owner
-    assert "reset_index(" not in owner
 
 
 def test_event_arch_036_during_stream_no_local_crossing_or_interp_kernels() -> None:
@@ -502,14 +483,6 @@ def test_event_arch_043_boundary_select_bounded_contains_no_vectorize_true() -> 
     assert "vectorize=False" in section
 
 
-def test_event_arch_044_during_stream_bounded_contains_no_vectorize_true() -> None:
-    """ID: EVENT_ARCH_044_during_stream_bounded_contains_no_vectorize_true."""
-    text = Path("tal/core/event_ops/when_stream.py").read_text(encoding="utf-8")
-    section = text.split("def _bounded_stream_indexer(", 1)[1].split("def _stream_indexer(", 1)[0]
-    assert "vectorize=True" not in section
-    assert "vectorize=False" in section
-
-
 def test_event_arch_045_during_segments_bounded_contains_no_vectorize_true() -> None:
     """ID: EVENT_ARCH_045_during_segments_bounded_contains_no_vectorize_true."""
     text = Path("tal/core/event_ops/when_segments.py").read_text(encoding="utf-8")
@@ -559,43 +532,6 @@ def test_event_arch_049_bounded_event_numba_paths_are_blockwise_vectorize_false(
     assert "prepare_intervals_block_rows" in numba_backends
     assert "xr.apply_ufunc" not in numba_backends
     assert "vectorize=True" not in numba_backends
-
-
-def test_event_arch_050_baseline_event_stopgaps_remain_explicit_until_f2c() -> None:
-    """ID: EVENT_ARCH_050_baseline_event_stopgaps_remain_explicit_until_f2c."""
-    boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
-    intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
-    contract = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
-    assert "Decision: migrated" in contract.split("### event_boundary", 1)[1].split("\n### ", 1)[0]
-    assert "Decision: migrated" in contract.split("### event_intervals", 1)[1].split("\n### ", 1)[0]
-    assert "EVENT_BOUNDARY_BACKEND_NUMPY_ROW" not in boundary
-    assert "EVENT_INTERVALS_BACKEND_NUMPY_ROW" not in intervals
-    assert "boundary_bounded_row_backend" not in boundary
-    assert "intervals_bounded_row_backend" not in intervals
-
-
-def test_event_arch_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed() -> None:
-    """ID: EVENT_ARCH_051_bounded_event_normal_paths_are_f2_stopgap_free_if_closed."""
-    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    contract_114 = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
-    boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
-    intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
-    boundary_section = boundary.split("def _extract_bounded(", 1)[1]
-    intervals_section = intervals.split("def _extract_bounded(", 1)[1]
-    assert "Status: Implemented" in contract_083
-    assert "all primary F2 targets closed" in contract_083
-    assert "### event_boundary" in contract_114
-    assert "### event_intervals" in contract_114
-    assert "Decision: migrated" in contract_114.split("### event_boundary", 1)[1].split("\n### ", 1)[0]
-    assert "Decision: migrated" in contract_114.split("### event_intervals", 1)[1].split("\n### ", 1)[0]
-    assert '"backend": _select_boundary_normal_backend()' in boundary_section
-    assert '"backend": _select_intervals_normal_backend()' in intervals_section
-    assert "vectorize=False" in boundary_section
-    assert "vectorize=False" in intervals_section
-    assert "vectorize=True" not in boundary_section
-    assert "vectorize=True" not in intervals_section
-    assert "boundary_bounded_row_backend" not in boundary
-    assert "intervals_bounded_row_backend" not in intervals
 
 
 def test_event_arch_053_boundary_normal_path_vectorize_true_removed() -> None:

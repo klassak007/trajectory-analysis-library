@@ -132,7 +132,7 @@ class ProjectedPosition(TypedAnalysisObject):
 
         Notes
         -----
-        G4 accepts public CRS inputs as strings only. Projected payload labels
+        CRS inputs must be strings. Projected payload labels
         are ``easting``, ``northing`` and optional ``height``.
 
         Examples

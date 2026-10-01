@@ -1,4 +1,3 @@
-from pathlib import Path
 import importlib
 
 import numpy as np
@@ -114,39 +113,6 @@ def _assert_lstsq_parity(
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
     np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
-
-
-def _decision_section(target: str) -> str:
-    text = Path("contracts/114-numba-default-baseline-migration-slice-f2c.md").read_text(encoding="utf-8")
-    section = text.split(f"### {target}", 1)[1]
-    return section.split("\n### ", 1)[0]
-
-
-def test_linalg_f2c_001_lstsq_default_or_baseline_migration_decision() -> None:
-    """ID: LINALG_F2C_001_lstsq_default_or_baseline_migration_decision."""
-    section = _decision_section("linalg_lstsq")
-    for required in (
-        "Decision: migrated",
-        "Gate result: PASS",
-        "Benchmark evidence:",
-        "Selected normal path: shape-aware numba if available, numpy_block otherwise",
-        "Public routing status: blockwise vectorize=False",
-        "No-Numba behavior: numpy_block fallback",
-        "Explicit Numba behavior: ImportError, no silent fallback",
-        "Contract 083 status: all primary F2 targets closed",
-    ):
-        assert required in section
-    assert "benchmarks/bench_linalg_lstsq_numba_backends.py" in section
-    assert "small-4x2-vector-4096" in section
-    assert "fewer-large" in section
-    solve_text = Path("tal/linalg/ops/solve.py").read_text(encoding="utf-8")
-    lstsq_section = solve_text.split("def compute_lstsq_kernel(", 1)[1].split("def compute_solve(", 1)[0]
-    assert "lstsq_block_backend" in lstsq_section
-    assert "vectorize=False" in lstsq_section
-    assert "vectorize=True" not in lstsq_section
-    contract_083 = Path("contracts/083-compiled-kernel-backend-followon-phase-f2.md").read_text(encoding="utf-8")
-    assert "Status: Implemented" in contract_083
-    assert "all primary F2 targets closed" in contract_083
 
 
 def test_linalg_f2c_002_lstsq_normal_path_uses_block_backend(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,7 @@ import pytest
 import xarray as xr
 
 from tal.core import AnalysisObject
-from tal.core.event_ops import Condition, WhenOptions
+from tal.core.event_ops import Condition, ConditionEvalOptions, WhenOptions
 
 
 def _ao_series(*, values: list[float], time: list[float]) -> AnalysisObject:
@@ -284,3 +284,28 @@ def test_event_hard_020_during_stream_bounded_indexer_blockwise_frontpack_parity
         out.as_dataset(copy="none").coords["orig_index"].values,
         np.asarray([1, 3, -1, -1, -1, -1, -1, -1, -1, -1], dtype="int64"),
     )
+
+
+_TUT_AUDIT_CLOCK=np.array([0.,.2,.7,1.5,2.,3.,4.,5.])
+_TUT_AUDIT_VALUES=np.array([0.,3.,4.,0.,0.,3.,4.,0.])
+
+def _tut_audit_ao(ds,*,batch=(),sequence='sample',param='time',lazy=False):
+    if lazy: ds=ds.chunk({sequence:2})
+    return AnalysisObject.from_data(ds,sequence_dim=sequence,batch_dims=batch,param_coord=param)
+
+
+def _tut_audit_when(ao,layout,limit):
+    return ao.events.when(Condition.compare(Condition.var('value'),'gt',2.),opts=WhenOptions(layout=layout,max_segments=limit,eval=ConditionEvalOptions(coord_name=ao.as_dataset().attrs['tal']['core']['param_coord']['name'])))
+
+@pytest.mark.parametrize('case',['event_batch','event_sequence','stream_batch','segment_batch','edge_batch'])
+@pytest.mark.parametrize('lazy',[False,True])
+@pytest.mark.parametrize('n',[0,8])
+def test_tut_009_private_dimension_collisions(case,lazy,n):
+    sequence='__tal_event__' if case=='event_sequence' else 'sample'
+    batch={'event_batch': '__tal_event__', 'stream_batch': '__tal_stream_out__', 'segment_batch': '__tal_segment__', 'edge_batch': '__tal_edge__'}.get(case, 'trial')
+    ds=xr.Dataset({'value':((batch,sequence),np.tile(_TUT_AUDIT_VALUES[:n],(2,1)))},coords={batch:['a','b'],sequence:np.arange(n),'time':(sequence,_TUT_AUDIT_CLOCK[:n])})
+    ds=ds.assign_coords({'__tal_event___':'occupied','__tal_segment___':'occupied','__tal_edge___':'occupied','__tal_stream_out___':'occupied'})
+    ao=_tut_audit_ao(ds,batch=(batch,),sequence=sequence,lazy=lazy)
+    result=_tut_audit_when(ao,'stream' if case=='stream_batch' else 'segments',2).as_dataset().compute()
+    assert result.sizes[batch]==2
+    assert set(result.data_vars)=={'value'}

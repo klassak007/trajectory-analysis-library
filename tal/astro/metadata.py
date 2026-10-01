@@ -99,7 +99,7 @@ def topocentric_metadata_payload(
     time_scale: str,
     owner: str,
 ) -> dict[str, str]:
-    """Build the canonical A1 topocentric-direction metadata payload."""
+    """Build the canonical topocentric-direction metadata payload."""
     normalized_backend = _choice_field({"backend": backend}, "backend", "astropy", choices=_BACKENDS, owner=owner)
     normalized_scale = _choice_field({"time_scale": time_scale}, "time_scale", "utc", choices=_TIME_SCALES, owner=owner)
     return {

@@ -257,6 +257,7 @@ def _prepare_slice_bound(
         return bound, None
     plan = preflight_query_output_namespace(
         context.ds, bound,
+        param_name=context.spec.name,
         sequence_dim=context.sequence_dim,
         batch_dims=context.batch_dims,
         owner="param sel", intent="trajectory",
@@ -298,6 +299,7 @@ def _point_selection_metadata(
     output_plan = preflight_query_output_namespace(
         context.ds,
         query,
+        param_name=context.spec.name,
         sequence_dim=context.sequence_dim,
         batch_dims=context.batch_dims,
         owner="param sel",
@@ -317,9 +319,22 @@ def _point_selection_metadata(
             sequence_dim=context.sequence_dim,
             op="param selection",
         ),
-        sequence_dependent_coordinate_names(context.ds, sequence_dim=context.sequence_dim),
+        _point_sequence_coordinates(context),
         output_plan,
     )
+
+
+def _point_sequence_coordinates(context: ParamRuntimeContext) -> tuple[str, ...]:
+    names = sequence_dependent_coordinate_names(context.ds, sequence_dim=context.sequence_dim)
+    return names + (context.spec.name,) if context.spec.name == context.sequence_dim else names
+
+
+def _point_finalize_query(
+    context: ParamRuntimeContext, ds: xr.Dataset, values: xr.DataArray, *, trajectory: bool,
+) -> xr.DataArray | None:
+    if not trajectory:
+        return values
+    return ds.coords[context.spec.name] if context.spec.name == context.sequence_dim else None
 
 
 def _point_select(
@@ -358,7 +373,7 @@ def _point_select(
     out = finalize_param_output(
         context,
         ds,
-        query=result.grid.values,
+        query=_point_finalize_query(context, ds, result.grid.values, trajectory=trajectory),
         query_dim=opts.query_dim,
         valid_query=valid,
         query_topology=result.query_topology,

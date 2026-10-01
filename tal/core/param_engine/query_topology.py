@@ -53,6 +53,7 @@ class QueryOutputPlan:
     sequence_dim: str
     batch_dims: tuple[str, ...]
     query_only_dims: tuple[str, ...]
+    param_name: str | None
     generated_names: frozenset[str]
     optional_generated_names: frozenset[str]
     consumed_names: frozenset[str]
@@ -116,14 +117,18 @@ def _preflight_query_name_claim(
     owner = plan.owner
     group = index_group_for_coordinate(query, name)
     consumed_query_axis = (
-        plan.intent == "trajectory" and name == plan.sequence_dim and name in query.dims
+        name == plan.sequence_dim and name in query.dims
+        and (plan.intent == "trajectory" or len(plan.query_only_dims) <= 1)
     )
-    sampled_sequence_axis = (
-        name == plan.sequence_dim and name in source.coords
-        and source.coords[name].dims == (plan.sequence_dim,)
+    unindexed_generated_axis = (
+        name in query.dims
+        and name not in query.coords and group is None
+        and (name == plan.sequence_dim or (
+            name == plan.param_name and plan.intent == "grid" and len(plan.query_only_dims) > 1
+        ))
     )
     if name in plan.generated_names and (name in query.dims or group is not None) and not (
-        sampled_sequence_axis or consumed_query_axis
+        unindexed_generated_axis or consumed_query_axis
     ):
         raise ValueError(
             f"{owner}: query axis or index {name!r} conflicts with generated output metadata; "
@@ -214,6 +219,7 @@ def preflight_query_output_namespace(
     generated_names: tuple[str, ...] = (),
     consumed_names: tuple[str, ...] = (),
     retain_sequence_coords: bool = False,
+    param_name: str | None = None,
 ) -> QueryOutputPlan:
     """Reject deterministic caller/output name conflicts before mapping."""
     query = without_inherited_query_metadata(query)
@@ -233,6 +239,7 @@ def preflight_query_output_namespace(
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
         query_only_dims=query_only_dims,
+        param_name=param_name,
         generated_names=frozenset(generated_names) | sampled_coords,
         optional_generated_names=frozenset((size_name,)) if size_name in generated_names else frozenset(),
         consumed_names=frozenset(consumed_names),
@@ -394,9 +401,9 @@ def _restore_stacked_dataset(
         if plan.query_dim in coord.dims
         else coord.variable.copy(deep=False)
         for name, coord in value.coords.items()
-        if name not in (plan.query_dim, *stacked_dims)
+        if name != plan.query_dim and (name not in stacked_dims or plan.query_dim in coord.dims)
     }
-    out = xr.Dataset(data_vars=data_vars, coords=generated_coords)
+    out = xr.Dataset(data_vars=data_vars, coords=xr.Coordinates(generated_coords, indexes={}))
     out.encoding = dict(value.encoding)
     out = _transfer_dataset_attrs_for_finalize(value, out, validate=False)
     out = restore_result_coordinates(out, source_coordinates)
@@ -477,15 +484,11 @@ def _trajectory_caller_coordinate(
     leading = tuple(dim for dim in plan.batch_dims if dim in topology.dims)
     dims = (*leading, *plan.query_only_dims)
     size_by_dim = dict(zip(topology.dims, topology.sizes, strict=True))
-    fillers = tuple(
-        xr.DataArray(np.arange(size_by_dim[dim]), dims=(dim,))
-        for dim in dims if dim not in coord.dims
-    )
-    expanded = xr.broadcast(coord, *fillers)[0].transpose(*dims)
+    expanded = coord.variable.set_dims({dim: size_by_dim[dim] for dim in dims}).transpose(*dims)
     shape = tuple(size_by_dim[dim] for dim in leading) + (int(prod(size_by_dim[dim] for dim in plan.query_only_dims)),)
     projected = xr.DataArray(
         reshape_query_data(
-            expanded.variable.data,
+            expanded.data,
             shape=shape,
             dtype=expanded.dtype,
             lazy=expanded.chunks is not None,

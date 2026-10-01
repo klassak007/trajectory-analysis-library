@@ -365,7 +365,7 @@ def test_astro_hard_a1_008_raw_dask_time_fails_without_compute() -> None:
         raise AssertionError("raw dask time unexpectedly computed")
 
     raw_time = da.from_delayed(delayed(fail_compute)(), shape=(1,), dtype="datetime64[ns]")
-    with pytest.raises(ValueError, match="raw lazy time arrays are not supported in astro A1"):
+    with pytest.raises(ValueError, match="raw lazy time arrays are not supported"):
         resolve_direction_runtime_context(location=_lla_ao(), time=raw_time)
 
 

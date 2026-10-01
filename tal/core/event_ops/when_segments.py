@@ -7,17 +7,18 @@ import xarray as xr
 
 from tal.utils.xarray_namespace import dataset_namespace_names, unique_temp_dim
 
+from ..orchestration.indexing import dimension_coordinates
 from ..orchestration.lazy import is_chunked_dataarray
 from ..param_engine.map_apply import gather_dataset_along_sequence
-from .when_common import enforce_when_on_empty, selected_when_mask
 from .evaluate import evaluate_mask
 from .event_primitives import SAMPLE_SENTINEL, batch_dims, lane_data
 from .finalize import finalize_event_output
 from .intervals import extract_intervals
 from .options import coerce_interval_extract_options
-from .pack import pack_interval_table
+from .pack import _assert_interval_var_namespace_safe, pack_interval_table
 from .resolve import EventEvalContext, resolve_event_eval_context
-from .types import Condition, WhenOptions, IntervalExtractOptions
+from .types import Condition, IntervalExtractOptions, WhenOptions
+from .when_common import enforce_when_on_empty, selected_when_mask
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
@@ -29,6 +30,18 @@ _SEGMENT_META = (
     "segment_end_index",
     "orig_index",
 )
+
+
+def _sequence_axis_coordinates(context: EventEvalContext) -> xr.Coordinates:
+    """Project the surviving sequence index without sampled auxiliary carriers."""
+    sequence_dim = context.runtime.sequence_dim
+    if context.runtime.spec.name == sequence_dim:
+        return xr.Coordinates()
+    source = context.runtime.ds
+    projected = dimension_coordinates(source, dims=(sequence_dim,))
+    names = source.xindexes.get_all_coords(sequence_dim) if sequence_dim in source.xindexes else {sequence_dim}
+    unrelated = tuple(name for name in projected if name not in names)
+    return xr.Dataset(coords=projected).drop_vars(unrelated).coords
 
 
 def _segment_interval_options(opts: WhenOptions, *, owner: str) -> IntervalExtractOptions:
@@ -103,14 +116,11 @@ def _build_orig_index_dynamic(
             )
     batch_shape = tuple(context.clock.sizes[dim] for dim in batch_dims(context))
     shape = (start_lanes.shape[1], sequence_size) if not batch_shape else batch_shape + (start_lanes.shape[1], sequence_size)
-    coords: dict[str, object] = {
-        segment_dim: start_idx.coords[segment_dim],
-        sequence_dim: context.clock.coords[sequence_dim],
-    }
-    for dim in context.runtime.batch_dims:
-        coords[dim] = context.clock.coords[dim]
+    coords = xr.Dataset(coords=dimension_coordinates(context.clock, dims=context.runtime.batch_dims))
+    coords = coords.assign_coords(_sequence_axis_coordinates(context))
+    coords = coords.assign_coords(dimension_coordinates(start_idx, dims=(segment_dim,)))
     dims = context.runtime.batch_dims + (segment_dim, sequence_dim)
-    return xr.DataArray(lane_rows.reshape(shape), dims=dims, coords=coords, name="orig_index").astype("int64")
+    return xr.DataArray(lane_rows.reshape(shape), dims=dims, coords=coords.coords, name="orig_index").astype("int64")
 
 
 def _bounded_orig_index_block(
@@ -162,7 +172,7 @@ def _build_orig_index_bounded(
         output_dtypes=[np.int64],
         **ufunc_kwargs,
     )
-    return out.assign_coords({sequence_dim: context.clock.coords[sequence_dim]}).rename("orig_index").astype("int64")
+    return out.assign_coords(_sequence_axis_coordinates(context)).rename("orig_index").astype("int64")
 
 
 def _build_orig_index(
@@ -198,7 +208,9 @@ def _safe_gather_indexer(orig_index: xr.DataArray, *, sequence_size: int) -> xr.
     return orig_index.where(orig_index >= 0, 0).clip(min=0, max=max(sequence_size - 1, 0)).astype("int64")
 
 
-def _mask_sequence_payload(ds: xr.Dataset, *, valid_samples: xr.DataArray, sequence_dim: str) -> xr.Dataset:
+def _mask_sequence_payload(
+    ds: xr.Dataset, *, valid_samples: xr.DataArray, sequence_dim: str, param_name: str,
+) -> xr.Dataset:
     var_updates = {
         name: var.where(valid_samples)
         for name, var in ds.data_vars.items()
@@ -207,7 +219,7 @@ def _mask_sequence_payload(ds: xr.Dataset, *, valid_samples: xr.DataArray, seque
     coord_updates = {
         name: coord.where(valid_samples)
         for name, coord in ds.coords.items()
-        if name != sequence_dim and sequence_dim in coord.dims
+        if (name != sequence_dim or name == param_name) and sequence_dim in coord.dims
     }
     out = ds.assign(var_updates) if var_updates else ds
     return out.assign_coords(coord_updates) if coord_updates else out
@@ -231,13 +243,14 @@ def _size_coord_name(ds: xr.Dataset, *, context: EventEvalContext, owner: str) -
 
 
 def _resolve_segment_table(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     condition: Condition,
     *,
     opts: WhenOptions,
     owner: str,
 ) -> tuple[EventEvalContext, xr.Dataset, xr.DataArray, str, str]:
     context = resolve_event_eval_context(ao, opts=opts.eval, owner=owner)
+    _assert_interval_var_namespace_safe(context, owner=owner)
     effective = evaluate_mask(condition, context=context, owner=owner)
     selected = selected_when_mask(
         effective,
@@ -308,20 +321,21 @@ def _gather_segment_dataset(
         owner=owner,
     )
     valid_samples = (orig_index >= 0).astype(bool)
-    masked = _mask_sequence_payload(gathered, valid_samples=valid_samples, sequence_dim=seq_dim)
-    if seq_dim in context.runtime.ds.coords and context.runtime.ds.coords[seq_dim].dims == (seq_dim,):
-        masked = masked.assign_coords({seq_dim: context.runtime.ds.coords[seq_dim]})
+    masked = _mask_sequence_payload(
+        gathered, valid_samples=valid_samples, sequence_dim=seq_dim, param_name=context.runtime.spec.name,
+    )
+    masked = masked.assign_coords(_sequence_axis_coordinates(context))
     return masked, orig_index, valid_samples
 
 
 def evaluate_when_segments_layout(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     condition: Condition,
     *,
     opts: WhenOptions,
     validate: bool = True,
     owner: str = "events.when",
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Evaluate condition-driven selection in segment-major layout.
 
     Parameters

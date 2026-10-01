@@ -195,8 +195,7 @@ def synchronize_param(
     Raises deterministic fail-closed errors when semantic/layout assumptions are
     not met. Numeric and datetime64 param coordinates cannot be mixed in one
     synchronization call. Datetime64 synchronization accepts timedelta-like
-    ``ParamSyncOptions.tol`` values; selection/index tolerances are not part of
-    T1.
+    ``ParamSyncOptions.tol`` values; selection and indexing remain tolerance-free.
 
     Examples
     --------
@@ -293,8 +292,7 @@ def synchronize(
     Raises deterministic fail-closed errors when semantic/layout assumptions are
     not met. Numeric and datetime64 param coordinates cannot be mixed in one
     synchronization call. Datetime64 synchronization accepts timedelta-like
-    ``ParamSyncOptions.tol`` values; selection/index tolerances are not part of
-    T1.
+    ``ParamSyncOptions.tol`` values; selection and indexing remain tolerance-free.
 
     Examples
     --------

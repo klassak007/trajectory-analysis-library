@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import itertools
+
+import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
+from dask.callbacks import Callback
 
 from tal import AnalysisObject
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
 from tal.spatial import (
     AO_TEMPORAL_KIND_VALUES,
     Acceleration,
@@ -13,7 +21,9 @@ from tal.spatial import (
     AngularVelocity,
     LinearAcceleration,
     LinearVelocity,
+    Pose,
     Position,
+    Rotation,
     Velocity,
     differentiate,
     integrate,
@@ -216,3 +226,100 @@ def test_spatial_core_159_d6_ao_default_target_cls_none_returns_analysis_object_
             )
             assert _spatial_rep(ao_out.as_dataset(copy="none")) == _spatial_rep(typed_out.as_dataset(copy="none"))
             xr.testing.assert_identical(ao_out.as_dataset(copy="none"), typed_out.as_dataset(copy="none"))
+
+
+def _typed_query_source(kind, lazy):
+    quat = np.tile([0.0, 0.0, 0.0, 1.0], (3, 1))
+    raw = xr.Dataset(
+        {"quat": (("sample", "q"), quat)},
+        coords={
+            "sample": [10, 20, 30],
+            "q": ["x", "y", "z", "w"],
+            "time": ("sample", [0.0, 1.0, 2.0]),
+        },
+    )
+    rotation = Rotation(
+        AnalysisObject.from_data(
+            raw, sequence_dim="sample", core_dims=("q",), param_coord="time"
+        )
+    )
+    if lazy:
+        rotation = Rotation(rotation.as_dataset().chunk({"sample": 1}))
+    if kind == "rotation":
+        return rotation
+    raw = xr.Dataset(
+        {"position": (("sample", "axis"), np.tile(np.arange(3.0)[:, None], (1, 3)))},
+        coords={
+            "sample": [10, 20, 30],
+            "axis": ["x", "y", "z"],
+            "time": ("sample", [0.0, 1.0, 2.0]),
+        },
+    )
+    position = Position(
+        AnalysisObject.from_data(
+            raw, sequence_dim="sample", core_dims=("axis",), param_coord="time"
+        )
+    )
+    return Pose.from_components(rotation, position)
+
+
+@pytest.mark.parametrize("kind", ["rotation", "pose"])
+@pytest.mark.parametrize("operation", ["at", "resample_to"])
+@pytest.mark.parametrize(
+    "lazy_source,validate,labels",
+    [(lazy, validate, "lazy") for lazy, validate in itertools.product([False, True], repeat=2)]
+    + [(False, True, "eager")],
+)
+def test_tut_022_typed_query_caller_labels_remain_lazy(
+    kind, operation, lazy_source, validate, labels
+):
+    ao = _typed_query_source(kind, lazy_source)
+    values = np.array([[0.2, 0.3], [1.2, 1.3]])
+    row = np.array([100, 200])
+    if labels == "lazy":
+        row = da.from_array(row, chunks=1)
+    query = xr.DataArray(
+        da.from_array(values, chunks=1),
+        dims=("row", "col"),
+        coords=xr.Coordinates(
+            {
+                "row": xr.Variable("row", row),
+                "tag": xr.Variable("row", np.array([4, 5])),
+            },
+            indexes={},
+        ),
+    )
+    before, source_before = query.copy(deep=True), ao.as_dataset()
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        result = getattr(ao.param, operation)(query, validate=validate).as_dataset()
+    assert not tasks
+    np.testing.assert_array_equal(result.time.compute(), values.ravel())
+    np.testing.assert_array_equal(result.row.compute(), [100, 100, 200, 200])
+    np.testing.assert_array_equal(result.tag.compute(), [4, 4, 5, 5])
+    xr.testing.assert_identical(query, before)
+    xr.testing.assert_identical(ao.as_dataset(), source_before)
+    assert "row" not in result.xindexes
+    assert result.row.dims == result.time.dims == ("sample",)
+
+
+@pytest.mark.parametrize("kind", ["rotation", "pose"])
+@pytest.mark.parametrize("operation", ["at", "resample_to"])
+@pytest.mark.parametrize("shape,validate", [((0, 2), False), ((2, 0), True), ((0, 0), True)])
+def test_tut_022_empty_typed_queries_keep_lazy_carrier_types(kind, operation, shape, validate):
+    """Typed empty products keep reviewed labels and parameter topology without planning work."""
+    source = _typed_query_source(kind, True)
+    labels = xr.Variable("row", da.from_array(np.arange(shape[0], dtype="int64"), chunks=1), attrs={"meaning": "row"})
+    query = xr.DataArray(da.from_array(np.empty(shape), chunks=1), dims=("row", "column"), coords=xr.Coordinates({"row": labels}, indexes={}))
+    before, original = source.as_dataset(), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        result = getattr(source.param, operation)(query, validate=validate).as_dataset()
+    assert not tasks
+    assert result.sizes["sample"] == 0
+    assert result.row.dtype == np.dtype("int64")
+    assert result.row.attrs == labels.attrs
+    assert result.row.dims == result.time.dims == ("sample",)
+    assert "row" not in result.xindexes
+    xr.testing.assert_identical(source.as_dataset(), before)
+    xr.testing.assert_identical(query, original)

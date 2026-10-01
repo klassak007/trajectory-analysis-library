@@ -25,8 +25,8 @@ TopocentricDirection.to_vector3(axis="axis", output_var="direction")
 ```
 
 `AstroBackend` is the public backend literal accepted by
-`AstroOptions.backend`. Astro A1 records `"spice"` as a valid option value, but
-SPICE behavior is contracted in a later slice.
+`AstroOptions.backend`. `"spice"` is accepted as an option value, but
+Sun-direction calculation supports only the Astropy backend.
 
 `TopocentricDirection` stores a `direction` variable with ENU labels
 `east`, `north`, and `up`. It also stores `altitude_deg` and `azimuth_deg`
@@ -42,13 +42,11 @@ from tal.astro.sun import SpiceSunOptions, SunDirectionOptions, direction_to_sun
 ```
 
 `direction_to_sun(...)` computes a topocentric ENU direction to the Sun from a
-geodetic observer and absolute datetime-like observation time. A2 executes only
-the Astropy backend. `SpiceSunOptions` is a public reserved options stub so the
-final option shape is stable, but passing SPICE options or selecting
-`backend="spice"` fails closed until a later backend phase.
+geodetic observer and absolute datetime-like observation time. Only the Astropy
+backend executes this calculation. Passing `SpiceSunOptions` or selecting
+`backend="spice"` raises `ValueError` because SPICE execution is unsupported.
 
-No top-level `tal.astro.direction_to_sun` alias is added in A2; import the
-operation from `tal.astro.sun`.
+Import the operation from `tal.astro.sun`.
 
 ## Autosummary
 
