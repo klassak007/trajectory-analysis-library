@@ -14,7 +14,7 @@ From the repository root, activate the intended environment and install the chec
 conda activate tal
 python -m pip install -e '.[notebooks]'
 python -m ipykernel install --user --name tal --display-name 'Python (tal)'
-python -m jupyterlab examples/tutorial
+PYTHONPATH="$PWD" python -m jupyterlab examples/tutorial
 ```
 
 In a worktree, an existing editable install may point to a different checkout. To avoid
@@ -30,6 +30,7 @@ Select **Python (tal)**. In a scratch cell, verify both the executable and the s
 ```python
 import sys
 import tal
+
 print(sys.executable)
 print(tal.__file__)
 ```
@@ -62,13 +63,33 @@ are existing core dependencies; no ROS, geo, or astro installation is needed.
 | [15 Robot-catching capstone](15_capstone_robot_catch.ipynb) | Relative distance, paired/grouped outcomes, anchor populations, and radius sensitivity |
 
 Start with 01–04; use 05–13 as focused references. Each notebook states its topics,
-learning outcomes, and prerequisites. Sections explain the distinctions first, make
-their numerical and coordinate consequences visible, then show the decisions they
-inform. Spatial field recipes are concentrated in 08; generic graph topology in 10
+learning outcomes, and prerequisites. Read the setup and purpose before executing a
+cell, then compare its result with the interpretation that follows. Foundational
+examples precede advanced worked variations and recorded-log applications.
+Spatial field recipes are concentrated in 08; generic graph topology in 10
 is separate from spatial providers and physical support in 11.
 
 The two capstones use different geometry and comparison populations. Their plots and
 worked sensitivities interpret results produced through visible TAL operations.
+
+## Reading the figures
+
+Figures connect inputs to results: sample/component boxes explain roles, sampling rugs
+expose clock differences, matched panels explain transformations, and paired dots
+compare the same trial identities. Filled observation markers and open estimate markers
+are distinguished where those meanings matter. Padding uses gray shading or hatching;
+missing observations remain explicit. Figure captions explain local color meanings.
+
+Notebook 02 introduces each layout field before wrapping data. Notebook 04 uses a
+curved synthetic signal to reveal interpolation error, then a linear log fixture as
+an exact control. Notebook 09 pairs exact polynomial controls with a nonlinear,
+irregularly sampled path. The capstones show representative geometry before population
+summaries, retaining unobserved outcomes and matched throw identities.
+
+The repository-local `presentation.py` only supplies plot defaults and display cleanup.
+TAL calls, data construction, and independent checks remain visible in the notebooks.
+The explicit import root in the launch commands makes this module available from both
+supported working directories; the notebooks do not change Python's search path.
 
 ## Data and interpretation
 
