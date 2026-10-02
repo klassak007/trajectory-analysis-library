@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 USER_GUIDE_DIR = REPO_ROOT / "docs" / "user-guide"
 EXAMPLE_ID_RE = re.compile(r"<!--\s*example-id:\s*([A-Z0-9-]+)\s*-->")
 
-USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
+USER_GUIDE_EXAMPLES_BY_CHAPTER = {
     "overview": ("UG-OVERVIEW-BASIC-WORKFLOW",),
     "core_concepts": ("UG-CORE-CONCEPTS-ROLES",),
     "illustrated_example": ("UG-ILLUSTRATED-WORKFLOW",),
@@ -25,15 +25,6 @@ USER_GUIDE_EXAMPLES_BY_CHAPTER: dict[str, tuple[str, ...]] = {
     "linalg": ("UG-LINALG-BASIC",),
     "numpy": ("UG-NUMPY-UFUNCS",),
     "spatial": ("UG-SPATIAL-POSE",),
-    "geo": (
-        "UG-GEO-LLA",
-        "UG-GEO-CONVERSION",
-        "UG-GEO-ENU",
-        "UG-GEO-DISTANCE",
-        "UG-GEO-INTERPOLATION",
-        "UG-GEO-CRS",
-    ),
-    "astro": ("UG-ASTRO-OPTIONS", "UG-ASTRO-DIRECTION"),
     "frames": ("UG-FRAMES-BASIC",),
     "viewing": ("UG-VIEWING-SCHEMA",),
 }

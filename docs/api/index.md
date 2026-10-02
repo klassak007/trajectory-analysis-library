@@ -26,7 +26,6 @@ reducers
 schema
 ufuncs
 numba
-astro
 frames
 io
 viz

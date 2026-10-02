@@ -9,7 +9,7 @@ import xarray as xr
 from tal.core import AnalysisObject
 from tal.io import finalize as io_finalize
 from tal.io import zarr_io as io_zarr
-from tests.architecture._budget import (
+from tools.architecture_budget import (
     file_loc,
     function_control_depths,
     function_lengths,

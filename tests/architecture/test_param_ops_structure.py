@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 
 def test_arch_paramops_001_sync_file_budget() -> None:

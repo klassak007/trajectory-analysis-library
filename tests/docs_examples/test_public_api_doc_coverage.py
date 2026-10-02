@@ -72,10 +72,9 @@ def _numba_autosummary_symbols() -> tuple[str, ...]:
 
 
 def test_curated_scope_counts_match_plan() -> None:
-    expected_total = 278
     observed = curated_scope_counts()
     assert observed == CURATED_SCOPE_COUNTS
-    assert sum(observed.values()) == expected_total
+    assert sum(observed.values()) == len(iter_curated_public_symbols())
 
 
 def test_scoped_public_symbols_have_docstrings() -> None:

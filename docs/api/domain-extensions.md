@@ -147,6 +147,80 @@ Supported import paths:
 .. autofunction:: tal.core.orchestration.resolve.resolve_param_runtime_context
 ```
 
+## Parameter Query Kernels
+
+TAL 0.2.0 supports the following author API for domain kernels. TAL parameter
+evaluation and `tal_extensions.geo` interpolation share this owner. Resolve a
+`ParamRuntimeContext`, prepare a query, execute a kernel using `plan.query`,
+`plan.query_dim`, and `plan.param_map`, then finalize its Dataset with the same
+plan. `plan.trajectory` describes whether the output retains sequence semantics.
+Topology and output-name plans remain private to TAL.
+
+`ParamQueryOptions` combines existing `ParamEvalOptions`, `output_intent`
+(`grid` or `trajectory`), and `mapped_dataset` (whole Dataset or selected payload).
+Deterministic name conflicts are rejected before map construction. The existing
+parameter-map coordinate boundary can evaluate parameter/query coordinates;
+payload interpolation and finalization preserve Dask laziness. Neither kernels
+nor callers may mutate the resolved source or arrays retained by the plan.
+Preserve surviving source coordinates and indexes during kernel assembly.
+Finalization enforces coordinate ownership even with `validate=False`.
+
+Supported import paths:
+
+- `tal.core.param_ops.query.ParamQueryOptions`
+- `tal.core.param_ops.query.ParamQueryPlan`
+- `tal.core.param_ops.query.prepare_param_query`
+- `tal.core.param_ops.query.finalize_param_query`
+- `tal.core.param_ops.ParamEvalOptions`
+- `tal.core.param_ops.types.ParamRuntimeContext`
+- `tal.core.param_engine.map_apply.gather_along_sequence`
+- `tal.core.param_engine.map_apply.empty_mapped_value`
+
+```{eval-rst}
+.. autoclass:: tal.core.param_ops.query.ParamQueryOptions
+
+.. py:class:: tal.core.param_ops.query.ParamQueryPlan
+
+   Opaque request-local query state returned by ``prepare_param_query``.
+   Read ``query``, ``query_dim``, ``param_map``, and ``trajectory`` to execute
+   the kernel. Pass the unchanged plan to ``finalize_param_query``. Plan
+   construction and private state belong to TAL.
+
+.. autofunction:: tal.core.param_ops.query.prepare_param_query
+
+.. autofunction:: tal.core.param_ops.query.finalize_param_query
+```
+
+## Other Owners Consumed By First-Party Extensions
+
+Support at these existing owner paths covers only the listed symbols. This does
+not expose their private helpers, broaden core responsibilities, or establish
+compatibility across TAL versions. TAL Extensions 0.1.0 requires TAL 0.2.0.
+
+| Owner | Supported symbols and purpose |
+| --- | --- |
+| `tal.core.dataset_ownership` | `analysis_object_dataset`: privileged, borrowed Dataset inspection; extensions must never mutate it |
+| `tal.core.orchestration.inputs` | `query_coord_from_other_input`: labeled query extraction |
+| `tal.core.orchestration.runtime_checks` | `require_exact_labels`, `require_explicit_unique_dim_labels`, `require_single_core_dim_with_length`, `require_var_contains_dims`, `select_single_numeric_var`: typed representation checks |
+| `tal.core.orchestration.resolve` | `effective_batch_dims`, `effective_sequence_dim`: explicit role overrides |
+| `tal.core.orchestration.lazy` | `is_chunked_dataarray`: reject intentionally unsupported eager-backend input |
+| `tal.core.orchestration.finalize` | `transfer_dataset_attrs`: detached source metadata transfer |
+| `tal.core.combine_ops.align` | `align_contexts`: resolved binary alignment |
+| `tal.core.combine_ops.types` | `AlignOptions`, `CombineContext`: immutable alignment declarations |
+| `tal.core.metadata_optional` | `shared_optional_name`: reconcile optional coordinate declarations |
+| `tal.core.schema` | `merge_schema`: detached schema updates at extension metadata owners |
+| `tal.core.param_ops.guards` | `validate_query_dim_name`, `assert_query_dim_safe`, `assert_reserved_metadata_safe`: query name validation |
+| `tal.spatial.conversion.finalize` | `allocate_free_dim_name`, `dataset_dim_names`: spatial conversion dimensions |
+| `tal.spatial.metadata` | `set_position_rep`, `set_expressed_in`: spatial metadata owner |
+| `tal.utils.frame_schema` | `get_frames`, `set_frames`: frame metadata owner |
+
+Spatial conversion helpers remain in spatial; extension-only math remains in
+the extension domain. The separately installed geo and astro implementations
+live under `extensions/src/tal_extensions`, and their schema namespaces remain
+`tal.ext.geo` and `tal.ext.astro`. Installing or importing either distribution
+does not register `Position.geo`; applications explicitly call
+`tal_extensions.geo.register_position_accessor()` when they use that accessor.
+
 ## Topology Planning
 
 Topology helpers support advanced domain operations that need TAL's semantic

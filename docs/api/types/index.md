@@ -25,7 +25,6 @@ field-recipes
 velocity
 acceleration
 path_solve
-geodetic
 ```
 
 ```{toctree}

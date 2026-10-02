@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 
 def _module_tree(path: Path) -> ast.Module:

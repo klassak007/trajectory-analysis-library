@@ -185,7 +185,7 @@ def _expected_sum(left: AnalysisObject, right: AnalysisObject, *, join: str) -> 
     left_data = left.as_dataset(copy="none")["value"]
     right_data = right.as_dataset(copy="none")["value"]
     aligned = xr.align(left_data, right_data, join=join, copy=False)
-    return aligned[0] + aligned[1]
+    return xr.ufuncs.add(aligned[0], aligned[1])
 
 
 def _expected_param_sum(
@@ -211,7 +211,7 @@ def _expected_param_sum(
             )
         )
     aligned = xr.align(*normalized, join=batch_join, copy=False)
-    return aligned[0] + aligned[1]
+    return xr.ufuncs.add(aligned[0], aligned[1])
 
 
 def test_align_perf_001_exact_sequence_and_batch_skip_identity_indexing(

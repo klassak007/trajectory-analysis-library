@@ -1,6 +1,13 @@
 (developer-guide-domain-extensions)=
 # Domain Extensions
 
+TAL 0.2.0 is the base distribution. First-party experimental geo and astro are
+owned by the separately installed TAL Extensions 0.1.0 project under
+`extensions/src/tal_extensions`. Both trees follow the repository's architecture
+policies. The {doc}`../api/domain-extensions` lists supported author imports,
+including the shared parameter query owner. Domain math stays in extensions;
+query topology, coordinate ownership, schema, and validity stay with TAL owners.
+
 A TAL domain extension is a small package layer that defines typed
 `AnalysisObject` subclasses, claims metadata under `tal.ext.<namespace>`, and
 delegates shared trajectory semantics to TAL core helpers. The domain package

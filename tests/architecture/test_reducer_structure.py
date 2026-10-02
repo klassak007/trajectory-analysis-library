@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 CORE_REDUCER_DIR = Path("tal/core/reducer_ops")
 

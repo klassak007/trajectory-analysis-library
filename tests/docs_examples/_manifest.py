@@ -15,7 +15,7 @@ class SymbolRecord:
     owner_class: str | None = None
 
 
-CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
+CURATED_SYMBOLS_BY_SUBSYSTEM = {
     "core": (
         "tal.core.analysis_object.AnalysisObject.param",
         "tal.core.analysis_object.AnalysisObject.combine",
@@ -227,44 +227,6 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
         "tal.spatial.metadata.frame_motion.set_frame_inertial_status",
         "tal.spatial.metadata.frame_motion.propagate_inertial_status",
     ),
-    "geo": (
-        "tal.geo.options.ENUOptions",
-        "tal.geo.options.GeodesicOptions",
-        "tal.geo.options.GeodeticInterpolationOptions",
-        "tal.geo.options.GeodeticOptions",
-        "tal.geo.options.LocalOrigin",
-        "tal.geo.accessor.PositionGeoAccessor.to_lla",
-        "tal.geo.accessor.PositionGeoAccessor.to_enu",
-        "tal.geo.accessor.PositionGeoAccessor.to_ecef",
-        "tal.geo.temporal.GeodeticParamAccessor.at",
-        "tal.geo.temporal.GeodeticParamAccessor.resample_to",
-        "tal.geo.temporal.GeodeticParamAccessor.interp_like",
-        "tal.geo.geodetic.GeodeticPosition",
-        "tal.geo.geodetic.GeodeticPosition.from_lla",
-        "tal.geo.geodetic.GeodeticPosition.to_ecef",
-        "tal.geo.geodetic.GeodeticPosition.from_ecef",
-        "tal.geo.geodetic.GeodeticPosition.to_enu",
-        "tal.geo.geodetic.GeodeticPosition.to_crs",
-        "tal.geo.geodetic.GeodeticPosition.distance_to",
-        "tal.geo.geodetic.GeodeticPosition.initial_bearing_to",
-        "tal.geo.geodetic.GeodeticPosition.final_bearing_to",
-        "tal.geo.projected.ProjectedPosition",
-        "tal.geo.projected.ProjectedPosition.from_projected",
-        "tal.geo.projected.ProjectedPosition.to_crs",
-        "tal.geo.from_ecef",
-        "tal.geo.transform_crs",
-    ),
-    "astro": (
-        "tal.astro.options.AstroBackend",
-        "tal.astro.options.AstroIERSOptions",
-        "tal.astro.options.AstroOptions",
-        "tal.astro.options.AstroTimeOptions",
-        "tal.astro.direction.TopocentricDirection",
-        "tal.astro.direction.TopocentricDirection.to_vector3",
-        "tal.astro.sun.SpiceSunOptions",
-        "tal.astro.sun.SunDirectionOptions",
-        "tal.astro.sun.direction_to_sun",
-    ),
     "frames": (
         "tal.frames.registry.FrameGraph.freeze",
         "tal.frames.registry.FrameGraph.frozen",
@@ -314,19 +276,17 @@ CURATED_SYMBOLS_BY_SUBSYSTEM: dict[str, tuple[str, ...]] = {
     ),
 }
 
-CURATED_SCOPE_COUNTS: dict[str, int] = {
+CURATED_SCOPE_COUNTS = {
     "core": 85,
     "linalg": 30,
     "spatial": 90,
-    "geo": 25,
-    "astro": 9,
     "frames": 19,
     "io": 5,
     "viz": 8,
     "utils": 7,
 }
 
-SUPPORT_OWNER_SYMBOLS: tuple[str, ...] = (
+SUPPORT_OWNER_SYMBOLS = (
     "tal.core.analysis_object.AnalysisObject",
     "tal.linalg.array.Array",
     "tal.core.combine_ops.accessor.concat_sequence",
@@ -335,23 +295,96 @@ SUPPORT_OWNER_SYMBOLS: tuple[str, ...] = (
     "tal.utils.xarray_namespace.rename_dims_collision_safe",
 )
 
-DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "tal.core.analysis_object.AnalysisObject.from_data": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.analysis_object.AnalysisObject.set_roles": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.analysis_object.AnalysisObject.set_param_coord": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.analysis_object.AnalysisObject.set_validity": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.analysis_object.AnalysisObject.to_dataarray": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.analysis_object.AnalysisObject.b": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.analysis_object.AnalysisObject.a": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.param_ops.accessor.ParamAccessor.sel": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.param_ops.accessor.ParamAccessor.at": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.param_ops.accessor.ParamAccessor.interp_like": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.event_ops.accessor.EventsAccessor.when": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.event_ops.accessor.EventsAccessor.around": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.core.group_ops.accessor.GroupAccessor.groupby": ("Parameters", "Returns", "Notes", "Examples"),
+DOCSTRING_SECTION_REQUIREMENTS = {
+    "tal.core.analysis_object.AnalysisObject.from_data": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.analysis_object.AnalysisObject.set_roles": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.analysis_object.AnalysisObject.set_param_coord": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.analysis_object.AnalysisObject.set_validity": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.analysis_object.AnalysisObject.to_dataarray": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.analysis_object.AnalysisObject.b": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.analysis_object.AnalysisObject.a": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.param_ops.accessor.ParamAccessor.sel": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.param_ops.accessor.ParamAccessor.at": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.param_ops.accessor.ParamAccessor.interp_like": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.event_ops.accessor.EventsAccessor.when": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.event_ops.accessor.EventsAccessor.around": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.core.group_ops.accessor.GroupAccessor.groupby": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
     "tal.core.group_ops.batch_view.BatchGroupedView": ("Notes", "Examples"),
-    "tal.core.group_ops.grouped_types.BatchGroupReduceOptions": ("Parameters", "Examples"),
-    "tal.core.combine_ops.accessor.concat_sequence": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.core.group_ops.grouped_types.BatchGroupReduceOptions": (
+        "Parameters",
+        "Examples",
+    ),
+    "tal.core.combine_ops.accessor.concat_sequence": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
     "tal.linalg.ops.add.add": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.ops.sub.sub": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.ops.dot.dot": ("Parameters", "Returns", "Notes", "Examples"),
@@ -364,8 +397,18 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "tal.linalg.vector.Vector.dot": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.vector.Vector.norm": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.linalg.matrix.Matrix.solve": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.linalg.vector3.Vector3.from_xyz": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.spatial.position.Position.to_frame": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.linalg.vector3.Vector3.from_xyz": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.spatial.position.Position.to_frame": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
     "tal.spatial.position.Position.with_graph": (
         "Parameters",
         "Returns",
@@ -430,35 +473,39 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "Notes",
         "Examples",
     ),
-    "tal.spatial.rotation.Rotation.to_rep": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.spatial.pose.Pose.from_components": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.spatial.pose.Pose.register": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.spatial.path_solve.solve_pose_path_transform": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.from_lla": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.to_ecef": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.from_ecef": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.to_enu": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.to_crs": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.distance_to": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.initial_bearing_to": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.geodetic.GeodeticPosition.final_bearing_to": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.temporal.GeodeticParamAccessor.at": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.temporal.GeodeticParamAccessor.resample_to": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.temporal.GeodeticParamAccessor.interp_like": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.accessor.PositionGeoAccessor.to_lla": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.accessor.PositionGeoAccessor.to_enu": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.accessor.PositionGeoAccessor.to_ecef": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.projected.ProjectedPosition.from_projected": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.projected.ProjectedPosition.to_crs": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.from_ecef": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.geo.transform_crs": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.astro.sun.SpiceSunOptions": ("Notes", "Examples"),
-    "tal.astro.sun.SunDirectionOptions": ("Parameters", "Notes", "Examples"),
-    "tal.astro.sun.direction_to_sun": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
-    "tal.astro.direction.TopocentricDirection.to_vector3": ("Parameters", "Returns", "Raises", "Notes", "Examples"),
+    "tal.spatial.rotation.Rotation.to_rep": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.spatial.pose.Pose.from_components": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
+    "tal.spatial.pose.Pose.register": (
+        "Parameters",
+        "Returns",
+        "Raises",
+        "Notes",
+        "Examples",
+    ),
+    "tal.spatial.path_solve.solve_pose_path_transform": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
     "tal.io.csv_logs.read_csv_logs": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.frames.topology.find_path": ("Parameters", "Returns", "Notes", "Examples"),
-    "tal.frames.snapshot.snapshot_from_seeds": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.frames.snapshot.snapshot_from_seeds": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
     "tal.viz.surface.line": ("Parameters", "Returns", "Notes", "Examples"),
     "tal.utils.frame_ops.FramesAccessor.resolve": (
         "Parameters",
@@ -474,10 +521,15 @@ DOCSTRING_SECTION_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "Notes",
         "Examples",
     ),
-    "tal.utils.xarray_namespace.rename_dims_collision_safe": ("Parameters", "Returns", "Notes", "Examples"),
+    "tal.utils.xarray_namespace.rename_dims_collision_safe": (
+        "Parameters",
+        "Returns",
+        "Notes",
+        "Examples",
+    ),
 }
 
-EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
+EXAMPLE_REQUIRED_SYMBOLS = {
     "tal.core.analysis_object.AnalysisObject.from_data": ("CORE-AO-FROM-DATA",),
     "tal.core.analysis_object.AnalysisObject.set_roles": ("CORE-AO-SET-ROLES",),
     "tal.core.analysis_object.AnalysisObject.as_dataset": ("CORE-AO-XARRAY-METHODS",),
@@ -487,7 +539,9 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.core.analysis_object.AnalysisObject.drop_vars": ("CORE-AO-XARRAY-METHODS",),
     "tal.core.analysis_object.AnalysisObject.rename": ("CORE-AO-XARRAY-METHODS",),
     "tal.core.analysis_object.AnalysisObject.transpose": ("CORE-AO-XARRAY-METHODS",),
-    "tal.core.analysis_object.AnalysisObject.validate_schema": ("CORE-AO-XARRAY-METHODS",),
+    "tal.core.analysis_object.AnalysisObject.validate_schema": (
+        "CORE-AO-XARRAY-METHODS",
+    ),
     "tal.core.analysis_object.AnalysisObject.mean": ("CORE-AO-REDUCERS",),
     "tal.core.analysis_object.AnalysisObject.sum": ("CORE-AO-REDUCERS",),
     "tal.core.analysis_object.AnalysisObject.std": ("CORE-AO-REDUCERS",),
@@ -499,14 +553,24 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.core.analysis_object.AnalysisObject.any": ("CORE-AO-REDUCERS",),
     "tal.core.analysis_object.AnalysisObject.all": ("CORE-AO-REDUCERS",),
     "tal.core.param_ops.accessor.ParamAccessor.at": ("CORE-PARAM-AT",),
-    "tal.core.param_ops.accessor.ParamAccessor.interp_like": ("CORE-PARAM-INTERP-LIKE",),
+    "tal.core.param_ops.accessor.ParamAccessor.interp_like": (
+        "CORE-PARAM-INTERP-LIKE",
+    ),
     "tal.core.event_ops.accessor.EventsAccessor.when": ("CORE-EVENT-WHEN",),
     "tal.core.group_ops.accessor.GroupAccessor.groupby": ("CORE-GROUP-GROUPBY",),
     "tal.core.combine_ops.accessor.concat_sequence": ("CORE-COMBINE-CONCAT-SEQUENCE",),
-    "tal.core.combine_ops.accessor.CombineAccessor.assemble_core": ("CORE-COMBINE-CORE-LAYOUTS",),
-    "tal.core.combine_ops.accessor.CombineAccessor.stack_core": ("CORE-COMBINE-CORE-LAYOUTS",),
-    "tal.core.combine_ops.accessor.CombineAccessor.block_core": ("CORE-COMBINE-CORE-LAYOUTS",),
-    "tal.core.component_ops.accessor.ComponentsAccessor.registry": ("CORE-COMPONENT-REGISTRY",),
+    "tal.core.combine_ops.accessor.CombineAccessor.assemble_core": (
+        "CORE-COMBINE-CORE-LAYOUTS",
+    ),
+    "tal.core.combine_ops.accessor.CombineAccessor.stack_core": (
+        "CORE-COMBINE-CORE-LAYOUTS",
+    ),
+    "tal.core.combine_ops.accessor.CombineAccessor.block_core": (
+        "CORE-COMBINE-CORE-LAYOUTS",
+    ),
+    "tal.core.component_ops.accessor.ComponentsAccessor.registry": (
+        "CORE-COMPONENT-REGISTRY",
+    ),
     "tal.linalg.ops.add.add": ("LINALG-ADD",),
     "tal.linalg.ops.sub.sub": ("LINALG-SUB",),
     "tal.linalg.ops.dot.dot": ("LINALG-DOT",),
@@ -555,57 +619,51 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.spatial.pose.Pose.apply": ("SPATIAL-POSE-BASIC",),
     "tal.spatial.pose.Pose.register": ("SPATIAL-POSE-REGISTER",),
     "tal.spatial.path_solve.solve_pose_path_transform": ("SPATIAL-PATH-SOLVE-POSE",),
-    "tal.spatial.velocity.Velocity.from_linear_angular": ("SPATIAL-VELOCITY-COMPONENTS",),
+    "tal.spatial.velocity.Velocity.from_linear_angular": (
+        "SPATIAL-VELOCITY-COMPONENTS",
+    ),
     "tal.spatial.velocity.Velocity.from_vector6": ("SPATIAL-VELOCITY-COMPONENTS",),
     "tal.spatial.velocity.Velocity.to_rep": ("SPATIAL-VELOCITY-COMPONENTS",),
     "tal.spatial.velocity.Velocity.as_components": ("SPATIAL-VELOCITY-COMPONENTS",),
     "tal.spatial.velocity.Velocity.as_vector6": ("SPATIAL-VELOCITY-COMPONENTS",),
     "tal.spatial.velocity.Velocity.linear": ("SPATIAL-VELOCITY-COMPONENTS",),
     "tal.spatial.velocity.Velocity.angular": ("SPATIAL-VELOCITY-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.from_linear_angular": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.from_vector6": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.to_rep": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.as_components": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.as_vector6": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.linear": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.acceleration.Acceleration.angular": ("SPATIAL-ACCELERATION-COMPONENTS",),
-    "tal.spatial.metadata.frame_motion.get_edge_motion_class": ("SPATIAL-FRAME-MOTION-METADATA",),
-    "tal.spatial.metadata.frame_motion.set_edge_motion_class": ("SPATIAL-FRAME-MOTION-METADATA",),
-    "tal.spatial.metadata.frame_motion.get_frame_inertial_status": ("SPATIAL-FRAME-MOTION-METADATA",),
-    "tal.spatial.metadata.frame_motion.set_frame_inertial_status": ("SPATIAL-FRAME-MOTION-METADATA",),
-    "tal.spatial.metadata.frame_motion.propagate_inertial_status": ("SPATIAL-FRAME-MOTION-METADATA",),
-    "tal.geo.options.ENUOptions": ("GEO-ENU-OPTIONS",),
-    "tal.geo.options.GeodesicOptions": ("GEO-GEODESIC-OPTIONS",),
-    "tal.geo.options.GeodeticInterpolationOptions": ("GEO-INTERPOLATION-OPTIONS",),
-    "tal.geo.options.GeodeticOptions": ("GEO-GEODETIC-OPTIONS",),
-    "tal.geo.options.LocalOrigin": ("GEO-ENU-OPTIONS",),
-    "tal.geo.accessor.PositionGeoAccessor.to_lla": ("GEO-ENU-CONVERSION",),
-    "tal.geo.accessor.PositionGeoAccessor.to_enu": ("GEO-ENU-CONVERSION",),
-    "tal.geo.accessor.PositionGeoAccessor.to_ecef": ("GEO-ENU-CONVERSION",),
-    "tal.geo.temporal.GeodeticParamAccessor.at": ("GEO-INTERPOLATION",),
-    "tal.geo.temporal.GeodeticParamAccessor.resample_to": ("GEO-INTERPOLATION",),
-    "tal.geo.temporal.GeodeticParamAccessor.interp_like": ("GEO-INTERPOLATION",),
-    "tal.geo.geodetic.GeodeticPosition.from_lla": ("GEO-GEODETIC-FROM-LLA",),
-    "tal.geo.geodetic.GeodeticPosition.to_ecef": ("GEO-GEODETIC-CONVERSION",),
-    "tal.geo.geodetic.GeodeticPosition.from_ecef": ("GEO-GEODETIC-CONVERSION",),
-    "tal.geo.geodetic.GeodeticPosition.to_enu": ("GEO-ENU-CONVERSION",),
-    "tal.geo.geodetic.GeodeticPosition.to_crs": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.geodetic.GeodeticPosition.distance_to": ("GEO-DISTANCE-BEARING",),
-    "tal.geo.geodetic.GeodeticPosition.initial_bearing_to": ("GEO-DISTANCE-BEARING",),
-    "tal.geo.geodetic.GeodeticPosition.final_bearing_to": ("GEO-DISTANCE-BEARING",),
-    "tal.geo.projected.ProjectedPosition.from_projected": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.projected.ProjectedPosition.to_crs": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.from_ecef": ("GEO-GEODETIC-CONVERSION",),
-    "tal.geo.transform_crs": ("GEO-CRS-TRANSFORM",),
-    "tal.astro.options.AstroBackend": ("ASTRO-OPTIONS",),
-    "tal.astro.options.AstroIERSOptions": ("ASTRO-OPTIONS",),
-    "tal.astro.options.AstroOptions": ("ASTRO-OPTIONS",),
-    "tal.astro.options.AstroTimeOptions": ("ASTRO-OPTIONS",),
-    "tal.astro.direction.TopocentricDirection": ("ASTRO-TOPOCENTRIC-DIRECTION",),
-    "tal.astro.direction.TopocentricDirection.to_vector3": ("ASTRO-DIRECTION-TO-VECTOR3",),
-    "tal.astro.sun.SpiceSunOptions": ("ASTRO-SUN-OPTIONS",),
-    "tal.astro.sun.SunDirectionOptions": ("ASTRO-SUN-OPTIONS",),
-    "tal.astro.sun.direction_to_sun": ("ASTRO-SUN-DIRECTION",),
+    "tal.spatial.acceleration.Acceleration.from_linear_angular": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.acceleration.Acceleration.from_vector6": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.acceleration.Acceleration.to_rep": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.acceleration.Acceleration.as_components": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.acceleration.Acceleration.as_vector6": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.acceleration.Acceleration.linear": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.acceleration.Acceleration.angular": (
+        "SPATIAL-ACCELERATION-COMPONENTS",
+    ),
+    "tal.spatial.metadata.frame_motion.get_edge_motion_class": (
+        "SPATIAL-FRAME-MOTION-METADATA",
+    ),
+    "tal.spatial.metadata.frame_motion.set_edge_motion_class": (
+        "SPATIAL-FRAME-MOTION-METADATA",
+    ),
+    "tal.spatial.metadata.frame_motion.get_frame_inertial_status": (
+        "SPATIAL-FRAME-MOTION-METADATA",
+    ),
+    "tal.spatial.metadata.frame_motion.set_frame_inertial_status": (
+        "SPATIAL-FRAME-MOTION-METADATA",
+    ),
+    "tal.spatial.metadata.frame_motion.propagate_inertial_status": (
+        "SPATIAL-FRAME-MOTION-METADATA",
+    ),
     "tal.io.csv_logs.read_csv_logs": ("IO-READ-CSV-LOGS",),
     "tal.io.surface.AnalysisObjectIOAccessor.to_zarr": ("IO-ROUNDTRIP-SURFACE",),
     "tal.io.surface._from_zarr": ("IO-ROUNDTRIP-SURFACE",),
@@ -635,10 +693,12 @@ EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.utils.topology_operation_families.operation_intent_support_for_operation_family": (
         "UTILS-TOPOLOGY-INTENT-SUPPORT",
     ),
-    "tal.utils.xarray_namespace.rename_dims_collision_safe": ("UTILS-XARRAY-RENAME-DIMS",),
+    "tal.utils.xarray_namespace.rename_dims_collision_safe": (
+        "UTILS-XARRAY-RENAME-DIMS",
+    ),
 }
 
-INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
+INVENTORY_EXAMPLE_REQUIRED_SYMBOLS = {
     "tal.core.analysis_object.AnalysisObject": ("CORE-AO-FROM-DATA",),
     "tal.core.analysis_object.AnalysisObject.combine": ("CORE-COMBINE-SURFACE",),
     "tal.core.analysis_object.AnalysisObject.events": ("CORE-EVENT-SURFACE",),
@@ -699,13 +759,23 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.core.combine_ops.accessor.concat_core": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.accessor.decompose_core": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.accessor.overlay_core": ("CORE-COMBINE-SURFACE",),
-    "tal.core.combine_ops.accessor.CombineAccessor.concat_batch": ("CORE-COMBINE-SURFACE",),
-    "tal.core.combine_ops.accessor.CombineAccessor.concat_sequence": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.concat_batch": (
+        "CORE-COMBINE-SURFACE",
+    ),
+    "tal.core.combine_ops.accessor.CombineAccessor.concat_sequence": (
+        "CORE-COMBINE-SURFACE",
+    ),
     "tal.core.combine_ops.accessor.CombineAccessor.merge": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.accessor.CombineAccessor.align": ("CORE-COMBINE-SURFACE",),
-    "tal.core.combine_ops.accessor.CombineAccessor.concat_core": ("CORE-COMBINE-SURFACE",),
-    "tal.core.combine_ops.accessor.CombineAccessor.decompose_core": ("CORE-COMBINE-SURFACE",),
-    "tal.core.combine_ops.accessor.CombineAccessor.overlay_core": ("CORE-COMBINE-SURFACE",),
+    "tal.core.combine_ops.accessor.CombineAccessor.concat_core": (
+        "CORE-COMBINE-SURFACE",
+    ),
+    "tal.core.combine_ops.accessor.CombineAccessor.decompose_core": (
+        "CORE-COMBINE-SURFACE",
+    ),
+    "tal.core.combine_ops.accessor.CombineAccessor.overlay_core": (
+        "CORE-COMBINE-SURFACE",
+    ),
     "tal.core.combine_ops.types.BatchConcatOptions": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.types.SequenceConcatOptions": ("CORE-COMBINE-SURFACE",),
     "tal.core.combine_ops.types.MergeOptions": ("CORE-COMBINE-SURFACE",),
@@ -718,13 +788,25 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.core.component_ops.extract.extract_components": ("CORE-COMPONENT-SURFACE",),
     "tal.core.component_ops.patch.patch_components": ("CORE-COMPONENT-SURFACE",),
     "tal.core.component_ops.compose.compose_components": ("CORE-COMPONENT-SURFACE",),
-    "tal.core.component_ops.accessor.ComponentsAccessor.define": ("CORE-COMPONENT-SURFACE",),
-    "tal.core.component_ops.accessor.ComponentsAccessor.registry": ("CORE-COMPONENT-SURFACE",),
-    "tal.core.component_ops.accessor.ComponentsAccessor.extract": ("CORE-COMPONENT-SURFACE",),
-    "tal.core.component_ops.accessor.ComponentsAccessor.patch": ("CORE-COMPONENT-SURFACE",),
-    "tal.core.component_ops.accessor.ComponentsAccessor.compose": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.accessor.ComponentsAccessor.define": (
+        "CORE-COMPONENT-SURFACE",
+    ),
+    "tal.core.component_ops.accessor.ComponentsAccessor.registry": (
+        "CORE-COMPONENT-SURFACE",
+    ),
+    "tal.core.component_ops.accessor.ComponentsAccessor.extract": (
+        "CORE-COMPONENT-SURFACE",
+    ),
+    "tal.core.component_ops.accessor.ComponentsAccessor.patch": (
+        "CORE-COMPONENT-SURFACE",
+    ),
+    "tal.core.component_ops.accessor.ComponentsAccessor.compose": (
+        "CORE-COMPONENT-SURFACE",
+    ),
     "tal.core.component_ops.types.ComponentSpec": ("CORE-COMPONENT-SURFACE",),
-    "tal.core.component_ops.types.ComponentRegistryOptions": ("CORE-COMPONENT-SURFACE",),
+    "tal.core.component_ops.types.ComponentRegistryOptions": (
+        "CORE-COMPONENT-SURFACE",
+    ),
     "tal.core.component_ops.types.ComponentExtractOptions": ("CORE-COMPONENT-SURFACE",),
     "tal.core.component_ops.types.ComponentPatchOptions": ("CORE-COMPONENT-SURFACE",),
     "tal.core.component_ops.types.ComponentComposeOptions": ("CORE-COMPONENT-SURFACE",),
@@ -739,35 +821,6 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.linalg.ops.matmul.matmul": ("LINALG-MATMUL",),
     "tal.linalg.ops.solve.solve": ("LINALG-SOLVE",),
     "tal.linalg.ops.pinv.pinv": ("LINALG-PINV",),
-    "tal.geo.options.ENUOptions": ("GEO-ENU-OPTIONS",),
-    "tal.geo.options.GeodesicOptions": ("GEO-GEODESIC-OPTIONS",),
-    "tal.geo.options.GeodeticInterpolationOptions": ("GEO-INTERPOLATION-OPTIONS",),
-    "tal.geo.options.GeodeticOptions": ("GEO-GEODETIC-OPTIONS",),
-    "tal.geo.options.LocalOrigin": ("GEO-ENU-OPTIONS",),
-    "tal.geo.accessor.PositionGeoAccessor.to_lla": ("GEO-ENU-CONVERSION",),
-    "tal.geo.accessor.PositionGeoAccessor.to_enu": ("GEO-ENU-CONVERSION",),
-    "tal.geo.accessor.PositionGeoAccessor.to_ecef": ("GEO-ENU-CONVERSION",),
-    "tal.geo.temporal.GeodeticParamAccessor.at": ("GEO-INTERPOLATION",),
-    "tal.geo.temporal.GeodeticParamAccessor.resample_to": ("GEO-INTERPOLATION",),
-    "tal.geo.temporal.GeodeticParamAccessor.interp_like": ("GEO-INTERPOLATION",),
-    "tal.geo.geodetic.GeodeticPosition": ("GEO-GEODETIC-FROM-LLA",),
-    "tal.geo.geodetic.GeodeticPosition.from_lla": ("GEO-GEODETIC-FROM-LLA",),
-    "tal.geo.geodetic.GeodeticPosition.to_ecef": ("GEO-GEODETIC-CONVERSION",),
-    "tal.geo.geodetic.GeodeticPosition.from_ecef": ("GEO-GEODETIC-CONVERSION",),
-    "tal.geo.geodetic.GeodeticPosition.to_enu": ("GEO-ENU-CONVERSION",),
-    "tal.geo.geodetic.GeodeticPosition.to_crs": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.geodetic.GeodeticPosition.distance_to": ("GEO-DISTANCE-BEARING",),
-    "tal.geo.geodetic.GeodeticPosition.initial_bearing_to": ("GEO-DISTANCE-BEARING",),
-    "tal.geo.geodetic.GeodeticPosition.final_bearing_to": ("GEO-DISTANCE-BEARING",),
-    "tal.geo.projected.ProjectedPosition": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.projected.ProjectedPosition.from_projected": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.projected.ProjectedPosition.to_crs": ("GEO-CRS-TRANSFORM",),
-    "tal.geo.from_ecef": ("GEO-GEODETIC-CONVERSION",),
-    "tal.geo.transform_crs": ("GEO-CRS-TRANSFORM",),
-    "tal.astro.options.AstroIERSOptions": ("ASTRO-OPTIONS",),
-    "tal.astro.options.AstroOptions": ("ASTRO-OPTIONS",),
-    "tal.astro.options.AstroTimeOptions": ("ASTRO-OPTIONS",),
-    "tal.astro.direction.TopocentricDirection": ("ASTRO-TOPOCENTRIC-DIRECTION",),
     "tal.io.csv_logs.read_csv_logs": ("IO-READ-CSV-LOGS",),
     "tal.io.csv_logs.write_csv_logs": ("IO-ROUNDTRIP-SURFACE",),
     "tal.io.ros_logs.read_ros_logs": ("IO-ROS-OPTIONAL-SURFACE",),
@@ -804,17 +857,13 @@ INVENTORY_EXAMPLE_REQUIRED_SYMBOLS: dict[str, tuple[str, ...]] = {
     "tal.viz.accessor.AnalysisObjectVizAccessor.component": ("VIZ-SURFACE-ACCESSORS",),
 }
 
-DUUNDER_FAMILY_DOC_OWNER: dict[str, tuple[str, ...]] = {
+DUUNDER_FAMILY_DOC_OWNER = {
     "tal.core.analysis_object.AnalysisObject": (
         "Operator Families",
         "xarray",
         "alignment",
     ),
-    "tal.linalg.array.Array": (
-        "Operator Families",
-        "xarray",
-        "alignment",
-    ),
+    "tal.linalg.array.Array": ("Operator Families", "xarray", "alignment"),
 }
 
 
@@ -885,18 +934,26 @@ def iter_curated_public_symbols() -> list[SymbolRecord]:
         for symbol in CURATED_SYMBOLS_BY_SUBSYSTEM[subsystem]:
             obj = _resolve_symbol(symbol)
             owner_class = _owner_class_symbol(symbol)
-            records.append(SymbolRecord(symbol=symbol, kind=_symbol_kind(obj, owner_class), obj=obj, owner_class=owner_class))
+            records.append(
+                SymbolRecord(
+                    symbol=symbol,
+                    kind=_symbol_kind(obj, owner_class),
+                    obj=obj,
+                    owner_class=owner_class,
+                )
+            )
     return records
 
 
 def iter_scoped_public_symbols() -> list[SymbolRecord]:
     records: dict[str, SymbolRecord] = {
-        record.symbol: record
-        for record in iter_curated_public_symbols()
+        record.symbol: record for record in iter_curated_public_symbols()
     }
     for symbol in SUPPORT_OWNER_SYMBOLS:
         obj = _resolve_symbol(symbol)
-        records[symbol] = SymbolRecord(symbol=symbol, kind="class", obj=obj, owner_class=None)
+        records[symbol] = SymbolRecord(
+            symbol=symbol, kind="class", obj=obj, owner_class=None
+        )
     return [records[key] for key in sorted(records)]
 
 
@@ -905,7 +962,14 @@ def iter_inventory_example_symbols() -> list[SymbolRecord]:
     for symbol in sorted(INVENTORY_EXAMPLE_REQUIRED_SYMBOLS):
         obj = _resolve_symbol(symbol)
         owner_class = _owner_class_symbol(symbol)
-        records.append(SymbolRecord(symbol=symbol, kind=_symbol_kind(obj, owner_class), obj=obj, owner_class=owner_class))
+        records.append(
+            SymbolRecord(
+                symbol=symbol,
+                kind=_symbol_kind(obj, owner_class),
+                obj=obj,
+                owner_class=owner_class,
+            )
+        )
     return records
 
 

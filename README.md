@@ -150,6 +150,12 @@ Common use cases include:
 
 ## Installation
 
+The TAL distribution contains the base library. Experimental geo and astro live
+in the separately packaged [TAL Extensions project](extensions/README.md), which
+currently requires exactly TAL 0.2.0. Base installation does not include extensions.
+The projects have independent [TAL](docs/index.md) and
+[extension](extensions/docs/index.md) documentation sources.
+
 Install from a source checkout:
 
 ```bash

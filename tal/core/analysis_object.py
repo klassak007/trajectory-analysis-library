@@ -362,6 +362,9 @@ class AnalysisObject:
         Deep and shallow lazy views remain non-owning and require the AO to stay
         open until their lazy work completes. Mutating shared eager buffers from
         a shallow view, or mutating a raw view, can mutate the AO.
+        Indexed coordinate buffers may be read-only according to xarray/pandas.
+        Use xarray coordinate assignment or ``assign_coords`` to replace index
+        labels; deep views retain independent buffers and index wrappers.
 
         Examples
         --------

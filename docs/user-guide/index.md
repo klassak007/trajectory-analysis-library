@@ -24,8 +24,6 @@ events
 linalg
 numpy
 spatial
-geo
-astro
 frames
 viewing
 ```

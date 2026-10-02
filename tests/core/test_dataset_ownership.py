@@ -4,11 +4,11 @@ from collections.abc import Callable
 from typing import Any
 
 import dask.array as da
-from dask.callbacks import Callback
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+from dask.callbacks import Callback
 
 from tal.core import AnalysisObject
 from tal.core.dataset_ownership import (
@@ -87,9 +87,23 @@ def _coordinate_snapshots(ds: xr.Dataset) -> dict[str, np.ndarray]:
 
 
 def _mutate_index_coordinates(ds: xr.Dataset | xr.DataArray) -> None:
-    for _, coords in ds.xindexes.group_by_index():
+    """Replace complete native index groups through xarray's public API."""
+    for index, coords in ds.xindexes.group_by_index():
+        variables = {}
         for name in coords:
-            ds.coords[name].data.flat[0] += 100
+            coordinate = ds.coords[name]
+            values = np.array(coordinate.data, copy=True)
+            values.flat[0] += 100
+            variables[name] = coordinate.variable.copy(data=values)
+        replacement = type(index).from_variables(variables, options={})
+        ds.coords.update(
+            xr.Coordinates(variables, indexes={name: replacement for name in variables})
+        )
+        actual_index = ds.xindexes[next(iter(variables))]
+        assert type(actual_index) is type(index) and actual_index.equals(replacement)
+        for name, variable in variables.items():
+            assert ds.xindexes[name] is actual_index
+            np.testing.assert_array_equal(ds.coords[name].data, variable.data)
 
 
 def _mutate_nested_metadata(ds: xr.Dataset) -> None:
@@ -129,7 +143,8 @@ def test_dataset_ownership_002_deep_view_isolates_eager_state() -> None:
     assert out.indexes["sample"] is not source.indexes["sample"]
 
     out["value"].data[0] = 99.0
-    out.coords["sample"].data[0] = 99
+    out.coords["sample"] = out.coords["sample"].variable.copy(data=[99, 1, 2, 3])
+    assert out.xindexes["sample"].to_pandas_index()[0] == 99
     out.coords["aux"].data[0] = 99.0
     _mutate_nested_metadata(out)
 
@@ -184,7 +199,8 @@ def test_dataset_ownership_005_external_ingress_is_deep_and_nonowning() -> None:
 
     out = isolate_external_dataset(source)
     out["value"].data[0] = 50.0
-    out.coords["sample"].data[0] = 50
+    out.coords["sample"] = out.coords["sample"].variable.copy(data=[50, 1, 2, 3])
+    assert out.xindexes["sample"].to_pandas_index()[0] == 50
     _mutate_nested_metadata(out)
     out.close()
 

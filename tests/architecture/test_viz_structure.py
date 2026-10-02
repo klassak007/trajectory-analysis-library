@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.architecture._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 from tests.architecture._schema_write import has_tal_schema_write
 
 

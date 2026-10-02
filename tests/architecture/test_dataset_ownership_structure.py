@@ -7,7 +7,7 @@ import tal
 import tal.core
 from tal.core import dataset_ownership as dataset_owner
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 _OWNER_MODULE = "tal.core.dataset_ownership"
 _PRODUCTION_PATHS = (

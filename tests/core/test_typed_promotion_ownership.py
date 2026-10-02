@@ -10,14 +10,12 @@ import pytest
 import xarray as xr
 from dask.callbacks import Callback
 
-from tal.astro import TopocentricDirection
 from tal.core import AnalysisObject, SchemaError
 from tal.core.typed_lifecycle import (
     TypedAnalysisObject,
     TypedLifecycleContext,
     TypedLifecycleSpec,
 )
-from tal.geo import GeodeticPosition, ProjectedPosition
 from tal.io import AOZarrReadOptions
 from tal.linalg import Array, Matrix, Vector, Vector3
 from tal.spatial import (
@@ -81,9 +79,7 @@ def _vector_source(
     lazy: bool = False,
 ) -> AnalysisObject:
     eager = np.arange(2 * len(labels), dtype=float).reshape(2, len(labels))
-    values: object = (
-        da.from_array(eager, chunks=(1, len(labels))) if lazy else eager
-    )
+    values: object = da.from_array(eager, chunks=(1, len(labels))) if lazy else eager
     return _analysis_object(
         values,
         dims=("sample", core_dim),
@@ -149,18 +145,7 @@ def _pose_source() -> AnalysisObject:
     return _generic_source(pose)
 
 
-def _projected_source() -> AnalysisObject:
-    source = _vector_source(
-        var_name="position",
-        core_dim="projected",
-        labels=("easting", "northing"),
-    )
-    return _generic_source(
-        ProjectedPosition.from_projected(source, crs="EPSG:32611")
-    )
-
-
-_PROMOTION_CASES: dict[str, tuple[TypedConstructor, TypedSourceFactory]] = {
+_PROMOTION_CASES = {
     "array": (Array, _scalar_source),
     "vector": (Vector, _vector_source),
     "matrix": (Matrix, _matrix_source),
@@ -183,26 +168,9 @@ _PROMOTION_CASES: dict[str, tuple[TypedConstructor, TypedSourceFactory]] = {
         AngularAcceleration,
         lambda: _vector_source(var_name="angular_acceleration"),
     ),
-    "geodetic": (
-        GeodeticPosition,
-        lambda: _vector_source(
-            var_name="position",
-            core_dim="lla",
-            labels=("lat", "lon", "alt"),
-        ),
-    ),
-    "topocentric": (
-        TopocentricDirection,
-        lambda: _vector_source(
-            var_name="direction",
-            core_dim="enu",
-            labels=("east", "north", "up"),
-        ),
-    ),
     "velocity": (Velocity, _velocity_source),
     "acceleration": (Acceleration, _acceleration_source),
     "pose": (Pose, _pose_source),
-    "projected": (ProjectedPosition, _projected_source),
 }
 
 
@@ -236,9 +204,6 @@ def _decorate_owned_metadata(ao: AnalysisObject) -> None:
         "linear_acceleration",
         "angular_acceleration",
         "acceleration",
-        "geodetic",
-        "projected",
-        "topocentric",
     ),
 )
 def test_typed_ownership_001_all_constructor_families_share_owned_payloads(
@@ -274,17 +239,8 @@ def test_typed_ownership_001_all_constructor_families_share_owned_payloads(
     first_coord = next(iter(source_ds.coords))
     promoted_ds[first_coord].attrs["nested"]["items"].append("promoted")
     assert source_ds.attrs["nested"]["items"] == ["dataset"]
-    assert source_ds[first_var].encoding["nested"]["items"] == [
-        f"{first_var}-encoding"
-    ]
-    assert source_ds[first_coord].attrs["nested"]["items"] == [
-        f"{first_coord}-attrs"
-    ]
-    if family == "topocentric":
-        assert set(promoted_ds.data_vars) - set(source_ds.data_vars) == {
-            "altitude_deg",
-            "azimuth_deg",
-        }
+    assert source_ds[first_var].encoding["nested"]["items"] == [f"{first_var}-encoding"]
+    assert source_ds[first_coord].attrs["nested"]["items"] == [f"{first_coord}-attrs"]
 
 
 @pytest.mark.parametrize("kind", ("dataset", "dataarray"))
@@ -355,35 +311,6 @@ def test_typed_ownership_003_dask_promotion_is_lazy_and_graph_preserving(
     assert isinstance(promoted_data, da.Array)
     assert promoted_data is source_data
     assert promoted_data.dask is source_data.dask
-
-
-def test_typed_ownership_009_normalizing_dask_promotion_adds_only_derived_graphs() -> None:
-    """ID: TYPED_OWNERSHIP_009_normalizing_dask_promotion_adds_only_derived_graphs."""
-    source = _vector_source(
-        var_name="direction",
-        core_dim="enu",
-        labels=("east", "north", "up"),
-        lazy=True,
-    )
-    source_data = source.as_dataset(copy="none")["direction"].data
-    source_keys = set(source_data.__dask_graph__())
-    counter = _TaskCounter()
-
-    with counter:
-        promoted = TopocentricDirection(source)
-
-    promoted_ds = promoted.as_dataset(copy="none")
-    assert counter.keys == []
-    assert promoted_ds["direction"].data is source_data
-    assert set(promoted_ds.data_vars) == {
-        "direction",
-        "altitude_deg",
-        "azimuth_deg",
-    }
-    for name in ("altitude_deg", "azimuth_deg"):
-        derived = promoted_ds[name].data
-        assert isinstance(derived, da.Array)
-        assert source_keys <= set(derived.__dask_graph__())
 
 
 @pytest.mark.parametrize("close_first", ("source", "typed"))

@@ -3,25 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_arch_time_t1_001_core_time_support_does_not_import_astro() -> None:
-    """ID: ARCH_TIME_T1_001_core_time_support_does_not_import_astro."""
-    for path in sorted(Path("tal/core").rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        assert "tal.astro" not in text, f"core time support must not import astro in {path}"
 
 
-def test_arch_time_t1_003_query_and_map_owners_receive_param_kind() -> None:
-    """ID: ARCH_TIME_T1_003_query_and_map_owners_receive_param_kind."""
-    for path in (
-        Path("tal/core/param_ops/index.py"),
-        Path("tal/core/param_ops/evaluate.py"),
-        Path("tal/core/param_ops/sync_runtime.py"),
-    ):
-        text = path.read_text(encoding="utf-8")
-        assert "param_kind=context.param_kind" in text, f"{path} must thread context.param_kind"
-    select = Path("tal/core/param_ops/select.py").read_text(encoding="utf-8")
-    assert "param_kind=context.param_kind" in select
-    assert "coerce_float_scalar(query.start" not in select
 
 
 def test_arch_time_t1_004_datetime_local_deltas_owned_by_param_map() -> None:

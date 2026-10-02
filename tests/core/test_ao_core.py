@@ -4,13 +4,15 @@ from types import MappingProxyType
 from typing import Any, cast
 
 import dask.array as da
-from dask.callbacks import Callback
 import numpy as np
 import pytest
 import xarray as xr
+from dask.callbacks import Callback
 
-from tal.core import AnalysisObject
-from tal.core import SchemaError
+import tal.core.analysis_object as ao_mod
+import tal.core.schema as schema_mod
+import tal.core.schema_validate as schema_validate_mod
+from tal.core import AnalysisObject, SchemaError
 from tal.core.orchestration.alignment_intent import read_alignment_intent
 from tal.core.orchestration.broadcast_intent import read_broadcast_intent
 from tal.core.schema_read import read_roles
@@ -25,9 +27,6 @@ from tal.core.typed_lifecycle import (
 )
 from tal.linalg import Array
 from tal.spatial import Acceleration, Pose, Position, Rotation, Velocity
-import tal.core.analysis_object as ao_mod
-import tal.core.schema as schema_mod
-import tal.core.schema_validate as schema_validate_mod
 
 
 def _ds_single() -> xr.Dataset:
@@ -543,7 +542,8 @@ def test_ao_mutability_001_as_dataset_deep_isolates_eager_state() -> None:
     assert not np.shares_memory(out["value"].data, backing["value"].data)
     assert not np.shares_memory(out["sample"].data, backing["sample"].data)
     out["value"].data[0, 0] = 99.0
-    out["sample"].data[0] = 99
+    out.coords["sample"] = out.coords["sample"].variable.copy(data=[99, 1, 2])
+    assert out.xindexes["sample"].to_pandas_index()[0] == 99
     out.attrs["nested"]["items"].append("changed")
     out["value"].encoding["nested"]["items"].append("changed")
     assert float(backing["value"].data[0, 0]) == 1.0

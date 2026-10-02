@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 
 def _method_has_named_call(path: Path, *, class_name: str, method_name: str, callee: str) -> bool:

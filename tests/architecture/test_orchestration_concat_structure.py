@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 
 def test_orch_concat_arch_001_single_owner_concat_plan_module() -> None:

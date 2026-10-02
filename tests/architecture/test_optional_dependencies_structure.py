@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 from tal.core.param_engine.map_build import build_param_bounds_map, build_param_map
-from tests.architecture._budget import (
+from tools.architecture_budget import (
     function_control_depths,
     function_parameter_counts,
 )
@@ -84,27 +84,8 @@ def test_numba_opt_001_numba_extra_is_optional_only() -> None:
     assert all("tal[numba]" not in dep for dep in optional["full"])
 
 
-def test_arch_geo_g1_008_geo_extra_is_optional_and_test_enabled() -> None:
-    """ID: ARCH_GEO_G1_008_geo_extra_is_optional_and_test_enabled."""
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    deps = pyproject["project"]["dependencies"]
-    optional = pyproject["project"]["optional-dependencies"]
-    assert optional["geo"] == ["pyproj>=3.7"]
-    assert all(not dep.startswith("pyproj") for dep in deps)
-    assert "tal[astro,docs,frames,geo,viz]" in optional["test"]
-    assert "tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]" in optional["full"]
 
 
-def test_arch_astro_a1_007_astro_and_spice_extras_are_optional() -> None:
-    """ID: ARCH_ASTRO_A1_007_astro_and_spice_extras_are_optional."""
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-    deps = pyproject["project"]["dependencies"]
-    optional = pyproject["project"]["optional-dependencies"]
-    assert optional["astro"] == ["tal[geo]", "astropy>=7"]
-    assert optional["spice"] == ["tal[astro]", "spiceypy>=8"]
-    assert all(not dep.startswith(("astropy", "spiceypy")) for dep in deps)
-    assert "tal[astro,docs,frames,geo,viz]" in optional["test"]
-    assert "tal[astro,frames,geo,netcdf,notebooks,ros,spice,viz]" in optional["full"]
 
 
 def test_numba_arch_001_no_unguarded_numba_imports_in_core_import_path() -> None:

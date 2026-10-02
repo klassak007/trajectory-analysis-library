@@ -1,8 +1,6 @@
 from . import frames
 from . import io
 from . import spatial
-from . import geo
-from . import astro
 from . import viz
 from . import ufuncs
 from .core import AnalysisObject, SchemaError
@@ -30,7 +28,5 @@ __all__ = [
     "merge_schema",
     "validate_schema",
     "spatial",
-    "geo",
-    "astro",
     "ufuncs",
 ]

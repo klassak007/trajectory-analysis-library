@@ -351,12 +351,19 @@ def test_uninspectable_c_callback_typeerror_is_conservative_invocation_misuse(
     resolver_arg,
 ):
     """ID: BIND_127H_031_uninspectable_c_boundary_typeerror_is_public_typeerror."""
+    class UninspectableCResolver:
+        __call__ = staticmethod(np.ndarray)
+
+        @property
+        def __signature__(self):
+            raise ValueError("signature unavailable")
+
     graph = FrameGraph()
     world = graph.get_or_create_frame("world")
     body = graph.get_or_create_frame("body", parent=world)
 
     with pytest.raises(TypeError, match=rf"{resolver_arg} must be callable") as exc_info:
-        solver(body, world, graph=graph, **{resolver_arg: np.ndarray})
+        solver(body, world, graph=graph, **{resolver_arg: UninspectableCResolver()})
 
     assert type(exc_info.value) is TypeError
     assert type(exc_info.value.__cause__) is TypeError

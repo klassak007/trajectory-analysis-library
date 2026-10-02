@@ -4,7 +4,7 @@ import ast
 import re
 from pathlib import Path
 
-from tests.architecture._budget import (
+from tools.architecture_budget import (
     function_control_depths,
     function_loc,
     function_parameter_counts,

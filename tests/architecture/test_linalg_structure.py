@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import function_loc
+from tools.architecture_budget import function_loc
 
 
 def _module(path: str) -> ast.Module:

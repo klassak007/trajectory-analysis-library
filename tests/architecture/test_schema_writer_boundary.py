@@ -12,6 +12,7 @@ from tests.architecture._schema_write import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOT = REPO_ROOT / "tal"
+SCAN_ROOTS = (SCAN_ROOT, REPO_ROOT / "extensions" / "src" / "tal_extensions")
 APPROVED_WRITERS = {
     (SCAN_ROOT / "core" / "schema_validate" / "finalize.py").resolve(),
 }
@@ -20,10 +21,9 @@ IGNORED_PATH_PARTS = {"tests"}
 
 def _iter_python_files() -> list[Path]:
     files: list[Path] = []
-    for path in SCAN_ROOT.rglob("*.py"):
-        if any(part in IGNORED_PATH_PARTS for part in path.parts):
-            continue
-        files.append(path)
+    for root in SCAN_ROOTS:
+        files.extend(path for path in root.rglob("*.py")
+                     if not any(part in IGNORED_PATH_PARTS for part in path.parts))
     return sorted(files)
 
 

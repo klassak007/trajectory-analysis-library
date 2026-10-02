@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.architecture._budget import function_parameter_counts
+from tools.architecture_budget import function_parameter_counts
 
 
 def _event_ops_files() -> list[Path]:
