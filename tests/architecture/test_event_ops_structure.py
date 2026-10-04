@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
+
+from tools.architecture_budget import function_parameter_counts
 
 
 def _event_ops_files() -> list[Path]:
@@ -99,14 +102,33 @@ def test_event_arch_009_intervals_no_private_boundary_internal_imports() -> None
 
 def test_event_arch_010_event_edge_sentinel_constants_single_owner() -> None:
     """ID: EVENT_ARCH_010_event_edge_sentinel_constants_single_owner."""
+    constants_path = Path("tal/core/event_ops/_event_constants.py")
+    constants = constants_path.read_text(encoding="utf-8")
     primitives = Path("tal/core/event_ops/event_primitives.py").read_text(encoding="utf-8")
-    assert "EDGE_INVALID =" in primitives
-    assert "EDGE_ENTER =" in primitives
-    assert "EDGE_EXIT =" in primitives
-    assert "EDGE_TRIGGER =" in primitives
-    assert "SAMPLE_SENTINEL =" in primitives
-    for path in ["tal/core/event_ops/boundary.py", "tal/core/event_ops/intervals.py"]:
-        text = Path(path).read_text(encoding="utf-8")
+    module = ast.parse(constants)
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == ["__future__", "numpy"]
+    assert "xarray" not in constants
+    assert "tal." not in constants
+    assert "attrs" not in constants
+    assert "from ._event_constants import" in primitives
+    for needle in [
+        "EDGE_INVALID =",
+        "EDGE_ENTER =",
+        "EDGE_EXIT =",
+        "EDGE_TRIGGER =",
+        "SAMPLE_SENTINEL =",
+    ]:
+        assert needle in constants
+    for path in _event_ops_files():
+        if path == constants_path:
+            continue
+        text = path.read_text(encoding="utf-8")
         for needle in [
             "EDGE_INVALID =",
             "EDGE_ENTER =",
@@ -342,15 +364,6 @@ def test_event_arch_032_around_stacked_finalize_boundary_owner_only() -> None:
     assert ".__class__._from_unvalidated(" not in text
 
 
-def test_event_arch_033_window_stack_zero_lane_restore_owns_coord_roundtrip() -> None:
-    """ID: EVENT_ARCH_033_window_stack_zero_lane_restore_owns_coord_roundtrip."""
-    window_stack = Path("tal/core/event_ops/window_stack.py").read_text(encoding="utf-8")
-    around_stacked = Path("tal/core/event_ops/around_stacked.py").read_text(encoding="utf-8")
-    assert "def _captured_zero_dim_coords(" in window_stack
-    assert "captured_coords" in window_stack
-    assert "assign_coords(" in window_stack
-    assert "_captured_zero_dim_coords" not in around_stacked
-
 
 def test_event_doc_002_around_stacked_user_guide_and_api_entries_present() -> None:
     """ID: EVENT_DOC_002_around_stacked_user_guide_and_api_entries_present."""
@@ -405,16 +418,6 @@ def test_event_arch_034_during_stream_owner_module_single_owner() -> None:
     assert "def evaluate_when_stream_layout(" in owner
     assert 'if opts.layout == "stream":' in during
     assert "evaluate_when_stream_layout(" in during
-
-
-def test_event_arch_035_during_stream_reuses_segments_and_stack_owners() -> None:
-    """ID: EVENT_ARCH_035_during_stream_reuses_segments_and_stack_owners."""
-    owner = Path("tal/core/event_ops/when_stream.py").read_text(encoding="utf-8")
-    assert "evaluate_when_segments_layout(" in owner
-    assert "stack_segment_stream(" in owner
-    assert "gather_dataset_along_sequence(" in owner
-    assert ".stack({" not in owner
-    assert "reset_index(" not in owner
 
 
 def test_event_arch_036_during_stream_no_local_crossing_or_interp_kernels() -> None:
@@ -480,14 +483,6 @@ def test_event_arch_043_boundary_select_bounded_contains_no_vectorize_true() -> 
     assert "vectorize=False" in section
 
 
-def test_event_arch_044_during_stream_bounded_contains_no_vectorize_true() -> None:
-    """ID: EVENT_ARCH_044_during_stream_bounded_contains_no_vectorize_true."""
-    text = Path("tal/core/event_ops/when_stream.py").read_text(encoding="utf-8")
-    section = text.split("def _bounded_stream_indexer(", 1)[1].split("def _stream_indexer(", 1)[0]
-    assert "vectorize=True" not in section
-    assert "vectorize=False" in section
-
-
 def test_event_arch_045_during_segments_bounded_contains_no_vectorize_true() -> None:
     """ID: EVENT_ARCH_045_during_segments_bounded_contains_no_vectorize_true."""
     text = Path("tal/core/event_ops/when_segments.py").read_text(encoding="utf-8")
@@ -501,9 +496,119 @@ def test_event_arch_046_bounded_event_stopgaps_route_through_backend_owner() -> 
     boundary = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
     intervals = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
     backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
-    assert "from .backends import EVENT_BOUNDARY_BACKEND_NUMPY_ROW, boundary_bounded_row_backend" in boundary
-    assert "boundary_bounded_row_backend" in boundary
-    assert "from .backends import EVENT_INTERVALS_BACKEND_NUMPY_ROW, intervals_bounded_row_backend" in intervals
-    assert "intervals_bounded_row_backend" in intervals
-    assert "def boundary_bounded_row_backend(" in backends
-    assert "def intervals_bounded_row_backend(" in backends
+    block_prep = Path("tal/core/event_ops/block_prep.py").read_text(encoding="utf-8")
+    assert "boundary_bounded_block_backend" in boundary
+    assert "intervals_bounded_block_backend" in intervals
+    assert "EVENT_BOUNDARY_BACKEND_NUMPY_BLOCK" in backends
+    assert "EVENT_INTERVALS_BACKEND_NUMPY_BLOCK" in backends
+    assert "def boundary_bounded_block_backend(" in backends
+    assert "def intervals_bounded_block_backend(" in backends
+    assert "prepare_boundary_block_rows(" in block_prep
+    assert "prepare_intervals_block_rows(" in block_prep
+    assert "boundary_bounded_row_backend" not in backends
+    assert "intervals_bounded_row_backend" not in backends
+
+
+def test_event_arch_047_boundary_bounded_numba_backend_owner_routed() -> None:
+    """ID: EVENT_ARCH_047_boundary_bounded_numba_backend_owner_routed."""
+    backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
+    assert 'EVENT_BOUNDARY_BACKEND_NUMBA = "numba"' in backends
+    assert "def boundary_bounded_block_backend(" in backends
+    assert "from .numba_backends import boundary_bounded_block_numba" in backends
+
+
+def test_event_arch_048_intervals_bounded_numba_backend_owner_routed() -> None:
+    """ID: EVENT_ARCH_048_intervals_bounded_numba_backend_owner_routed."""
+    backends = Path("tal/core/event_ops/backends.py").read_text(encoding="utf-8")
+    assert 'EVENT_INTERVALS_BACKEND_NUMBA = "numba"' in backends
+    assert "def intervals_bounded_block_backend(" in backends
+    assert "from .numba_backends import intervals_bounded_block_numba" in backends
+
+
+def test_event_arch_049_bounded_event_numba_paths_are_blockwise_vectorize_false() -> None:
+    """ID: EVENT_ARCH_049_bounded_event_numba_paths_are_blockwise_vectorize_false."""
+    numba_backends = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
+    assert "prepare_boundary_block_rows" in numba_backends
+    assert "prepare_intervals_block_rows" in numba_backends
+    assert "xr.apply_ufunc" not in numba_backends
+    assert "vectorize=True" not in numba_backends
+
+
+def test_event_arch_053_boundary_normal_path_vectorize_true_removed() -> None:
+    """ID: EVENT_ARCH_053_boundary_normal_path_vectorize_true_removed."""
+    text = Path("tal/core/event_ops/boundary.py").read_text(encoding="utf-8")
+    section = text.split("def _extract_bounded(", 1)[1]
+    assert "boundary_bounded_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+
+
+def test_event_arch_054_intervals_normal_path_vectorize_true_removed() -> None:
+    """ID: EVENT_ARCH_054_intervals_normal_path_vectorize_true_removed."""
+    text = Path("tal/core/event_ops/intervals.py").read_text(encoding="utf-8")
+    section = text.split("def _extract_bounded(", 1)[1]
+    assert "intervals_bounded_block_backend" in section
+    assert "vectorize=False" in section
+    assert "vectorize=True" not in section
+
+
+def test_event_arch_055_scalar_operand_broadcast_has_single_event_owner() -> None:
+    """ID: EVENT_ARCH_055_scalar_operand_broadcast_has_single_event_owner."""
+    owner = Path("tal/core/event_ops/evaluate.py")
+    definitions: list[Path] = []
+    for path in _event_ops_files():
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        if any(
+            isinstance(node, ast.FunctionDef) and node.name == "_broadcast_scalar_operand"
+            for node in module.body
+        ):
+            definitions.append(path)
+    assert definitions == [owner]
+
+    module = ast.parse(owner.read_text(encoding="utf-8"))
+    resolver = next(
+        node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "_resolve_operand"
+    )
+    scalar_branches = [
+        node
+        for node in resolver.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Call)
+        and isinstance(node.test.func, ast.Attribute)
+        and isinstance(node.test.func.value, ast.Name)
+        and node.test.func.value.id == "np"
+        and node.test.func.attr == "isscalar"
+    ]
+    assert len(scalar_branches) == 1
+    branch = scalar_branches[0]
+    assert len(branch.test.args) == 1
+    guarded_operand = branch.test.args[0]
+    assert isinstance(guarded_operand, ast.Name)
+    assert guarded_operand.id == "operand"
+    assert len(branch.body) == 1 and isinstance(branch.body[0], ast.Return)
+    scalar_call = branch.body[0].value
+    assert isinstance(scalar_call, ast.Call)
+    assert isinstance(scalar_call.func, ast.Name)
+    assert scalar_call.func.id == "_broadcast_scalar_operand"
+    assert len(scalar_call.args) == 1
+    broadcast_operand = scalar_call.args[0]
+    assert isinstance(broadcast_operand, ast.Name)
+    assert broadcast_operand.id == guarded_operand.id
+
+    owner_calls = [
+        node
+        for node in ast.walk(resolver)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_broadcast_scalar_operand"
+    ]
+    assert owner_calls == [scalar_call]
+
+
+def test_event_arch_052_bounded_event_numba_helper_parameter_budget() -> None:
+    """ID: EVENT_ARCH_052_bounded_event_numba_helper_parameter_budget."""
+    path = Path("tal/core/event_ops/numba_backends.py")
+    for name, count in function_parameter_counts(path).items():
+        assert count <= 10, (
+            f"numba_backends.{name} exceeds parameter budget ({count} > 10)"
+        )

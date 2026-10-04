@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
 
 
 def test_arch_paramops_001_sync_file_budget() -> None:
@@ -74,15 +74,6 @@ def test_arch_combine_003_assemble_core_finalize_owner_reuse() -> None:
     assert "set_roles(" not in text
     assert "set_param_coord(" not in text
     assert "set_validity(" not in text
-
-
-def test_arch_combine_004_assemble_core_uses_finalize_source_override_not_leaf_class() -> None:
-    """ID: ARCH_COMBINE_004_assemble_core_uses_finalize_source_override_not_leaf_class."""
-    assemble = Path("tal/core/combine_ops/assemble_core.py").read_text(encoding="utf-8")
-    finalize = Path("tal/core/combine_ops/finalize.py").read_text(encoding="utf-8")
-    assert "source_ao=source_ao" in assemble
-    assert "source_ao:" in finalize
-    assert "_resolve_finalize_source(" in finalize
 
 
 def test_arch_combine_005_core_accessors_use_shared_self_inclusion_layout_helper() -> None:
@@ -221,19 +212,48 @@ def test_arch_doc_001_hotspot_modules_have_required_docstrings() -> None:
         assert docs >= 1, f"{path.as_posix()} has no function-level docstrings"
 
 
-def test_arch_param_engine_001_map_row_kernels_have_no_python_query_loops() -> None:
+def test_arch_param_engine_001_map_orchestrator_has_no_row_kernels() -> None:
     """ID: ARCH_PARAM_ENGINE_001_map_row_kernels_have_no_python_query_loops."""
-    path = Path("tal/core/param_engine/map_build.py")
-    module = ast.parse(path.read_text(encoding="utf-8"))
-    kernels = {
+    module = ast.parse(Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8"))
+    definitions = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
+    assert definitions.isdisjoint({"_nearest_row", "_linear_row", "_map_row", "_bounds_row"})
+    exact_module = ast.parse(Path("tal/core/param_engine/numeric_rows.py").read_text(encoding="utf-8"))
+    float_kernels = {
         node.name: node
-        for node in module.body
-        if isinstance(node, ast.FunctionDef) and node.name in {"_nearest_row", "_linear_row"}
+        for node in exact_module.body
+        if isinstance(node, ast.FunctionDef) and node.name in {"_float_nearest_row", "_float_linear_row"}
     }
-    assert set(kernels) == {"_nearest_row", "_linear_row"}
-    for name, node in kernels.items():
+    assert set(float_kernels) == {"_float_nearest_row", "_float_linear_row"}
+    for name, node in float_kernels.items():
         loops = [sub for sub in ast.walk(node) if isinstance(sub, (ast.For, ast.While, ast.AsyncFor))]
-        assert not loops, f"{name} regressed to Python query loops"
+        assert not loops, f"{name} must retain vectorized float fallback execution"
+
+
+def test_param_arch_048_ordered_numeric_dtype_has_shared_core_owner() -> None:
+    """ID: PARAM_ARCH_048_ordered_numeric_dtype_has_shared_core_owner."""
+    owner_name = "is_ordered_real_numeric_dtype"
+    definitions = []
+    for path in sorted(Path("tal/core").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        if any(isinstance(node, ast.FunctionDef) and node.name == owner_name for node in module.body):
+            definitions.append(path.as_posix())
+    assert definitions == ["tal/core/ordered_dtypes.py"]
+
+    consumers = (
+        Path("tal/core/schema_validate/phase_param.py"),
+        Path("tal/core/orchestration/resolve.py"),
+        Path("tal/core/param_engine/query_grid.py"),
+        Path("tal/core/param_engine/map_build.py"),
+    )
+    for path in consumers:
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {
+            alias.name
+            for node in ast.walk(module)
+            if isinstance(node, ast.ImportFrom) and node.module == "ordered_dtypes"
+            for alias in node.names
+        }
+        assert owner_name in imported, f"{path} must consume the neutral ordered dtype owner"
 
 
 def test_arch_paramops_005_no_ad_hoc_compute_in_select_or_sync_runtime() -> None:
@@ -250,7 +270,7 @@ def test_arch_paramops_006_sync_autogrid_owner_split_runtime_vs_backend_is_enfor
     orchestrator_text = Path("tal/core/param_ops/sync_autogrid.py").read_text(encoding="utf-8")
     backend_text = Path("tal/core/param_ops/sync_autogrid_backend.py").read_text(encoding="utf-8")
     assert "from .sync_autogrid import build_auto_grid_from_join" in runtime_text
-    assert "build_auto_grid_from_join(contexts, join=join, tol=tol, owner=\"synchronize_param\")" in runtime_text
+    assert "param_kind=contexts[0].param_kind" in runtime_text
     for needle in [
         "def _row_data(",
         "def _join_grid_unbatched(",

@@ -9,13 +9,18 @@ the meaning of each dimension matters.
 TAL keeps data in ordinary `xarray.Dataset` objects and adds a small semantic
 schema so analysis code can stay labeled, validated, and frame-aware.
 
-```{figure} ../images/AnalysisObject.png
-:alt: An AnalysisObject wraps an xarray Dataset with TAL metadata for sequence, batch, core, parameter, validity, components, and frames.
-:width: 90%
+```{figure} ../images/AnalysisObject.svg
+:name: analysis-object-diagram
+:alt: Three Pose trajectories with position and quaternion components, six sample slots, valid lengths of six, four, and five, and different time coordinates for each trial.
+:width: 100%
 :align: center
 
-An `AnalysisObject` is an `xarray.Dataset` plus TAL metadata.
+An `AnalysisObject` with three trials, two component variables, and a two-dimensional
+parameter coordinate. Solid cells are valid samples; pale cells are padding.
 ```
+
+The {doc}`illustrated_example` constructs these exact trajectories and shows how
+selection, interpolation, component extraction, and reduction act on them.
 
 ## What TAL Means By Trajectory
 
@@ -75,7 +80,7 @@ its public operations can consume deliberately:
 | frame metadata | Tracking parent/child frame IDs for spatial quantities. |
 | spatial metadata | Recording representation and expression-frame semantics. |
 
-For construction patterns and `ao.data` vs `ao.unsafe_data`, see
+For construction patterns and Dataset copy modes, see
 {doc}`creating_trajectory_objects` and {doc}`viewing`.
 
 ## A First Example
@@ -162,7 +167,7 @@ This overview names the main surfaces without duplicating their full guides.
 
 | Task | Surface | Details |
 | --- | --- | --- |
-| Create and inspect AOs | `AnalysisObject.from_data(...)`, `ao.data`, `ao.unsafe_data` | {doc}`creating_trajectory_objects`, {doc}`viewing`, {doc}`../api/analysis-object` |
+| Create and inspect AOs | `AnalysisObject.from_data(...)`, `ao.as_dataset(copy=...)`, `ao.close()` | {doc}`creating_trajectory_objects`, {doc}`viewing`, {doc}`../api/analysis-object` |
 | Select, mask, and reduce | `ao.sel(...)`, `ao.isel(...)`, `ao.where(...)`, AO reducers | {doc}`indexing`, {doc}`../api/reducers` |
 | Interpolate or resample by a parameter | `ao.param.index(...)`, `ao.param.sel(...)`, `ao.param.at(...)`, `ao.param.resample_to(...)`, `ao.param.interp_like(...)` | {doc}`time`, {doc}`../api/timebase` |
 | Combine or align AOs | `ao.combine.concat_batch(...)`, `ao.combine.concat_sequence(...)`, `ao.combine.merge(...)`, `ao.combine.align(...)` | {doc}`numpy`, {doc}`../api/analysis-object` |
@@ -171,10 +176,9 @@ This overview names the main surfaces without duplicating their full guides.
 | Work with poses and kinematics | `tal.spatial.Position`, `Rotation`, `Pose`, velocity and acceleration types | {doc}`spatial`, {doc}`../api/types/index` |
 | Attach or resolve frames | `ao.frames`, `tal.frames.FrameGraph`, `find_path(...)` | {doc}`frames`, {doc}`../api/frames` |
 | Extract events and windows | `ao.events.mask(...)`, `events(...)`, `intervals(...)`, `when(...)`, `around(...)` | {doc}`events`, {doc}`../api/events` |
-| Group runs or bins | `ao.group.groupby(...)`, `ao.group.groupby_bins(...)`, grouped reducers | {doc}`../api/analysis-object` |
+| Group sequence rows, batch runs, or bins | `ao.group.groupby(...)`, `ao.group.groupby_bins(...)`, grouped reducers | {doc}`../api/reducers` |
 | Manage named components | `ao.components.define(...)`, `registry(...)`, `extract(...)`, `patch(...)`, `compose(...)` | {doc}`../api/components` |
 | Persist and ingest data | `ao.io.to_zarr(...)`, `AnalysisObject.from_zarr(...)`, CSV and log readers | {doc}`../api/io` |
-| Browse collections | `tal.catalog.Catalog` | {doc}`../api/catalog` |
 | Visualize trajectories | `ao.viz.line(...)`, `ao.viz.scatter(...)`, `ao.viz.explorer(...)` | {doc}`viewing`, {doc}`../api/viz` |
 
 ## Dimension Roles In Practice
@@ -258,7 +262,6 @@ Good TAL code is explicit about those answers.
 | ragged sequence | A set of sequences with unequal valid lengths. |
 | frame | Coordinate frame such as `world`, `map`, `odom`, `base_link`, or `camera`. |
 | representation | Storage form such as quaternion, rotation matrix, component pose, or matrix pose. |
-| catalog | Browse/query/extract layer for collections of grouped data. |
 
 TAL is useful when data is more than an anonymous array: dimensions have roles,
 trajectories need alignment, samples live on a parameter grid, vectors and

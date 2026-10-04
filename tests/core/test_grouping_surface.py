@@ -46,7 +46,7 @@ def _external_key(
     *,
     name: str = "ext_key",
 ) -> xr.DataArray:
-    ds = ao.unsafe_data
+    ds = ao.as_dataset(copy="none")
     return xr.DataArray(
         values,
         dims=("trial", "sample"),
@@ -62,8 +62,8 @@ def test_group_core_p9b_001_groupby_surface_produces_deterministic_grouped_wrapp
     right = ao.group.groupby("label")
     assert isinstance(left, GroupedView)
     assert isinstance(right, GroupedView)
-    left_ds = left.padded().unsafe_data
-    right_ds = right.padded().unsafe_data
+    left_ds = left.padded().as_dataset(copy="none")
+    right_ds = right.padded().as_dataset(copy="none")
     assert left_ds.identical(right_ds)
 
 
@@ -73,7 +73,7 @@ def test_group_core_p9b_004_empty_group_selection_returns_empty_grouped_output()
     na_key = xr.DataArray(
         np.full((2, 3), np.nan, dtype=float),
         dims=("trial", "sample"),
-        coords={"trial": ao.unsafe_data.coords["trial"], "sample": ao.unsafe_data.coords["sample"]},
+        coords={"trial": ao.as_dataset(copy="none").coords["trial"], "sample": ao.as_dataset(copy="none").coords["sample"]},
         name="all_na_key",
     )
     grouped = ao.group.groupby(
@@ -82,7 +82,7 @@ def test_group_core_p9b_004_empty_group_selection_returns_empty_grouped_output()
             foundation_opts=GroupingFoundationOptions(na_key_policy="drop"),
         ),
     )
-    out = grouped.stacked().unsafe_data
+    out = grouped.stacked().as_dataset(copy="none")
     assert int(out.sizes["group_member"]) == 0
 
 
@@ -92,7 +92,7 @@ def test_group_hard_p9b_001_grouped_surface_fails_closed_on_alignment_or_key_mis
     bad = xr.DataArray(
         np.array([[1.0, 2.0, 3.0], [0.0, 1.0, 2.0]], dtype=float),
         dims=("trial", "sample"),
-        coords={"trial": ao.unsafe_data.coords["trial"], "sample": np.array([0, 1, 99], dtype=int)},
+        coords={"trial": ao.as_dataset(copy="none").coords["trial"], "sample": np.array([0, 1, 99], dtype=int)},
         name="bad_key",
     )
     with pytest.raises(ValueError, match="exact|aligned|labels"):
@@ -149,7 +149,7 @@ def test_group_core_p9b_015_chunked_default_na_error_without_na_succeeds_at_mate
         ),
         name="chunked_no_na_key",
     )
-    out = ao.group.groupby(key).padded().unsafe_data
+    out = ao.group.groupby(key).padded().as_dataset(copy="none")
     np.testing.assert_array_equal(out.coords["group_key"].to_numpy(), np.array([1.0, 2.0], dtype=float))
 
 
@@ -234,14 +234,14 @@ def test_group_core_p9b_016_runtime_owner_reuse_probe_avoids_dense_reference_all
 def test_group_core_p9b_017_transposed_grouping_key_dims_are_accepted_by_name_alignment() -> None:
     """ID: GROUP_CORE_P9B_017_transposed_grouping_key_dims_are_accepted_by_name_alignment."""
     ao = _grouping_ao()
-    ds = ao.unsafe_data
+    ds = ao.as_dataset(copy="none")
     transposed_key = xr.DataArray(
         np.array([["A", "A"], ["C", "B"], ["A", "B"]], dtype=object),
         dims=("sample", "trial"),
         coords={"trial": ds.coords["trial"], "sample": ds.coords["sample"]},
         name="label_transposed",
     )
-    out = ao.group.groupby(transposed_key).padded().unsafe_data
+    out = ao.group.groupby(transposed_key).padded().as_dataset(copy="none")
     np.testing.assert_array_equal(
         out.coords["group_key"].to_numpy(),
         np.array(["A", "C", "B"], dtype=object),
@@ -276,7 +276,7 @@ def test_group_hard_p9b_010_sequence_index_coord_collision_with_source_namespace
 def test_group_hard_p9b_011_runtime_plan_unhashable_observed_labels_fail_closed() -> None:
     """ID: GROUP_HARD_P9B_011_runtime_plan_unhashable_observed_labels_fail_closed."""
     ao = _grouping_ao()
-    ds = ao.unsafe_data
+    ds = ao.as_dataset(copy="none")
     values = np.empty((2, 3), dtype=object)
     values[0, :] = ([1], [2], [3])
     values[1, :] = ([1], [2], [3])
@@ -292,7 +292,7 @@ def test_group_hard_p9b_011_runtime_plan_unhashable_observed_labels_fail_closed(
 
 
 def test_groupby_bins_sequence_only_source_fails_closed_and_broadcasted_source_succeeds() -> None:
-    ds = _grouping_ao().unsafe_data.assign_coords(time=("sample", np.array([0.0, 1.0, 2.0], dtype=float)))
+    ds = _grouping_ao().as_dataset(copy="none").assign_coords(time=("sample", np.array([0.0, 1.0, 2.0], dtype=float)))
     ao = AnalysisObject.from_data(
         ds,
         sequence_dim="sample",
@@ -303,15 +303,15 @@ def test_groupby_bins_sequence_only_source_fails_closed_and_broadcasted_source_s
     with pytest.raises(ValueError, match="row dims|missing="):
         _ = ao.group.groupby_bins("time", bins=np.array([-0.5, 0.5, 1.5, 2.5], dtype=float))
 
-    time_row = xr.broadcast(ao.unsafe_data.coords["time"], ao.unsafe_data["signal"])[0].rename("time_row")
+    time_row = xr.broadcast(ao.as_dataset(copy="none").coords["time"], ao.as_dataset(copy="none")["signal"])[0].rename("time_row")
     out = ao.group.groupby_bins(
         time_row,
         bins=np.array([-0.5, 0.5, 1.5, 2.5], dtype=float),
-    ).mean(validate=True).unsafe_data
+    ).mean(validate=True).as_dataset(copy="none")
     assert int(out.sizes["group_key"]) == 3
 
 
 def test_groupby_accepts_batch_only_coord_key() -> None:
     ao = _grouping_ao()
-    out = ao.group.groupby("outcome").mean(validate=True).unsafe_data
+    out = ao.group.groupby("outcome").mean(validate=True).as_dataset(copy="none")
     np.testing.assert_array_equal(out.coords["group_key"].to_numpy(), np.array(["ok", "fail"], dtype=object))

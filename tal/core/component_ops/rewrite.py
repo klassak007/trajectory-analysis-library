@@ -5,9 +5,10 @@ from collections.abc import Mapping
 
 import xarray as xr
 
-from .options import COMPONENTS_SCHEMA_VERSION, require_supported_components_version
-from ..schema import merge_schema
+from ..schema import UNSET
 from ..schema_read import read_roles
+from ..schema_update import replace_extension_namespace
+from .options import COMPONENTS_SCHEMA_VERSION, require_supported_components_version
 from .types import ComponentSpec
 
 _COMPONENTS_NAMESPACE = "components"
@@ -144,10 +145,28 @@ def _components_patch(registry: Mapping[str, ComponentSpec]) -> Mapping[str, obj
 
 
 def _apply_components_patch(ds: xr.Dataset, *, registry: Mapping[str, ComponentSpec]) -> xr.Dataset:
-    cleared = merge_schema(ds, patch={"ext": {_COMPONENTS_NAMESPACE: None}}, validate=False)
-    if not registry:
-        return cleared
-    return merge_schema(cleared, patch=_components_patch(registry), validate=False)
+    payload = _components_patch(registry)["ext"][_COMPONENTS_NAMESPACE]
+    return replace_extension_namespace(ds, name=_COMPONENTS_NAMESPACE, value=payload)
+
+
+def plan_component_update(
+    ds: xr.Dataset,
+    *,
+    owner: str,
+    validated_registry: Mapping[str, ComponentSpec],
+    rename_map: Mapping[str, str] | None = None,
+) -> object:
+    """Plan a final component payload without copying unrelated extensions."""
+    if _read_components_block(ds, owner=owner) is None:
+        return UNSET
+    roles_declared, _, _, core_dims = read_roles(ds)
+    if not roles_declared:
+        return None
+    remap = _normalize_rename_map(rename_map)
+    rewritten = _rewrite_registry_entries(
+        validated_registry, ds=ds, core_dims=core_dims, rename_map=remap
+    )
+    return _components_patch(rewritten)["ext"][_COMPONENTS_NAMESPACE]
 
 
 def rewrite_component_registry_after_structure(
@@ -155,11 +174,16 @@ def rewrite_component_registry_after_structure(
     *,
     rename_map: Mapping[str, str] | None,
     owner: str,
+    validated_registry: Mapping[str, ComponentSpec] | None = None,
 ) -> xr.Dataset:
     block = _read_components_block(ds, owner=owner)
     if block is None:
         return ds
-    source_registry = _decode_prunable_registry(block, owner=owner)
+    source_registry = (
+        validated_registry
+        if validated_registry is not None
+        else _decode_prunable_registry(block, owner=owner)
+    )
     if not source_registry:
         return _apply_components_patch(ds, registry={})
     roles_declared, _, _, core_dims = read_roles(ds)

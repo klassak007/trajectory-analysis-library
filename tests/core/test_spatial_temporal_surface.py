@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import itertools
+
+import dask.array as da
 import numpy as np
 import pytest
 import xarray as xr
+from dask.callbacks import Callback
 
 from tal import AnalysisObject
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
 from tal.spatial import (
     AO_TEMPORAL_KIND_VALUES,
     Acceleration,
@@ -13,7 +21,9 @@ from tal.spatial import (
     AngularVelocity,
     LinearAcceleration,
     LinearVelocity,
+    Pose,
     Position,
+    Rotation,
     Velocity,
     differentiate,
     integrate,
@@ -48,7 +58,7 @@ def _temporal_vector3_dataset(*, var_name: str, core_dim: str, values: np.ndarra
         param_coord="time_s",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _typed_sources() -> dict[str, object]:
@@ -136,7 +146,7 @@ def test_spatial_core_156_d6_ao_temporal_surface_delegates_to_existing_typed_or_
     for kind, source in sources.items():
         typed_out = smooth(source, validate=True, target_cls=source.__class__)
         assert isinstance(typed_out, source.__class__)
-        ao = AnalysisObject._from_validated(source.unsafe_data)
+        ao = AnalysisObject._from_validated(source.as_dataset(copy="none"))
         ao_out = smooth(ao, kind=kind, validate=True)
         assert isinstance(ao_out, AnalysisObject)
     diff_expected = {
@@ -164,7 +174,7 @@ def test_spatial_core_156_d6_ao_temporal_surface_delegates_to_existing_typed_or_
 def test_spatial_hard_173_d6_ao_temporal_kind_validation_fails_closed_on_unsupported_or_ambiguous_kind() -> None:
     """ID: SPATIAL_HARD_173_d6_ao_temporal_kind_validation_fails_closed_on_unsupported_or_ambiguous_kind."""
     src = _typed_sources()["linear_velocity"]
-    ao = AnalysisObject._from_validated(src.unsafe_data)
+    ao = AnalysisObject._from_validated(src.as_dataset(copy="none"))
     with pytest.raises(ValueError, match="spatial\\.temporal\\.smooth"):
         _ = smooth(ao, validate=True)
     with pytest.raises(ValueError, match="spatial\\.temporal\\.smooth"):
@@ -205,14 +215,111 @@ def test_spatial_core_159_d6_ao_default_target_cls_none_returns_analysis_object_
         for kind, typed_target in expected.items():
             typed_source = sources[kind]
             typed_out = op(typed_source, validate=True, target_cls=typed_target)
-            ao_source = AnalysisObject._from_validated(typed_source.unsafe_data)
+            ao_source = AnalysisObject._from_validated(typed_source.as_dataset(copy="none"))
             ao_out = op(ao_source, kind=kind, validate=True, target_cls=None)
             assert type(ao_out) is AnalysisObject
-            assert read_roles(ao_out.unsafe_data) == read_roles(typed_out.unsafe_data)
-            assert read_param_coord_name(ao_out.unsafe_data) == read_param_coord_name(typed_out.unsafe_data)
-            assert read_sequence_size_coord_name(ao_out.unsafe_data) == read_sequence_size_coord_name(typed_out.unsafe_data)
-            assert get_kinematics_kind(ao_out.unsafe_data, owner="test") == get_kinematics_kind(
-                typed_out.unsafe_data, owner="test"
+            assert read_roles(ao_out.as_dataset(copy="none")) == read_roles(typed_out.as_dataset(copy="none"))
+            assert read_param_coord_name(ao_out.as_dataset(copy="none")) == read_param_coord_name(typed_out.as_dataset(copy="none"))
+            assert read_sequence_size_coord_name(ao_out.as_dataset(copy="none")) == read_sequence_size_coord_name(typed_out.as_dataset(copy="none"))
+            assert get_kinematics_kind(ao_out.as_dataset(copy="none"), owner="test") == get_kinematics_kind(
+                typed_out.as_dataset(copy="none"), owner="test"
             )
-            assert _spatial_rep(ao_out.unsafe_data) == _spatial_rep(typed_out.unsafe_data)
-            xr.testing.assert_identical(ao_out.unsafe_data, typed_out.unsafe_data)
+            assert _spatial_rep(ao_out.as_dataset(copy="none")) == _spatial_rep(typed_out.as_dataset(copy="none"))
+            xr.testing.assert_identical(ao_out.as_dataset(copy="none"), typed_out.as_dataset(copy="none"))
+
+
+def _typed_query_source(kind, lazy):
+    quat = np.tile([0.0, 0.0, 0.0, 1.0], (3, 1))
+    raw = xr.Dataset(
+        {"quat": (("sample", "q"), quat)},
+        coords={
+            "sample": [10, 20, 30],
+            "q": ["x", "y", "z", "w"],
+            "time": ("sample", [0.0, 1.0, 2.0]),
+        },
+    )
+    rotation = Rotation(
+        AnalysisObject.from_data(
+            raw, sequence_dim="sample", core_dims=("q",), param_coord="time"
+        )
+    )
+    if lazy:
+        rotation = Rotation(rotation.as_dataset().chunk({"sample": 1}))
+    if kind == "rotation":
+        return rotation
+    raw = xr.Dataset(
+        {"position": (("sample", "axis"), np.tile(np.arange(3.0)[:, None], (1, 3)))},
+        coords={
+            "sample": [10, 20, 30],
+            "axis": ["x", "y", "z"],
+            "time": ("sample", [0.0, 1.0, 2.0]),
+        },
+    )
+    position = Position(
+        AnalysisObject.from_data(
+            raw, sequence_dim="sample", core_dims=("axis",), param_coord="time"
+        )
+    )
+    return Pose.from_components(rotation, position)
+
+
+@pytest.mark.parametrize("kind", ["rotation", "pose"])
+@pytest.mark.parametrize("operation", ["at", "resample_to"])
+@pytest.mark.parametrize(
+    "lazy_source,validate,labels",
+    [(lazy, validate, "lazy") for lazy, validate in itertools.product([False, True], repeat=2)]
+    + [(False, True, "eager")],
+)
+def test_tut_022_typed_query_caller_labels_remain_lazy(
+    kind, operation, lazy_source, validate, labels
+):
+    ao = _typed_query_source(kind, lazy_source)
+    values = np.array([[0.2, 0.3], [1.2, 1.3]])
+    row = np.array([100, 200])
+    if labels == "lazy":
+        row = da.from_array(row, chunks=1)
+    query = xr.DataArray(
+        da.from_array(values, chunks=1),
+        dims=("row", "col"),
+        coords=xr.Coordinates(
+            {
+                "row": xr.Variable("row", row),
+                "tag": xr.Variable("row", np.array([4, 5])),
+            },
+            indexes={},
+        ),
+    )
+    before, source_before = query.copy(deep=True), ao.as_dataset()
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        result = getattr(ao.param, operation)(query, validate=validate).as_dataset()
+    assert not tasks
+    np.testing.assert_array_equal(result.time.compute(), values.ravel())
+    np.testing.assert_array_equal(result.row.compute(), [100, 100, 200, 200])
+    np.testing.assert_array_equal(result.tag.compute(), [4, 4, 5, 5])
+    xr.testing.assert_identical(query, before)
+    xr.testing.assert_identical(ao.as_dataset(), source_before)
+    assert "row" not in result.xindexes
+    assert result.row.dims == result.time.dims == ("sample",)
+
+
+@pytest.mark.parametrize("kind", ["rotation", "pose"])
+@pytest.mark.parametrize("operation", ["at", "resample_to"])
+@pytest.mark.parametrize("shape,validate", [((0, 2), False), ((2, 0), True), ((0, 0), True)])
+def test_tut_022_empty_typed_queries_keep_lazy_carrier_types(kind, operation, shape, validate):
+    """Typed empty products keep reviewed labels and parameter topology without planning work."""
+    source = _typed_query_source(kind, True)
+    labels = xr.Variable("row", da.from_array(np.arange(shape[0], dtype="int64"), chunks=1), attrs={"meaning": "row"})
+    query = xr.DataArray(da.from_array(np.empty(shape), chunks=1), dims=("row", "column"), coords=xr.Coordinates({"row": labels}, indexes={}))
+    before, original = source.as_dataset(), query.copy(deep=True)
+    tasks = []
+    with Callback(pretask=lambda *args: tasks.append(args[0])):
+        result = getattr(source.param, operation)(query, validate=validate).as_dataset()
+    assert not tasks
+    assert result.sizes["sample"] == 0
+    assert result.row.dtype == np.dtype("int64")
+    assert result.row.attrs == labels.attrs
+    assert result.row.dims == result.time.dims == ("sample",)
+    assert "row" not in result.xindexes
+    xr.testing.assert_identical(source.as_dataset(), before)
+    xr.testing.assert_identical(query, original)

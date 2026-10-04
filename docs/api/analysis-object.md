@@ -13,6 +13,12 @@ Use this page for the AO contract itself. Parameter operations, events,
 reducers, frame graph utilities, and typed wrappers have dedicated reference
 pages.
 
+Direct text and notebook display show the concrete TAL type, stored declarations,
+and xarray data previews. Notebook output includes bounded stored-schema detail;
+the coordinate Role column identifies stored dimension and parameter roles.
+Display does not validate or compute lazy payloads. See
+{doc}`../user-guide/viewing` for executable inspection examples and display limits.
+
 ```{contents}
 :local:
 :depth: 2
@@ -50,6 +56,28 @@ AnalysisObject.from_data(
 roles, parameter coordinate metadata, and validity metadata before the final
 validation pass.
 
+For repeated complete layouts, use `tal.core.AnalysisLayoutSpec`. Its five
+fields declare a complete target: omitted roles and optional coordinates are
+cleared even when a source Dataset already has TAL schema. In contrast,
+`from_data(...)` preserves source declarations for omitted overlay fields.
+Both validate existing source schema and component state before rewriting it.
+
+```python
+import xarray as xr
+from tal.core import AnalysisLayoutSpec
+
+dataset = xr.Dataset({"position": (("sample", "axis"), [[1.0, 2.0, 3.0]])},
+                     coords={"sample": [0], "axis": ["x", "y", "z"]})
+layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
+position = layout.wrap(dataset, data_vars="position")
+```
+
+`data_vars` applies only to Dataset input. It selects one or more ordered data
+variables before the external ownership copy, so discarded payloads are not
+copied. `AnalysisObject.select_vars(names)` selects from an existing AO,
+preserving its subtype where valid and sharing eligible payload buffers while
+isolating metadata. It couples an existing lazy resource to the selected alias.
+
 Key rules:
 
 - `core_dims` and `batch_dims` may be declared without `sequence_dim`.
@@ -57,17 +85,21 @@ Key rules:
 - When no roles are declared, runtime consumers treat the object as core-only
   by default.
 
-## Data Access
+## Data Access and Lifetime
 
-| Attribute or Method | Contract |
+| Method | Contract |
 | --- | --- |
-| `ao.data` | Mutation-safe deep copy of the underlying dataset. |
-| `ao.as_dataset()` | Mutation-safe dataset copy. |
-| `ao.unsafe_data` | Internal backing dataset reference for low-level inspection. |
-| `ao.to_dataarray(name=None)` | Convert a single-variable AO to a `DataArray`; multi-variable datasets fail. |
+| `ao.as_dataset()` | Deep, mutation-safe snapshot; Dask arrays remain lazy and non-owning. |
+| `ao.as_dataset(copy="shallow")` | Independent xarray structure and metadata sharing payload buffers or graphs. |
+| `ao.as_dataset(copy="none")` | Exact backing Dataset; mutation and closing affect the AO. |
+| `ao.to_dataarray(name=None, copy="deep")` | Apply the same copy policy to a single-variable conversion. |
+| `ao.close()` | Release a lazy backing resource at most once. |
 
-Prefer `ao.data` in notebooks and user code. Use `ao.unsafe_data` only when you
-need to inspect the exact backing store or schema consumed by operations.
+Prefer the default deep snapshot in user code. Use shallow mode for deliberate
+read-only zero-copy interoperation. Raw mode is an expert ownership crossing:
+the returned Dataset is the AO's backing object. Deep/shallow lazy views and
+all lazy DataArray facades require the source AO to remain open until their
+work completes.
 
 ## Accessors
 
@@ -75,11 +107,11 @@ need to inspect the exact backing store or schema consumed by operations.
 | --- | --- |
 | `ao.param` | Parameter-domain indexing, interpolation, resampling, and synchronization helpers. |
 | `ao.events` | Condition masks, boundary tables, intervals, and event windows. |
-| `ao.group` | Grouped layouts and grouped reducers. |
+| `ao.group` | Sequence grouped layouts and sequence/batch grouped reducers. |
 | `ao.combine` | Schema-aware concat, merge, align, and core assembly operations. |
 | `ao.components` | Component registry definition, extraction, patching, and composition. |
 | `ao.frames` | Frame ID metadata and runtime graph bridge operations. |
-| `ao.io` | AO-direct persistence to Zarr and CSV. |
+| `ao.io` | Canonical AO-direct persistence to Zarr. |
 | `ao.viz` | Optional plotting and explorer helpers. |
 
 ## Structural Operations
@@ -92,6 +124,7 @@ ao.isel(...)
 ao.sel(...)
 ao.where(...)
 ao.drop_vars(...)
+ao.select_vars(...)
 ao.rename(...)
 ao.transpose(...)
 ```
@@ -147,10 +180,10 @@ Use these when semantics are discovered after construction. Prefer
 
 ```python
 AnalysisObject.from_zarr(...)
-AnalysisObject.from_csv(...)
 ```
 
-Class loaders restore AO-direct persisted formats. See {doc}`io`.
+Zarr is the AO-direct persistence format. CSV is available only through the
+lossy log adapters described in {doc}`io`.
 
 ## Operator Overloads
 
@@ -181,13 +214,16 @@ safety and hashability.
    tal.AnalysisObject
    tal.AnalysisObject.as_dataset
    tal.AnalysisObject.to_dataarray
+   tal.AnalysisObject.close
    tal.AnalysisObject.isel
    tal.AnalysisObject.sel
    tal.AnalysisObject.where
    tal.AnalysisObject.drop_vars
+   tal.AnalysisObject.select_vars
    tal.AnalysisObject.rename
    tal.AnalysisObject.transpose
    tal.AnalysisObject.from_data
+   tal.core.AnalysisLayoutSpec
    tal.AnalysisObject.set_roles
    tal.AnalysisObject.set_param_coord
    tal.AnalysisObject.set_validity

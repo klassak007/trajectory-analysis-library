@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from ...core import CoreDecomposeOptions
 from ...core import decompose_core as _core_decompose_core
+from ...core.dataset_ownership import analysis_object_dataset
 from ..array import Array
 
 
 def _rewrap_array_output(result: "AnalysisObject") -> Array:
     if isinstance(result, Array) and result.__class__ is Array:
         return result
-    return Array._from_validated(result.unsafe_data)
+    return Array._from_validated(analysis_object_dataset(result))
 
 
 def decompose_core(

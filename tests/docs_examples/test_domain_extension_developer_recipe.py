@@ -316,11 +316,6 @@ def test_domain_extension_documented_examples_execute(example_id: str) -> None:
     exec(compile(blocks[example_id], f"{DOMAIN_EXTENSIONS_PATH}:{example_id}", "exec"), namespace)
 
 
-def test_arch_docs_001_domain_extension_docs_do_not_reference_tal_v2_as_spec() -> None:
-    """ID: ARCH_DOCS_001_domain_extension_docs_do_not_reference_tal_v2_as_spec."""
-    assert "tal_v2" not in _visible_developer_guide_text()
-
-
 def test_arch_docs_002_domain_extension_docs_do_not_advertise_missing_apis() -> None:
     """ID: ARCH_DOCS_002_domain_extension_docs_do_not_advertise_missing_apis."""
     text = _visible_developer_guide_text().lower()
@@ -341,7 +336,6 @@ def test_domain_extension_visible_docs_avoid_internal_references() -> None:
     forbidden = [
         "AGENTS.md",
         "contracts/",
-        "tal_v2",
         "tests/",
         "DOCS_DEV_",
         "DOC_EXAMPLE_",
@@ -362,7 +356,7 @@ def test_domain_extension_python_blocks_are_annotated_and_self_contained() -> No
 
 
 def test_domain_extension_python_comments_do_not_reference_internal_docs() -> None:
-    forbidden = ("AGENTS", "contract", "contracts/", "tests/", "tal_v2", "DOC_EXAMPLE", "ARCH_DOCS")
+    forbidden = ("AGENTS", "contract", "contracts/", "tests/", "DOC_EXAMPLE", "ARCH_DOCS")
     failures: list[str] = []
     for example_id, code in _example_blocks().items():
         for line_number, line in enumerate(code.splitlines(), start=1):

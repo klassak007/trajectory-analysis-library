@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import datetime as _datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
+from ..param_engine.query_topology import QueryOutputPlan, QueryTopologyPlan
 from ..param_engine.types import ParamCoordSpec, QueryGrid
+
+ParamKind = Literal["numeric", "datetime64"]
+ParamSyncTolerance = float | int | np.timedelta64 | _datetime.timedelta | pd.Timedelta
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
@@ -32,7 +38,7 @@ class ParamSelectOptions:
     ...     param_coord="time",
     ...     validate=True,
     ... )
-    >>> ao.param.sel([1.0], on="time", opts=ParamSelectOptions()).unsafe_data["value"].item()
+    >>> ao.param.sel([1.0], on="time", opts=ParamSelectOptions()).as_dataset()["value"].item()
     10.0
     """
 
@@ -61,7 +67,7 @@ class ParamEvalOptions:
     ...     param_coord="time",
     ...     validate=True,
     ... )
-    >>> ao.param.at([0.5], on="time", opts=ParamEvalOptions(method="linear")).unsafe_data["value"].item()
+    >>> ao.param.at([0.5], on="time", opts=ParamEvalOptions(method="linear")).as_dataset()["value"].item()
     5.0
     """
 
@@ -74,10 +80,32 @@ class ParamEvalOptions:
 class ParamSyncOptions:
     """Synchronization options for multi-AO param alignment.
 
+    Parameters
+    ----------
+    join
+        Shared grid policy. ``"left"``, ``"right"``, and ``"override"`` use an
+        existing or explicit grid; ``"outer"``, ``"inner"``, ``"domain"``, and
+        ``"exact"`` synthesize a grid from input parameter domains.
+    how
+        Evaluation policy for each input on the resolved grid.
+    batch_join
+        Batch label alignment policy used before synchronization.
+    query_dim
+        Temporary query dimension name used during evaluation.
+    tol
+        Numeric tolerance for numeric parameter coordinates, or timedelta-like
+        tolerance for datetime64 parameter coordinates. Datetime64 contexts
+        accept only exact numeric zero or timedelta-like values.
+    fill_value
+        Numeric fill value used only when ``how="fill"``.
+
     Notes
     -----
     Synchronization builds a common param grid for one or more AOs. The
     returned AOs are evaluated on that grid according to ``join`` and ``how``.
+    Numeric param coordinates use numeric ``tol`` values. Datetime64 param
+    coordinates accept timedelta-like ``tol`` values for synchronization only;
+    selection and indexing remain tolerance-free.
 
     Examples
     --------
@@ -90,8 +118,8 @@ class ParamSyncOptions:
     ...     param_coord="time",
     ...     validate=True,
     ... )
-    >>> synced = synchronize(left, opts=ParamSyncOptions(join="left", how="interp"))
-    >>> synced.unsafe_data.sizes["sample"]
+    >>> synced = synchronize([left], opts=ParamSyncOptions(join="left", how="interp"))
+    >>> synced[0].as_dataset().sizes["sample"]
     2
     """
 
@@ -99,7 +127,7 @@ class ParamSyncOptions:
     how: Literal["interp", "nearest", "fill"] = "interp"
     batch_join: Literal["inner", "outer", "exact"] = "inner"
     query_dim: str = "query"
-    tol: float = 0.0
+    tol: ParamSyncTolerance = 0.0
     fill_value: float | int | None = np.nan
 
 
@@ -121,6 +149,7 @@ class ParamRuntimeContext:
     valid_mask: xr.DataArray
     sequence_size_coord: str | None
     batch_coords: dict[str, xr.DataArray]
+    param_kind: ParamKind = "numeric"
 
 
 @dataclass(frozen=True)
@@ -135,4 +164,6 @@ class ParamIndexResult:
     index: xr.DataArray
     valid: xr.DataArray
     grid: QueryGrid
+    query_topology: QueryTopologyPlan
+    output_plan: QueryOutputPlan
     scalar_query: bool

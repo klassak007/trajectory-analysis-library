@@ -1,16 +1,19 @@
-import numpy as np
-import xarray as xr
 from pathlib import Path
 
+import numpy as np
+import pytest
+import xarray as xr
+
+import tal.core.param_engine.prepared as prepared_mod
 from tal.core import AnalysisObject, ParamEvalOptions
-import tal.core.param_ops.evaluate as eval_mod
+from tal.core.param_engine import ParamMapOptions, build_param_map
 
 
 def _ao_two_vars() -> AnalysisObject:
     ds = xr.Dataset(
         data_vars={
             "v1": (("sample",), [0.0, 10.0, 20.0, 30.0]),
-            "v2": (("sample",), [1.0, 11.0, 21.0, 31.0]),
+            "value_b": (("sample",), [1.0, 11.0, 21.0, 31.0]),
         },
         coords={"sample": [0, 1, 2, 3], "tau": ("sample", [0.0, 0.5, 1.0, 1.5])},
     )
@@ -21,17 +24,48 @@ def test_param_perf_015_map_reuse_across_multiple_vars(monkeypatch) -> None:
     """ID: PARAM_PERF_015_map_reuse_across_multiple_vars."""
     ao = _ao_two_vars()
     calls = {"n": 0}
-    original = eval_mod.build_param_map
+    original = prepared_mod.build_param_map
 
     def _count(*args, **kwargs):
         calls["n"] += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(eval_mod, "build_param_map", _count)
+    monkeypatch.setattr(prepared_mod, "build_param_map", _count)
     out = ao.param.at([0.25, 1.25], opts=ParamEvalOptions(method="linear"))
     assert calls["n"] == 1
-    np.testing.assert_allclose(out.data["v1"].values, [5.0, 25.0])
-    np.testing.assert_allclose(out.data["v2"].values, [6.0, 26.0])
+    np.testing.assert_allclose(out.as_dataset()["v1"].values, [5.0, 25.0])
+    np.testing.assert_allclose(out.as_dataset()["value_b"].values, [6.0, 26.0])
+
+
+def test_param_perf_016_integral_param_mapping_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: PARAM_PERF_016_integral_param_mapping_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+    base = 2**53
+    param = xr.DataArray(
+        da.from_array(np.asarray([base, base + 1], dtype="int64"), chunks=1),
+        dims=("sample",),
+    )
+    query = xr.DataArray(
+        da.from_array(np.asarray([base + 1], dtype="int64"), chunks=1),
+        dims=("query",),
+    )
+
+    with monkeypatch.context() as guarded:
+        guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
+        pmap = build_param_map(
+            param=param,
+            query=query,
+            sequence_dim="sample",
+            query_dim="query",
+            options=ParamMapOptions(method="nearest"),
+        )
+        assert hasattr(pmap.i0.data, "chunks")
+        assert hasattr(pmap.valid.data, "chunks")
+
+    assert int(pmap.i0.compute().item()) == 1
+    assert bool(pmap.valid.compute().item()) is True
 
 
 def test_param_ops_063_sequence_size_finalize_policy_single_owner() -> None:

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tal-extensions"
+version = "0.1.0"
+description = "Experimental geospatial and astronomy extensions for TAL."
+readme = "README.md"
+authors = [{ name = "Kyle Lassak" }]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = ["tal==0.2.0", "numpy>=1.26", "xarray>=2025.10.0"]
+
+[project.optional-dependencies]
+geo = ["pyproj>=3.7"]
+astro = ["pyproj>=3.7", "astropy>=7"]
+test = ["pytest>=8.4", "import-linter>=2.14", "ruff>=0.16.5"]
+docs = [
+    "sphinx>=8.2,<9.0", "myst-parser>=4.0,<5.0",
+    "pydata-sphinx-theme>=0.16", "sphinx-copybutton>=0.5",
+    "sphinx-autodoc-typehints>=3.0,<4.0",
+]
+dev = ["tal-extensions[astro,test,docs]==0.1.0", "build>=1.4"]
+full = ["tal-extensions[astro]==0.1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tal_extensions", "tal_extensions.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["phase_guard(owner): temporary architecture guard owned by an active contract or slice"]

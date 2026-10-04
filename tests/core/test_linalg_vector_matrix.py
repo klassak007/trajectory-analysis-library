@@ -49,24 +49,24 @@ def test_linalg_core_011_vector_wrapper_enforces_single_core_dim() -> None:
     """ID: LINALG_CORE_011_vector_wrapper_enforces_single_core_dim."""
     vec = Vector(_vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis"))
     assert isinstance(vec.set_core_dims("axis"), Vector)
-    assert _core_dims(vec.unsafe_data) == ("axis",)
+    assert _core_dims(vec.as_dataset(copy="none")) == ("axis",)
 
 
 def test_linalg_core_012_matrix_wrapper_enforces_two_core_dims() -> None:
     """ID: LINALG_CORE_012_matrix_wrapper_enforces_two_core_dims."""
     mat = Matrix(_matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="r", col="c"))
     assert isinstance(mat.set_core_dims("r", "c"), Matrix)
-    assert _core_dims(mat.unsafe_data) == ("r", "c")
+    assert _core_dims(mat.as_dataset(copy="none")) == ("r", "c")
 
 
 def test_linalg_hard_097_vector_typed_lifecycle_parity() -> None:
     """ID: LINALG_HARD_097_vector_typed_lifecycle_parity."""
     vec = Vector(_vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="axis"))
-    from_ds = Vector(vec.unsafe_data)
+    from_ds = Vector(vec.as_dataset(copy="none"))
 
     assert isinstance(vec, Vector)
     assert isinstance(from_ds, Vector)
-    assert _core_dims(from_ds.unsafe_data) == ("axis",)
+    assert _core_dims(from_ds.as_dataset(copy="none")) == ("axis",)
     for validate in (True, False):
         with pytest.raises(ValueError, match="Vector requires exactly one core dim"):
             _ = vec.set_roles(
@@ -80,11 +80,11 @@ def test_linalg_hard_097_vector_typed_lifecycle_parity() -> None:
 def test_linalg_hard_098_matrix_typed_lifecycle_parity() -> None:
     """ID: LINALG_HARD_098_matrix_typed_lifecycle_parity."""
     mat = Matrix(_matrix_ao(np.arange(24, dtype=float).reshape(2, 2, 2, 3), row="row", col="col"))
-    from_ds = Matrix(mat.unsafe_data)
+    from_ds = Matrix(mat.as_dataset(copy="none"))
 
     assert isinstance(mat, Matrix)
     assert isinstance(from_ds, Matrix)
-    assert _core_dims(from_ds.unsafe_data) == ("row", "col")
+    assert _core_dims(from_ds.as_dataset(copy="none")) == ("row", "col")
     for validate in (True, False):
         with pytest.raises(ValueError, match="Matrix requires exactly two core dims"):
             _ = mat.set_roles(
@@ -94,7 +94,7 @@ def test_linalg_hard_098_matrix_typed_lifecycle_parity() -> None:
                 validate=validate,
             )
     with pytest.raises(ValueError, match="duplicate|distinct"):
-        _ = Matrix._from_unvalidated(mat.set_roles(core_dims=("row", "row"), validate=False).unsafe_data)
+        _ = Matrix._from_unvalidated(mat.set_roles(core_dims=("row", "row"), validate=False).as_dataset(copy="none"))
 
 
 def test_linalg_core_013_matrix_transpose_swaps_core_axes_truthfully() -> None:
@@ -102,9 +102,9 @@ def test_linalg_core_013_matrix_transpose_swaps_core_axes_truthfully() -> None:
     mat = Matrix(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="col"))
     transposed = mat.T
     assert isinstance(transposed, Matrix)
-    assert _core_dims(transposed.unsafe_data) == ("col", "row")
-    expected = mat.unsafe_data.transpose("sample", "trial", "col", "row")
-    xr.testing.assert_allclose(transposed.unsafe_data["x"], expected["x"])
+    assert _core_dims(transposed.as_dataset(copy="none")) == ("col", "row")
+    expected = mat.as_dataset(copy="none").transpose("sample", "trial", "col", "row")
+    xr.testing.assert_allclose(transposed.as_dataset(copy="none")["x"], expected["x"])
 
 
 def test_linalg_core_014_matmul_builtins_route_output_type_by_core_arity() -> None:
@@ -203,8 +203,8 @@ def test_linalg_hard_018_matmul_builtin_wrapper_type_routing_no_regression_in_va
     left = Matrix(_matrix_ao(np.arange(36, dtype=float).reshape(2, 2, 3, 3), row="row", col="mid"))
     right = Vector(_vector_ao(np.arange(12, dtype=float).reshape(2, 2, 3), axis="mid"))
     out = matmul(left, right)
-    expected = xr.dot(left.unsafe_data["x"], right.unsafe_data["x"], dim=["mid"]).rename("datavar")
-    xr.testing.assert_allclose(out.unsafe_data["datavar"], expected)
+    expected = xr.dot(left.as_dataset(copy="none")["x"], right.as_dataset(copy="none")["x"], dim=["mid"]).rename("datavar")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["datavar"], expected)
     assert isinstance(out, Vector)
 
 

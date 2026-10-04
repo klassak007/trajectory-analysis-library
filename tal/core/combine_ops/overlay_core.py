@@ -8,10 +8,19 @@ import pandas as pd
 import xarray as xr
 
 from .align import align_contexts
-from .finalize import finalize_combine_output
+from .finalize import (
+    CombineFinalizationPlan,
+    finalize_combine_output,
+    prepare_combine_finalization,
+)
 from .normalize import normalize_inputs, resolve_contexts
 from .options import coerce_core_overlay_options
-from .types import AlignOptions, CombineContext, CombineResolveOptions, CoreOverlayOptions
+from .types import (
+    AlignOptions,
+    CombineContext,
+    CombineResolveOptions,
+    CoreOverlayOptions,
+)
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
@@ -262,10 +271,22 @@ def _overlay_kernel(
     patches: Sequence[xr.DataArray],
     core_dim: str,
 ) -> xr.DataArray:
-    out = base_data
+    out = _prepare_overlay_backend(base_data, patches)
     for patch in patches:
         out = _overlay_single_patch(out, patch, core_dim=core_dim)
     return out.reindex({core_dim: base_data.get_index(core_dim)})
+
+
+def _prepare_overlay_backend(
+    base_data: xr.DataArray,
+    patches: Sequence[xr.DataArray],
+) -> xr.DataArray:
+    if base_data.chunks is not None:
+        return base_data
+    if not any(patch.chunks is not None for patch in patches):
+        return base_data
+    chunked = base_data.variable.chunk()
+    return base_data.copy(deep=False, data=chunked.data)
 
 
 def _optional_coord_name(
@@ -279,6 +300,7 @@ def _optional_coord_name(
 
 
 def _finalize_overlay_output(
+    finalization: CombineFinalizationPlan,
     context: CombineContext,
     *,
     ds: xr.Dataset,
@@ -287,10 +309,10 @@ def _finalize_overlay_output(
     core_dims: tuple[str, ...],
     output_var: str,
     validate: bool,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     renamed = ds.rename({next(iter(ds.data_vars)): output_var})
     return finalize_combine_output(
-        context,
+        finalization,
         renamed,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims,
@@ -353,12 +375,16 @@ def overlay_core(
     *,
     opts: CoreOverlayOptions,
     validate: bool = True,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     owner = "overlay_core"
     options = coerce_core_overlay_options(opts, owner=owner)
     patch_values = _normalize_patches(patches, owner=owner)
     objects = normalize_inputs([base, *patch_values], owner=owner)
     contexts = resolve_contexts(objects, resolve=CombineResolveOptions(require_sequence=True, owner=owner))
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner=owner,
+    )
     aligned = align_contexts(
         contexts,
         opts=AlignOptions(batch_join="exact", sequence_join="exact", fill_value=float("nan"), pad_invalid_outer=True),
@@ -371,6 +397,7 @@ def overlay_core(
         core_dim=options.core_dim,
     )
     return _finalize_overlay_output(
+        finalization,
         runtime.base_payload.context,
         ds=out_data.to_dataset(name=runtime.base_payload.var_name),
         sequence_dim=runtime.sequence_dim,

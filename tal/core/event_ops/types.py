@@ -244,6 +244,11 @@ class Condition:
     -----
     Conditions are symbolic until evaluated by an event accessor. They are not
     truth-testable in Python because the result depends on AO data.
+    Ordering comparisons on a single-variable ``AnalysisObject`` are the
+    normal construction path. ``Condition.var``, ``Condition.coord``, and
+    ``Condition.compare`` remain available for advanced named expressions.
+    Analysis-object ``==`` and ``!=`` test object identity; use
+    ``tal.ufuncs.equal`` or ``tal.ufuncs.not_equal`` for elementwise equality.
 
     Examples
     --------
@@ -256,8 +261,11 @@ class Condition:
     ...     core_dims=(),
     ...     validate=True,
     ... )
-    >>> condition = Condition.compare(Condition.var("error"), "gt", 1.0)
+    >>> condition = ao > 1.0
     >>> ao.events.mask(condition).values.tolist()
+    [False, True]
+    >>> named = Condition.compare(Condition.var("error"), "gt", 1.0)
+    >>> ao.events.mask(named).values.tolist()
     [False, True]
     """
 

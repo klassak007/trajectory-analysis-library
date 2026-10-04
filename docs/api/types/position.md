@@ -22,6 +22,21 @@ metadata, optional frame tags, and temporal operations at the typed boundary.
 - Exactly one core dimension of length `3` is required.
 - Core labels must be exactly `("x", "y", "z")`.
 - Representation is cartesian.
+- Frame declarations are optional; `graph=` associates the wrapper without
+  creating topology.
+
+## Graph Association
+
+`position.graph` returns the remembered graph or `None`.
+`position.with_graph(graph)` creates a distinct metadata-isolated owning alias;
+it shares eligible payload buffers and lazy graphs.
+
+## Scalar-field construction
+
+Use `Position.from_fields(...)` to assemble xyz scalar data variables from a
+Dataset or existing AO. `Position.fields(...)` returns a reusable immutable
+recipe. Field attributes and storage encodings are deliberately not copied to
+the new `position` variable.
 
 ## Spatial Methods
 
@@ -29,8 +44,8 @@ metadata, optional frame tags, and temporal operations at the typed boundary.
 position.as_delta(...)
 position.norm(ord=...)
 position.magnitude()
-position.to_frame(dst, *, edge_pose_fn, opts=None, validate=True)
-position.express_in(dst, *, edge_rotation_fn, opts=None, validate=True)
+position.to_frame(dst, *, edge_pose_fn=None, graph=None, opts=None, validate=True)
+position.express_in(dst, *, edge_rotation_fn=None, graph=None, opts=None, validate=True)
 ```
 
 `as_delta(...)` marks a position-like payload as displacement-like for
@@ -66,6 +81,10 @@ unambiguous. Unframed addition requires exactly one operand to be marked with
    :nosignatures:
 
    tal.spatial.Position
+   tal.spatial.Position.fields
+   tal.spatial.Position.from_fields
+   tal.spatial.Position.graph
+   tal.spatial.Position.with_graph
    tal.spatial.Position.as_delta
    tal.spatial.Position.norm
    tal.spatial.Position.magnitude

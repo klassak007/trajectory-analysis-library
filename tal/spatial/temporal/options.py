@@ -45,7 +45,7 @@ class PoseTemporalOptions:
 
 @dataclass(frozen=True)
 class KinematicsDerivativeOptions:
-    """Typed derivative options for D3 kinematics temporal methods.
+    """Options for kinematic differentiation.
 
     Notes
     -----
@@ -61,7 +61,7 @@ class KinematicsDerivativeOptions:
 
 @dataclass(frozen=True)
 class KinematicsIntegralOptions:
-    """Typed integral options for D3 kinematics temporal methods.
+    """Options for kinematic integration.
 
     Notes
     -----
@@ -74,7 +74,7 @@ class KinematicsIntegralOptions:
 
 @dataclass(frozen=True)
 class KinematicsSmoothingOptions:
-    """Typed smoothing options for D4 kinematics temporal methods.
+    """Options for kinematic smoothing.
 
     Notes
     -----

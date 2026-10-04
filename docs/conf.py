@@ -8,20 +8,18 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+import tomllib
 
 # Ensure `import tal` works when building docs from a source checkout.
-sys.path.insert(0, os.path.abspath(".."))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 
 project = "TAL"
 author = "TAL Contributors"
 
-try:  # pragma: no cover (docs build only)
-    import tal  # type: ignore
-
-    release = getattr(tal, "__version__", "0.0.0")
-except Exception:  # pragma: no cover (docs build only)
-    release = "0.0.0"
+release = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]["version"]
 
 
 extensions = [
@@ -98,7 +96,8 @@ intersphinx_mapping = {
 }
 
 nitpick_ignore_regex = [
-    ("py:attr", r"unsafe_data"),
+    # Callable aliases are documented as data; generic TypeVars are not classes.
+    ("py:class", r"SourceCoercer|DatasetHook|EnforceHook|T"),
     ("py:class", r".*Accessor"),
     ("py:class", r".*Options"),
     ("py:class", r"'AnalysisObject"),
@@ -107,22 +106,28 @@ nitpick_ignore_regex = [
     ("py:class", r"'Frame'"),
     ("py:class", r"\{\"quat\""),
     ("py:class", r"\"matrix\"\}"),
-    ("py:class", r"CatalogBackendOption"),
     ("py:class", r"callable"),
     ("py:class", r"default=True"),
     ("py:class", r"DimLike"),
     ("py:class", r"iterable"),
     ("py:class", r"np\..*"),
     ("py:class", r"optional"),
+    # pandas exposes Timedelta through a private runtime module name in type aliases.
+    ("py:class", r"pandas\._libs\.tslibs\.timedeltas\.Timedelta"),
     ("py:class", r"tal\.core\..*types\..*"),
     ("py:class", r"tal\.core\.schema\.UnsetType"),
+    ("py:class", r"tal\.core\.SchemaError"),
     ("py:class", r"tal\.io\.options\..*"),
     ("py:class", r"tal\.spatial\.path_solve\..*"),
+    ("py:class", r"tal\.spatial\.construction\.Spatial.*Mixin"),
+    ("py:class", r"tal\.spatial\.field_recipes\..*Mixin"),
+    ("py:class", r"tal\.spatial\.ops\.field_selectors\.FieldSelectorDeclaration"),
     ("py:class", r"UnsetType"),
     ("py:class", r"VizKind"),
     ("py:class", r"WeightInput"),
     ("py:class", r"xr\..*"),
     ("py:data", r"typing\.Union"),
+    ("py:exc", r"tal\.core\.SchemaError"),
     ("py:meth", r"Array\.set_core_dims"),
     ("py:meth", r"Array\.set_matrix_axes"),
     ("py:meth", r"Array\.set_vector_axis"),
@@ -138,6 +143,7 @@ nitpick_ignore_regex = [
     ("py:obj", r"tal\.core\.schema\.set_roles"),
     ("py:obj", r"tal\.core\.schema\.set_validity"),
     ("py:obj", r"tal\.ufuncs\..*"),
+    ("py:obj", r"tal\.spatial\.field_recipes\.T"),
 ]
 
 suppress_warnings = [

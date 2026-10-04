@@ -6,8 +6,17 @@ from .types import ReducerOp, WeightInput
 from .validity import apply_structural_mask, reduce_missing_on_valid_prefix
 from .weights import coerce_aligned_weights, validate_weight_values
 
-
 _SKIPNA_REDUCERS = frozenset({"mean", "sum", "std", "var", "median", "min", "max"})
+
+
+def _empty_extremum(var: xr.DataArray, *, reduce_dims: tuple[str, ...]) -> xr.DataArray:
+    """Build empty output topology, or missing values for empty reduced axes."""
+    template = var.sum(dim=reduce_dims, keep_attrs=True)
+    reduced_empty = any(var.sizes[dim] == 0 for dim in reduce_dims)
+    dtype = "float64" if reduced_empty and var.dtype.kind in {"i", "u"} else var.dtype
+    if not reduced_empty:
+        return template.astype(dtype)
+    return xr.full_like(template, float("nan"), dtype=dtype)
 
 
 def _reduce_unweighted_skipna(
@@ -20,6 +29,8 @@ def _reduce_unweighted_skipna(
     mask: xr.DataArray | None,
 ) -> xr.DataArray:
     data = apply_structural_mask(var, mask=mask)
+    if op in {"min", "max"} and data.size == 0:
+        return _empty_extremum(data, reduce_dims=reduce_dims)
     kwargs: dict[str, object] = {"dim": reduce_dims, "keep_attrs": True, "skipna": True}
     if op in {"std", "var"}:
         kwargs["ddof"] = int(ddof)
@@ -63,9 +74,15 @@ def _reduce_weighted_mean_sum(
     owner: str,
 ) -> xr.DataArray:
     data = apply_structural_mask(var, mask=mask)
-    weight = coerce_aligned_weights(var, reduce_dims=reduce_dims, weights=weights, op=op, owner=owner)
+    weight = coerce_aligned_weights(var, reduce_dims=reduce_dims, weights=weights, mask=mask, op=op, owner=owner)
     assert weight is not None
-    validated = validate_weight_values(weight, mask=mask, skipna=skipna, owner=owner)
+    validated = validate_weight_values(
+        weight,
+        mask=mask,
+        payload_has_entries=var.size != 0,
+        skipna=skipna,
+        owner=owner,
+    )
     weight_clean = validated.fillna(0) if skipna else validated
     product = (data * weight_clean).where(data.notnull(), other=0).fillna(0)
     numerator = product.sum(dim=reduce_dims, keep_attrs=True, skipna=True)

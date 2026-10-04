@@ -1,17 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
 import xarray as xr
 
-
-def _sequence_index(ds: xr.Dataset, *, sequence_dim: str) -> xr.DataArray:
-    size = int(ds.sizes[sequence_dim])
-    if sequence_dim in ds.coords and tuple(ds.coords[sequence_dim].dims) == (sequence_dim,):
-        coord = ds.coords[sequence_dim]
-    else:
-        coord = xr.DataArray(np.arange(size, dtype=np.int64), dims=(sequence_dim,))
-    values = np.arange(size, dtype=np.int64)
-    return xr.DataArray(values, dims=(sequence_dim,), coords={sequence_dim: coord})
+from ..validity_mask import resolve_structural_valid_mask_base
 
 
 def resolve_structural_valid_mask(
@@ -20,20 +11,17 @@ def resolve_structural_valid_mask(
     sequence_dim: str | None,
     sequence_size_coord: str | None,
     var: xr.DataArray,
+    owner: str = "resolve_structural_valid_mask",
 ) -> xr.DataArray | None:
-    if sequence_dim is None or sequence_size_coord is None:
+    if sequence_dim is None or sequence_dim not in var.dims:
         return None
-    if sequence_dim not in var.dims:
-        return None
-    if sequence_size_coord not in ds.coords:
-        return None
-    size = ds.coords[sequence_size_coord]
-    if sequence_dim in size.dims:
-        return None
-    idx = _sequence_index(ds, sequence_dim=sequence_dim)
-    try:
-        mask = idx < size
-    except (TypeError, ValueError):
+    mask = resolve_structural_valid_mask_base(
+        ds,
+        sequence_dim=sequence_dim,
+        sequence_size_coord=sequence_size_coord,
+        owner=owner,
+    )
+    if mask is None:
         return None
     return mask.broadcast_like(var)
 
@@ -62,4 +50,5 @@ __all__ = [
     "apply_structural_mask",
     "reduce_missing_on_valid_prefix",
     "resolve_structural_valid_mask",
+    "resolve_structural_valid_mask_base",
 ]

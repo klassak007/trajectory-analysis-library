@@ -16,6 +16,7 @@ reference when you need exact method contracts.
 
 overview
 core_concepts
+illustrated_example
 creating_trajectory_objects
 indexing
 time

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import inspect
+import json
 import re
+from pathlib import Path
 
 from tests.docs_examples._examples import EXECUTABLE_EXAMPLES
 from tests.docs_examples._manifest import (
@@ -8,13 +11,28 @@ from tests.docs_examples._manifest import (
     DOCSTRING_SECTION_REQUIREMENTS,
     DUUNDER_FAMILY_DOC_OWNER,
     EXAMPLE_REQUIRED_SYMBOLS,
+    _resolve_symbol,
     curated_scope_counts,
     inventory_required_example_ids,
-    iter_inventory_example_symbols,
     iter_curated_public_symbols,
+    iter_inventory_example_symbols,
     iter_scoped_public_symbols,
     required_example_ids,
 )
+
+NUMBA_AUTOSUMMARY_RAISES_SYMBOLS = {
+    "centered_window_bounds",
+    "clipped_window_bounds",
+    "forward_window_bounds",
+    "backward_window_bounds",
+    "prepare_block_rows",
+    "prepare_scan_rows",
+    "prepare_topology_rows",
+    "prepare_window_rows",
+    "require_numba",
+    "warm_median",
+    "cold_subprocess",
+}
 
 
 def _docstring(obj: object) -> str:
@@ -44,16 +62,26 @@ def _extract_examples_block(doc: str) -> str:
     return match.group("body")
 
 
+def _has_section(doc: str, section: str) -> bool:
+    return re.search(rf"(?m)^\s*{re.escape(section)}\s*\n\s*-{{3,}}\s*$", doc) is not None
+
+
+def _numba_autosummary_symbols() -> tuple[str, ...]:
+    text = Path("docs/api/numba.md").read_text(encoding="utf-8")
+    return tuple(re.findall(r"(?m)^\s+(tal\.utils\.numba\.[A-Za-z_][A-Za-z0-9_]*)\s*$", text))
+
+
 def test_curated_scope_counts_match_plan() -> None:
-    expected_total = 235
     observed = curated_scope_counts()
     assert observed == CURATED_SCOPE_COUNTS
-    assert sum(observed.values()) == expected_total
+    assert sum(observed.values()) == len(iter_curated_public_symbols())
 
 
 def test_scoped_public_symbols_have_docstrings() -> None:
     missing: list[str] = []
     for record in iter_scoped_public_symbols():
+        if record.kind == "type_alias":
+            continue
         if not _docstring(record.obj).strip():
             missing.append(record.symbol)
     assert not missing, f"Missing docstrings for public scoped symbols: {missing!r}"
@@ -62,6 +90,8 @@ def test_scoped_public_symbols_have_docstrings() -> None:
 def test_scoped_docstrings_have_informative_summaries() -> None:
     failures: list[str] = []
     for record in iter_scoped_public_symbols():
+        if record.kind == "type_alias":
+            continue
         doc = _docstring(record.obj).strip()
         if not doc:
             continue
@@ -88,6 +118,8 @@ def test_scoped_docstrings_use_numpy_style_sections() -> None:
         r"(?m)^\s*Example:\s*$",
     )
     for record in iter_scoped_public_symbols():
+        if record.kind == "type_alias":
+            continue
         doc = _docstring(record.obj)
         for pattern in forbidden:
             if re.search(pattern, doc):
@@ -103,11 +135,36 @@ def test_required_docstring_sections_present() -> None:
         if record is None:
             failures.append(f"{symbol}: symbol not found in manifest scope")
             continue
+        if record.kind == "type_alias":
+            continue
         doc = _docstring(record.obj)
         for section in sections:
             pattern = rf"(?m)^\s*{re.escape(section)}\s*\n\s*-{{3,}}\s*$"
             if re.search(pattern, doc) is None:
                 failures.append(f"{symbol}: missing section '{section}'")
+    assert not failures, "\n".join(failures)
+
+
+def test_numba_public_autosummary_symbols_have_numpy_docstrings() -> None:
+    failures: list[str] = []
+    symbols = _numba_autosummary_symbols()
+    assert symbols, "docs/api/numba.md must list tal.utils.numba autosummary symbols"
+    for symbol in symbols:
+        obj = _resolve_symbol(symbol)
+        doc = _docstring(obj)
+        if not doc.strip():
+            failures.append(f"{symbol}: missing docstring")
+            continue
+        required = ["Parameters"]
+        if inspect.isfunction(obj):
+            required.extend(["Returns", "Examples"])
+        if symbol.rsplit(".", 1)[-1] in NUMBA_AUTOSUMMARY_RAISES_SYMBOLS:
+            required.append("Raises")
+        for section in required:
+            if not _has_section(doc, section):
+                failures.append(f"{symbol}: missing section '{section}'")
+        if inspect.isfunction(obj) and ">>>" not in _extract_examples_block(doc):
+            failures.append(f"{symbol}: Examples block must include runnable '>>>' snippet(s)")
     assert not failures, "\n".join(failures)
 
 
@@ -119,6 +176,8 @@ def test_required_example_symbols_contain_runnable_snippets() -> None:
         if record is None:
             failures.append(f"{symbol}: symbol not found in manifest scope")
             continue
+        if record.kind == "type_alias":
+            continue
         block = _extract_examples_block(_docstring(record.obj))
         if ">>>" not in block:
             failures.append(f"{symbol}: Examples block must include runnable '>>>' snippet(s)")
@@ -128,6 +187,8 @@ def test_required_example_symbols_contain_runnable_snippets() -> None:
 def test_inventory_example_symbols_contain_runnable_snippets() -> None:
     failures: list[str] = []
     for record in iter_inventory_example_symbols():
+        if record.kind == "type_alias":
+            continue
         block = _extract_examples_block(_docstring(record.obj))
         if ">>>" not in block:
             failures.append(f"{record.symbol}: Examples block must include runnable '>>>' snippet(s)")
@@ -137,7 +198,7 @@ def test_inventory_example_symbols_contain_runnable_snippets() -> None:
 def test_curated_public_callables_include_examples() -> None:
     failures: list[str] = []
     for record in iter_curated_public_symbols():
-        if record.kind == "property":
+        if record.kind in {"property", "type_alias"}:
             continue
         block = _extract_examples_block(_docstring(record.obj))
         if ">>>" not in block:
@@ -149,9 +210,41 @@ def test_docstrings_do_not_expose_internal_example_ids() -> None:
     failures: list[str] = []
     for record in iter_scoped_public_symbols():
         doc = _docstring(record.obj)
-        if re.search(r"Example ID:\s*[A-Z0-9-]+", doc):
+        if _INTERNAL_REFERENCE_RE.search(doc):
             failures.append(record.symbol)
-    assert not failures, f"Docstrings expose internal Example IDs: {failures!r}"
+    assert not failures, f"Docstrings expose internal references: {failures!r}"
+
+
+_INTERNAL_REFERENCE_RE = re.compile(
+    r"Example ID:\s*[A-Z0-9-]+|\b[Cc]ontract(?:s)?\s+\d{3}\b|contracts/|"
+    r"\bTUT[-_]\d+|AGENTS\.md|PRODUCTION_ISSUES|\b(?:A[123]|G[1-4]|D[34]|T1|F2C?)\b"
+)
+
+
+def test_public_learning_materials_avoid_internal_references() -> None:
+    """Review visible content, leaving hidden example-coverage annotations intact."""
+    root = Path(__file__).resolve().parents[2]
+    tutorial = root / "examples/tutorial"
+    paths = [root / "README.md", tutorial / "README.md", *sorted((root / "docs").rglob("*.md"))]
+    failures = []
+    for path in paths:
+        if "_build" in path.parts:
+            continue
+        visible = re.sub(r"<!--.*?-->", "", path.read_text(), flags=re.DOTALL)
+        if _INTERNAL_REFERENCE_RE.search(visible):
+            failures.append(str(path.relative_to(root)))
+    for path in sorted(tutorial.glob("*.ipynb")):
+        for index, cell in enumerate(json.loads(path.read_text())["cells"]):
+            visible = "".join(cell["source"])
+            outputs = []
+            for output in cell.get("outputs", []):
+                outputs.append("".join(output.get("text", [])))
+                for kind in ("text/plain", "text/html", "text/markdown"):
+                    outputs.append("".join(output.get("data", {}).get(kind, [])))
+            outputs = "\n".join(outputs)
+            if _INTERNAL_REFERENCE_RE.search(visible + outputs) or "/Users/" in outputs:
+                failures.append(f"{path.name}:cell-{index}")
+    assert not failures, f"Public learning materials expose internal references: {failures!r}"
 
 
 def test_required_example_ids_have_executable_tests() -> None:
@@ -159,6 +252,11 @@ def test_required_example_ids_have_executable_tests() -> None:
     available = set(EXECUTABLE_EXAMPLES)
     missing = sorted(required - available)
     assert not missing, f"Missing executable example handlers: {missing!r}"
+
+
+def test_rotation_from_data_contract_is_executable() -> None:
+    """ID: ROTATION_DOC_082_from_data_contract_is_executable."""
+    EXECUTABLE_EXAMPLES["SPATIAL-ROTATION-FROM-DATA"]()
 
 
 def test_inventory_example_ids_have_executable_tests() -> None:

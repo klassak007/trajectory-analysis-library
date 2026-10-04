@@ -47,7 +47,7 @@ def _vector3_dataset(
         core_dims=(core_dim,),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _linear_velocity(*, with_batch: bool = False) -> LinearVelocity:
@@ -150,36 +150,36 @@ def _vector6_dataset(*, var_name: str, core_dim: str, values: np.ndarray) -> xr.
         core_dims=(core_dim,),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def test_spatial_core_061_velocity_vector6_constructor_and_to_rep_boundary_deterministic() -> None:
     """ID: SPATIAL_CORE_061_velocity_vector6_constructor_and_to_rep_boundary_deterministic."""
     velocity = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True)
     as_vector6 = velocity.as_vector6(validate=True)
-    assert get_velocity_rep(as_vector6.unsafe_data, owner="test") == "vector6"
-    vec_dim = read_roles(as_vector6.unsafe_data)[3][0]
-    assert tuple(as_vector6.unsafe_data.get_index(vec_dim).tolist()) == vector6_labels()
-    restored = Velocity.from_vector6(as_vector6.unsafe_data, validate=True).to_rep("components", validate=True)
-    np.testing.assert_allclose(restored.linear().unsafe_data["linear_velocity"].values, velocity.linear().unsafe_data["linear_velocity"].values)
-    np.testing.assert_allclose(restored.angular().unsafe_data["angular_velocity"].values, velocity.angular().unsafe_data["angular_velocity"].values)
+    assert get_velocity_rep(as_vector6.as_dataset(copy="none"), owner="test") == "vector6"
+    vec_dim = read_roles(as_vector6.as_dataset(copy="none"))[3][0]
+    assert tuple(as_vector6.as_dataset(copy="none").get_index(vec_dim).tolist()) == vector6_labels()
+    restored = Velocity.from_vector6(as_vector6.as_dataset(copy="none"), validate=True).to_rep("components", validate=True)
+    np.testing.assert_allclose(restored.linear().as_dataset(copy="none")["linear_velocity"].values, velocity.linear().as_dataset(copy="none")["linear_velocity"].values)
+    np.testing.assert_allclose(restored.angular().as_dataset(copy="none")["angular_velocity"].values, velocity.angular().as_dataset(copy="none")["angular_velocity"].values)
 
 
 def test_spatial_core_062_acceleration_vector6_constructor_and_to_rep_boundary_deterministic() -> None:
     """ID: SPATIAL_CORE_062_acceleration_vector6_constructor_and_to_rep_boundary_deterministic."""
     acceleration = Acceleration.from_linear_angular(_linear_acceleration(), _angular_acceleration(), validate=True)
     as_vector6 = acceleration.as_vector6(validate=True)
-    assert get_acceleration_rep(as_vector6.unsafe_data, owner="test") == "vector6"
-    vec_dim = read_roles(as_vector6.unsafe_data)[3][0]
-    assert tuple(as_vector6.unsafe_data.get_index(vec_dim).tolist()) == vector6_labels()
-    restored = Acceleration.from_vector6(as_vector6.unsafe_data, validate=True).to_rep("components", validate=True)
+    assert get_acceleration_rep(as_vector6.as_dataset(copy="none"), owner="test") == "vector6"
+    vec_dim = read_roles(as_vector6.as_dataset(copy="none"))[3][0]
+    assert tuple(as_vector6.as_dataset(copy="none").get_index(vec_dim).tolist()) == vector6_labels()
+    restored = Acceleration.from_vector6(as_vector6.as_dataset(copy="none"), validate=True).to_rep("components", validate=True)
     np.testing.assert_allclose(
-        restored.linear().unsafe_data["linear_acceleration"].values,
-        acceleration.linear().unsafe_data["linear_acceleration"].values,
+        restored.linear().as_dataset(copy="none")["linear_acceleration"].values,
+        acceleration.linear().as_dataset(copy="none")["linear_acceleration"].values,
     )
     np.testing.assert_allclose(
-        restored.angular().unsafe_data["angular_acceleration"].values,
-        acceleration.angular().unsafe_data["angular_acceleration"].values,
+        restored.angular().as_dataset(copy="none")["angular_acceleration"].values,
+        acceleration.angular().as_dataset(copy="none")["angular_acceleration"].values,
     )
 
 
@@ -193,11 +193,11 @@ def test_spatial_core_063_velocity_components_vector6_roundtrip_preserves_frames
     )
     vector6 = velocity.as_vector6(validate=True)
     restored = vector6.as_components(validate=True)
-    assert get_frames(vector6.unsafe_data) == ("world", "body")
-    assert get_frames(restored.unsafe_data) == ("world", "body")
-    assert read_roles(vector6.unsafe_data)[1:3] == read_roles(velocity.unsafe_data)[1:3]
-    np.testing.assert_allclose(restored.linear().unsafe_data["linear_velocity"].values, velocity.linear().unsafe_data["linear_velocity"].values)
-    np.testing.assert_allclose(restored.angular().unsafe_data["angular_velocity"].values, velocity.angular().unsafe_data["angular_velocity"].values)
+    assert get_frames(vector6.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(restored.as_dataset(copy="none")) == ("world", "body")
+    assert read_roles(vector6.as_dataset(copy="none"))[1:3] == read_roles(velocity.as_dataset(copy="none"))[1:3]
+    np.testing.assert_allclose(restored.linear().as_dataset(copy="none")["linear_velocity"].values, velocity.linear().as_dataset(copy="none")["linear_velocity"].values)
+    np.testing.assert_allclose(restored.angular().as_dataset(copy="none")["angular_velocity"].values, velocity.angular().as_dataset(copy="none")["angular_velocity"].values)
 
 
 def test_spatial_core_064_acceleration_components_vector6_roundtrip_preserves_frames_roles_semantics() -> None:
@@ -210,16 +210,16 @@ def test_spatial_core_064_acceleration_components_vector6_roundtrip_preserves_fr
     )
     vector6 = acceleration.as_vector6(validate=True)
     restored = vector6.as_components(validate=True)
-    assert get_frames(vector6.unsafe_data) == ("map", "imu")
-    assert get_frames(restored.unsafe_data) == ("map", "imu")
-    assert read_roles(vector6.unsafe_data)[1:3] == read_roles(acceleration.unsafe_data)[1:3]
+    assert get_frames(vector6.as_dataset(copy="none")) == ("map", "imu")
+    assert get_frames(restored.as_dataset(copy="none")) == ("map", "imu")
+    assert read_roles(vector6.as_dataset(copy="none"))[1:3] == read_roles(acceleration.as_dataset(copy="none"))[1:3]
     np.testing.assert_allclose(
-        restored.linear().unsafe_data["linear_acceleration"].values,
-        acceleration.linear().unsafe_data["linear_acceleration"].values,
+        restored.linear().as_dataset(copy="none")["linear_acceleration"].values,
+        acceleration.linear().as_dataset(copy="none")["linear_acceleration"].values,
     )
     np.testing.assert_allclose(
-        restored.angular().unsafe_data["angular_acceleration"].values,
-        acceleration.angular().unsafe_data["angular_acceleration"].values,
+        restored.angular().as_dataset(copy="none")["angular_acceleration"].values,
+        acceleration.angular().as_dataset(copy="none")["angular_acceleration"].values,
     )
 
 
@@ -227,12 +227,12 @@ def test_spatial_core_065_velocity_linear_angular_extract_deterministic_from_vec
     """ID: SPATIAL_CORE_065_velocity_linear_angular_extract_deterministic_from_vector6_rep."""
     velocity = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_vector6(validate=True)
     np.testing.assert_allclose(
-        velocity.linear(validate=True).unsafe_data["linear_velocity"].values,
-        _linear_velocity().unsafe_data["linear_velocity"].values,
+        velocity.linear(validate=True).as_dataset(copy="none")["linear_velocity"].values,
+        _linear_velocity().as_dataset(copy="none")["linear_velocity"].values,
     )
     np.testing.assert_allclose(
-        velocity.angular(validate=True).unsafe_data["angular_velocity"].values,
-        _angular_velocity().unsafe_data["angular_velocity"].values,
+        velocity.angular(validate=True).as_dataset(copy="none")["angular_velocity"].values,
+        _angular_velocity().as_dataset(copy="none")["angular_velocity"].values,
     )
 
 
@@ -240,12 +240,12 @@ def test_spatial_core_066_acceleration_linear_angular_extract_deterministic_from
     """ID: SPATIAL_CORE_066_acceleration_linear_angular_extract_deterministic_from_vector6_rep."""
     acceleration = Acceleration.from_linear_angular(_linear_acceleration(), _angular_acceleration(), validate=True).as_vector6(validate=True)
     np.testing.assert_allclose(
-        acceleration.linear(validate=True).unsafe_data["linear_acceleration"].values,
-        _linear_acceleration().unsafe_data["linear_acceleration"].values,
+        acceleration.linear(validate=True).as_dataset(copy="none")["linear_acceleration"].values,
+        _linear_acceleration().as_dataset(copy="none")["linear_acceleration"].values,
     )
     np.testing.assert_allclose(
-        acceleration.angular(validate=True).unsafe_data["angular_acceleration"].values,
-        _angular_acceleration().unsafe_data["angular_acceleration"].values,
+        acceleration.angular(validate=True).as_dataset(copy="none")["angular_acceleration"].values,
+        _angular_acceleration().as_dataset(copy="none")["angular_acceleration"].values,
     )
 
 
@@ -253,8 +253,8 @@ def test_spatial_core_068_vector6_conversion_preserves_kinematics_kind_and_seque
     """ID: SPATIAL_CORE_068_vector6_conversion_preserves_kinematics_kind_and_sequence_batch_layout."""
     velocity = Velocity.from_linear_angular(_linear_velocity(with_batch=True), _angular_velocity(with_batch=True), validate=True)
     vector6 = velocity.as_vector6(validate=True)
-    assert get_kinematics_kind(vector6.unsafe_data, owner="test") == "velocity"
-    assert read_roles(vector6.unsafe_data)[1:3] == read_roles(velocity.unsafe_data)[1:3]
+    assert get_kinematics_kind(vector6.as_dataset(copy="none"), owner="test") == "velocity"
+    assert read_roles(vector6.as_dataset(copy="none"))[1:3] == read_roles(velocity.as_dataset(copy="none"))[1:3]
 
     acceleration = Acceleration.from_linear_angular(
         _linear_acceleration(with_batch=True),
@@ -262,8 +262,8 @@ def test_spatial_core_068_vector6_conversion_preserves_kinematics_kind_and_seque
         validate=True,
     )
     vector6_acc = acceleration.as_vector6(validate=True)
-    assert get_kinematics_kind(vector6_acc.unsafe_data, owner="test") == "acceleration"
-    assert read_roles(vector6_acc.unsafe_data)[1:3] == read_roles(acceleration.unsafe_data)[1:3]
+    assert get_kinematics_kind(vector6_acc.as_dataset(copy="none"), owner="test") == "acceleration"
+    assert read_roles(vector6_acc.as_dataset(copy="none"))[1:3] == read_roles(acceleration.as_dataset(copy="none"))[1:3]
 
 
 def test_spatial_hard_066_velocity_to_rep_rejects_unsupported_target_rep() -> None:
@@ -283,13 +283,13 @@ def test_spatial_hard_067_acceleration_to_rep_rejects_unsupported_target_rep() -
 def test_spatial_hard_068_spatial6_vector6_constructor_rejects_invalid_core_length_or_labels() -> None:
     """ID: SPATIAL_HARD_068_spatial6_vector6_constructor_rejects_invalid_core_length_or_labels."""
     velocity = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_vector6(validate=True)
-    vec_dim = read_roles(velocity.unsafe_data)[3][0]
+    vec_dim = read_roles(velocity.as_dataset(copy="none"))[3][0]
 
-    bad_length = velocity.unsafe_data.isel({vec_dim: slice(0, 5)})
+    bad_length = velocity.as_dataset(copy="none").isel({vec_dim: slice(0, 5)})
     with pytest.raises(ValueError, match="must have length 6"):
         Velocity.from_vector6(bad_length, validate=True)
 
-    bad_labels = velocity.unsafe_data.assign_coords({vec_dim: ["x", "y", "z", "a", "b", "c"]})
+    bad_labels = velocity.as_dataset(copy="none").assign_coords({vec_dim: ["x", "y", "z", "a", "b", "c"]})
     with pytest.raises(ValueError, match="labels must equal"):
         Velocity.from_vector6(bad_labels, validate=True)
 
@@ -322,12 +322,12 @@ def test_spatial_hard_072_vector6_conversion_fail_closed_on_malformed_frames_or_
     """ID: SPATIAL_HARD_072_vector6_conversion_fail_closed_on_malformed_frames_or_roles."""
     velocity = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_vector6(validate=True)
     with pytest.raises(SchemaError, match="tal\\.ext\\.frames\\.extra"):
-        Velocity.from_vector6(_set_bad_frames(velocity.unsafe_data), validate=True)
+        Velocity.from_vector6(_set_bad_frames(velocity.as_dataset(copy="none")), validate=True)
 
     with pytest.raises(ValueError, match="tal.ext.spatial.roles must be a mapping"):
-        Velocity(_set_roles(velocity.unsafe_data, 123))
+        Velocity(_set_roles(velocity.as_dataset(copy="none"), 123))
     with pytest.raises(ValueError, match="tal.ext.spatial.roles keys must be strings"):
-        Velocity(_set_roles(velocity.unsafe_data, {1: "bad"}))
+        Velocity(_set_roles(velocity.as_dataset(copy="none"), {1: "bad"}))
 
 
 @pytest.mark.parametrize(
@@ -351,10 +351,10 @@ def test_spatial_hard_074_vector6_pack_dask_lazy_dtype_metadata_preserved(
     linear = linear_cls(_vector3_dataset(var_name=linear_var, core_dim="linear_axis", values=linear_values))
     angular = angular_cls(_vector3_dataset(var_name=angular_var, core_dim="angular_axis", values=angular_values))
     vector6 = spatial_cls.from_linear_angular(linear, angular, validate=True).as_vector6(validate=True)
-    vector_var = next(iter(vector6.unsafe_data.data_vars))
+    vector_var = next(iter(vector6.as_dataset(copy="none").data_vars))
     expected_dtype = np.result_type(linear_values.dtype, angular_values.dtype)
-    assert np.dtype(vector6.unsafe_data[vector_var].dtype) == np.dtype(expected_dtype)
-    computed = vector6.unsafe_data[vector_var].compute()
+    assert np.dtype(vector6.as_dataset(copy="none")[vector_var].dtype) == np.dtype(expected_dtype)
+    computed = vector6.as_dataset(copy="none")[vector_var].compute()
     assert np.dtype(computed.dtype) == np.dtype(expected_dtype)
 
 
@@ -382,12 +382,12 @@ def test_spatial_hard_075_vector6_unpack_dask_lazy_dtype_metadata_preserved_and_
         warnings.simplefilter("always")
         linear = vector6.linear(validate=True)
         angular = vector6.angular(validate=True)
-        linear_var = next(iter(linear.unsafe_data.data_vars))
-        angular_var = next(iter(angular.unsafe_data.data_vars))
-        assert np.dtype(linear.unsafe_data[linear_var].dtype) == np.dtype(np.complex128)
-        assert np.dtype(angular.unsafe_data[angular_var].dtype) == np.dtype(np.complex128)
-        linear.unsafe_data[linear_var].compute()
-        angular.unsafe_data[angular_var].compute()
+        linear_var = next(iter(linear.as_dataset(copy="none").data_vars))
+        angular_var = next(iter(angular.as_dataset(copy="none").data_vars))
+        assert np.dtype(linear.as_dataset(copy="none")[linear_var].dtype) == np.dtype(np.complex128)
+        assert np.dtype(angular.as_dataset(copy="none")[angular_var].dtype) == np.dtype(np.complex128)
+        linear.as_dataset(copy="none")[linear_var].compute()
+        angular.as_dataset(copy="none")[angular_var].compute()
     assert not any(w.category.__name__ == "ComplexWarning" for w in caught)
 
 
@@ -395,10 +395,10 @@ def test_topo_core_008_vector6_pack_path_uses_core_topology_touchpoint() -> None
     """ID: TOPO_CORE_008_vector6_pack_path_uses_core_topology_touchpoint."""
     linear = _linear_velocity(with_batch=True)
     angular = _angular_velocity(with_batch=True)
-    linear_transposed = LinearVelocity(linear.unsafe_data.transpose("sensor", "sample", "linear_axis"))
-    angular_transposed = AngularVelocity(angular.unsafe_data.transpose("angular_axis", "sensor", "sample"))
+    linear_transposed = LinearVelocity(linear.as_dataset(copy="none").transpose("sensor", "sample", "linear_axis"))
+    angular_transposed = AngularVelocity(angular.as_dataset(copy="none").transpose("angular_axis", "sensor", "sample"))
     out = Velocity.from_linear_angular(linear_transposed, angular_transposed, validate=True).as_vector6(validate=True)
     expected = Velocity.from_linear_angular(linear, angular, validate=True).as_vector6(validate=True)
-    out_var = next(iter(out.unsafe_data.data_vars))
-    out_da = out.unsafe_data[out_var].transpose(*expected.unsafe_data[out_var].dims)
-    np.testing.assert_allclose(out_da.values, expected.unsafe_data[out_var].values, atol=1e-6)
+    out_var = next(iter(out.as_dataset(copy="none").data_vars))
+    out_da = out.as_dataset(copy="none")[out_var].transpose(*expected.as_dataset(copy="none")[out_var].dims)
+    np.testing.assert_allclose(out_da.values, expected.as_dataset(copy="none")[out_var].values, atol=1e-6)

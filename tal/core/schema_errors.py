@@ -91,3 +91,16 @@ def schema_error(
         actual=actual,
         hint=hint,
     )
+
+
+def _schema_error_with_context(error: SchemaError, *, context: str) -> SchemaError:
+    """Clone one schema failure with a single public-operation context."""
+    prefix = f"{context}."
+    hint = error.hint if error.hint.startswith(prefix) else f"{prefix} {error.hint}"
+    return schema_error(
+        code=error.code,
+        path=error.path,
+        expected=error.expected,
+        actual=error.actual,
+        hint=hint,
+    )

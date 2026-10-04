@@ -95,13 +95,142 @@ metadata after loading.
 Delayed schema writes are still explicit and validated. They return new AOs
 rather than mutating the source object in place.
 
-## `ao.data` vs `ao.unsafe_data`
+## Build spatial objects from named scalar fields
 
-- `ao.data` and `ao.as_dataset()` return mutation-safe deep copies.
-- `ao.unsafe_data` returns the backing dataset for low-level inspection and
-  advanced debugging.
-- Prefer `ao.data` in notebooks unless you intentionally need direct backing
-  store access.
+Start from a schema-bearing AO when possible. The one-shot form is the shortest
+workflow, while a recipe is useful when several sources expose the same field
+suffixes.
+
+<!-- example-id: UG-CREATING-SPATIAL-FIELDS -->
+```python
+import xarray as xr
+from tal.core import AnalysisLayoutSpec
+from tal.spatial import Pose
+
+source = xr.Dataset(
+    {
+        "camera.position.x": ("sample", [1.0]),
+        "camera.position.y": ("sample", [2.0]),
+        "camera.position.z": ("sample", [3.0]),
+        "camera.rotation.x": ("sample", [0.0]),
+        "camera.rotation.y": ("sample", [0.0]),
+        "camera.rotation.z": ("sample", [0.0]),
+        "camera.rotation.w": ("sample", [1.0]),
+    },
+    coords={"sample": [0]},
+)
+layout = AnalysisLayoutSpec(sequence_dim="sample")
+declared = layout.wrap(source)
+
+# Shortest AO one-shot workflow.
+camera = Pose.from_fields(
+    declared,
+    position="camera.position.{x,y,z}",
+    rotation="camera.rotation.{x,y,z,w}",
+)
+
+# Reuse one immutable selector recipe with a literal source-name prefix.
+pose_fields = Pose.fields(
+    position="position.{x,y,z}",
+    rotation="rotation.{x,y,z,w}",
+)
+camera_again = pose_fields.build(declared, prefix="camera.")
+
+# An untagged Dataset supplies exactly one explicit layout authority.
+camera_from_raw = pose_fields.build(
+    source,
+    prefix="camera.",
+    source_layout=layout,
+)
+```
+
+Brace selectors expand exact field names; dots and `prefix=` are literal. A
+mapping from target labels to exact source names is the alternative when names
+do not share a compact pattern. TAL does not infer a layout, representation,
+quaternion order, or frame from field spelling.
+
+Field assembly preserves applicable Dataset and coordinate metadata, parameter
+and validity declarations, and native indexes. The newly assembled `position`
+and `rotation` variables intentionally have empty ordinary attributes and
+storage encodings, so per-channel units or storage settings are never chosen
+implicitly.
+
+## Build from CSV and ROS reader results
+
+CSV and ROS readers already return schema-bearing AOs, so their declared batch,
+sequence, parameter, and validity layout is inherited directly. Do not pass
+`source_layout` for a reader result.
+
+<!-- example-id: UG-CREATING-SPATIAL-FIELDS-FROM-READERS -->
+```python
+from tal.io import CsvIngestOptions, RosIngestOptions, read_csv_logs, read_ros_logs
+from tal.spatial import Pose
+
+csv_source = read_csv_logs(
+    "camera.csv",
+    opts=CsvIngestOptions(time_col="time"),
+)
+csv_pose = Pose.from_fields(
+    csv_source,
+    position="camera.position.{x,y,z}",
+    rotation="camera.rotation.{x,y,z,w}",
+)
+
+ros_source = read_ros_logs(
+    "camera.mcap",
+    opts=RosIngestOptions(topic="/camera/pose"),
+)
+ros_pose = Pose.from_fields(
+    ros_source,
+    position="translation_{x,y,z}",
+    rotation="quaternion_{x,y,z,w}",
+)
+```
+
+Field factories consume the returned AO, not a path, bag, or DataFrame. They do
+not reopen the reader, widen a CSV `value_columns` selection, push projection
+into ingestion, or infer frames from ROS field names. Install the `ros` extra to
+read ROS recordings; ordinary Dataset/AO field construction does not require
+that optional dependency.
+
+## Reuse a complete layout and select variables
+
+<!-- example-id: UG-CREATING-REUSABLE-LAYOUT -->
+```python
+import xarray as xr
+from tal.core import AnalysisLayoutSpec
+from tal.spatial import Position
+
+layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
+dataset = xr.Dataset(
+    {
+        "position": (("sample", "axis"), [[1.0, 2.0, 3.0]]),
+        "quality": ("sample", [1]),
+    },
+    coords={"sample": [0], "axis": ["x", "y", "z"]},
+)
+selected = layout.wrap(dataset, data_vars="position")
+position = Position(selected)
+ordered = layout.wrap(dataset).select_vars(("quality", "position"))
+assert list(ordered.as_dataset().data_vars) == ["quality", "position"]
+assert list(position.as_dataset().data_vars) == ["position"]
+```
+
+The spec is a complete declaration: default fields remove source role and
+optional-coordinate metadata. `AnalysisObject.from_data(...)` instead treats
+its defaults as an overlay. Selection on an existing AO retains its subtype
+only when the selected schema still satisfies that subtype; it does not
+silently downgrade. Neither path infers roles or registers frame providers.
+
+## Dataset exposure
+
+- `ao.as_dataset()` returns a mutation-safe deep snapshot.
+- `ao.as_dataset(copy="shallow")` isolates xarray structure and metadata while
+  sharing payload buffers or lazy graphs.
+- `ao.as_dataset(copy="none")` returns the backing Dataset and is reserved for
+  explicit expert ownership crossings.
+- Keep the AO open while using lazy deep/shallow views, and call `ao.close()`
+  when a lazily loaded AO is no longer needed.
 
 ## What Usually Goes Wrong
 
@@ -116,8 +245,8 @@ interpolation errors, so it is worth declaring semantics early.
 
 ## Quick Checks
 
-- Inspect `full.unsafe_data`.
-- Check `full.unsafe_data.attrs["tal"]`.
+- Capture one `snapshot = full.as_dataset()`, inspect it, then check
+  `snapshot.attrs["tal"]`.
 - Use `full.to_dataarray(name="position")` only when one data variable should
   become the payload boundary.
 

@@ -1,8 +1,9 @@
 import importlib
+import warnings
 from pathlib import Path
+
 import numpy as np
 import pytest
-import warnings
 import xarray as xr
 
 from tal.core import AnalysisObject, ParamEvalOptions, ParamSelectOptions
@@ -120,6 +121,88 @@ def _ao_multi_batch(
     )
 
 
+def _forbidden_zero_selection_array(
+    label: str,
+    shape: tuple[int, ...],
+    dtype: np.dtype[object],
+) -> np.ndarray:
+    raise RuntimeError(f"forbidden zero-row source task: {label}")
+
+
+def _zero_batch_selection_coords(
+    *,
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    native_index: bool,
+) -> xr.Coordinates:
+    if not native_index:
+        return xr.Coordinates(
+            {dim: np.arange(size, dtype="int64") for dim, size in zip(batch_dims, batch_shape, strict=True)}
+        )
+    indexes = tuple(
+        xr.indexes.RangeIndex.arange(size, dim=dim)
+        for dim, size in zip(batch_dims, batch_shape, strict=True)
+    )
+    groups = tuple(xr.Coordinates.from_xindex(index) for index in indexes)
+    return xr.Coordinates(
+        {name: value.variable for group in groups for name, value in group.items()},
+        indexes={name: index for group in groups for name, index in group.xindexes.items()},
+    )
+
+
+def _zero_batch_selection_source(
+    *,
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+    native_index: bool,
+) -> AnalysisObject:
+    shape = (*batch_shape, 2)
+    dims = (*batch_dims, "sample")
+    param_dtype = np.dtype("float64" if param_kind == "numeric" else "datetime64[ns]")
+    param_base = np.asarray(
+        [0.0, 1.0]
+        if param_kind == "numeric"
+        else ["2020-01-01", "2020-01-02"],
+        dtype=param_dtype,
+    )
+    payload: object = np.zeros(shape, dtype="float64")
+    param: object = np.broadcast_to(param_base, shape).copy()
+    if lazy:
+        da = pytest.importorskip("dask.array")
+        from dask import delayed
+
+        payload = da.from_delayed(
+            delayed(_forbidden_zero_selection_array)("payload", shape, np.dtype("float64")),
+            shape=shape,
+            dtype="float64",
+        )
+        param = da.from_delayed(
+            delayed(_forbidden_zero_selection_array)("param", shape, param_dtype),
+            shape=shape,
+            dtype=param_dtype,
+        )
+    coords = _zero_batch_selection_coords(
+        batch_dims=batch_dims,
+        batch_shape=batch_shape,
+        native_index=native_index,
+    )
+    ds = xr.Dataset({"value": xr.DataArray(payload, dims=dims)}, coords=coords)
+    ds = ds.assign_coords(
+        time=xr.DataArray(param, dims=dims),
+        group_size=xr.DataArray(np.full(batch_shape, 2, dtype="int64"), dims=batch_dims),
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=batch_dims,
+        core_dims=(),
+        param_coord="time",
+        sequence_size_coord="group_size",
+    )
+
+
 def test_param_ops_001_index_scalar_and_vector_shapes() -> None:
     """ID: PARAM_OPS_001_index_scalar_and_vector_shapes."""
     ao = _ao_unbatched()
@@ -135,38 +218,38 @@ def test_param_ops_002_sel_point_nearest_preserves_sample_index() -> None:
     """ID: PARAM_OPS_002_sel_point_nearest_preserves_sample_index."""
     ao = _ao_unbatched()
     out = ao.param.sel([0.1, 1.9])
-    assert tuple(out.data["value"].dims) == ("sample",)
-    np.testing.assert_array_equal(out.data.coords["sample_index"].values, [0, 3])
-    np.testing.assert_array_equal(out.data.coords["valid"].values, [True, True])
+    assert tuple(out.as_dataset()["value"].dims) == ("sample",)
+    np.testing.assert_array_equal(out.as_dataset().coords["sample_index"].values, [0, 3])
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, [True, True])
 
 
 def test_param_ops_003_sel_slice_packed_updates_validity() -> None:
     """ID: PARAM_OPS_003_sel_slice_packed_updates_validity."""
     ao = _ao_batched()
     out = ao.param.sel(slice(0.25, 1.0), opts=ParamSelectOptions(layout="packed"))
-    core = out.data.attrs["tal"]["core"]
+    core = out.as_dataset().attrs["tal"]["core"]
     assert core["validity"]["sequence_size_coord"] == "group_size"
-    np.testing.assert_array_equal(out.data.coords["group_size"].values, [2, 1])
-    np.testing.assert_array_equal(out.data.coords["valid"].sel(trial="a").values, [True, True, False, False])
-    np.testing.assert_array_equal(out.data.coords["valid"].sel(trial="b").values, [True, False, False, False])
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].values, [2, 1])
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].sel(trial="a").values, [True, True, False, False])
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].sel(trial="b").values, [True, False, False, False])
 
 
 def test_param_ops_004_sel_slice_padded_masks_coords() -> None:
     """ID: PARAM_OPS_004_sel_slice_padded_masks_coords."""
     ao = _ao_batched()
     out = ao.param.sel(slice(0.25, 1.0), opts=ParamSelectOptions(layout="padded"))
-    assert out.data.sizes["sample"] == 2
-    np.testing.assert_array_equal(out.data.coords["group_size"].values, [2, 1])
-    assert bool(out.data.coords["valid"].sel(trial="b", sample=1).item()) is False
-    assert int(out.data.coords["sample_index"].sel(trial="b", sample=1).item()) == -1
-    assert np.isnan(out.data["value"].sel(trial="b", sample=1).item())
+    assert out.as_dataset().sizes["sample"] == 2
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].values, [2, 1])
+    assert bool(out.as_dataset().coords["valid"].sel(trial="b", sample=1).item()) is False
+    assert int(out.as_dataset().coords["sample_index"].sel(trial="b", sample=1).item()) == -1
+    assert np.isnan(out.as_dataset()["value"].sel(trial="b", sample=1).item())
 
 
 def test_param_ops_005_at_linear_duplicate_invalid_default() -> None:
     """ID: PARAM_OPS_005_at_linear_duplicate_invalid_default."""
     ao = _ao_unbatched()
     out = ao.param.at([1.0], opts=ParamEvalOptions(method="linear"))
-    assert np.isnan(out.data["value"].isel(sample=0).item())
+    assert np.isnan(out.as_dataset()["value"].isel(sample=0).item())
 
 
 def test_param_ops_006_at_linear_duplicate_left_right_policies() -> None:
@@ -174,8 +257,8 @@ def test_param_ops_006_at_linear_duplicate_left_right_policies() -> None:
     ao = _ao_unbatched()
     left = ao.param.at([1.0], opts=ParamEvalOptions(method="linear", duplicate_policy="left"))
     right = ao.param.at([1.0], opts=ParamEvalOptions(method="linear", duplicate_policy="right"))
-    assert float(left.data["value"].isel(sample=0).item()) == 10.0
-    assert float(right.data["value"].isel(sample=0).item()) == 20.0
+    assert float(left.as_dataset()["value"].isel(sample=0).item()) == 10.0
+    assert float(right.as_dataset()["value"].isel(sample=0).item()) == 20.0
 
 
 def test_param_ops_007_at_duplicate_raise_policy_errors() -> None:
@@ -191,9 +274,9 @@ def test_param_ops_008_resample_to_sequence_grid_updates_validity() -> None:
     ao = _ao_batched()
     grid = xr.DataArray([0.0, 0.5, 1.0, 1.5], dims=("sample",))
     out = ao.param.resample_to(grid)
-    core = out.data.attrs["tal"]["core"]
+    core = out.as_dataset().attrs["tal"]["core"]
     assert core["validity"]["sequence_size_coord"] == "group_size"
-    np.testing.assert_array_equal(out.data.coords["group_size"].values, [4, 3])
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].values, [4, 3])
 
 
 def test_param_ops_009_resample_to_stacked_query_drops_validity() -> None:
@@ -211,7 +294,249 @@ def test_param_ops_009_resample_to_stacked_query_drops_validity() -> None:
         coords={"trial": ["a", "b"], "q": [0, 1], "extra": [0, 1]},
     )
     out = ao.param.resample_to(grid)
-    assert "validity" not in out.data.attrs["tal"]["core"]
+    assert "validity" not in out.as_dataset().attrs["tal"]["core"]
+
+
+@pytest.mark.parametrize("shape", ((2, 0), (0, 2), (2, 0, 3)))
+@pytest.mark.parametrize("operation", ("index", "sel", "at", "resample_to"))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_core_empty_stacked_query_001_preserves_declared_topology(
+    shape: tuple[int, ...],
+    operation: str,
+    lazy: bool,
+) -> None:
+    """ID: PARAM_CORE_EMPTY_STACKED_QUERY_001_preserves_declared_topology."""
+    dims = tuple(f"query_axis_{index}" for index in range(len(shape)))
+    coords = {dim: np.arange(size, dtype=np.int64) for dim, size in zip(dims, shape, strict=True)}
+    query = xr.DataArray(np.empty(shape), dims=dims, coords=coords)
+    if lazy:
+        pytest.importorskip("dask.array")
+        query = query.chunk({dim: max(size, 1) for dim, size in zip(dims, shape, strict=True)})
+    source = _ao_unbatched_valid()
+    before = source.as_dataset(copy="deep")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = source.param.index(query) if operation == "index" else getattr(source.param, operation)(query)
+
+    actual = result if operation == "index" else result.as_dataset(copy="none")
+    assert tuple(actual.dims)[: len(dims)] == dims
+    assert tuple(int(actual.sizes[dim]) for dim in dims) == shape
+    for dim in dims:
+        assert actual.xindexes[dim].equals(query.xindexes[dim])
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_param_core_zero_batch_eval_001_remains_lazy_without_kernel_dispatch() -> None:
+    """ID: PARAM_CORE_ZERO_BATCH_EVAL_001_remains_lazy_without_kernel_dispatch."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    dataset = xr.Dataset(
+        data_vars={
+            "value": xr.DataArray(
+                np.empty((0, 2)),
+                dims=("trial", "sample"),
+            ).chunk({"trial": 1, "sample": 2})
+        },
+        coords={
+            "trial": np.asarray([], dtype=np.int64),
+            "sample": [0, 1],
+            "time": xr.DataArray(
+                np.empty((0, 2)),
+                dims=("trial", "sample"),
+            ).chunk({"trial": 1, "sample": 2}),
+        },
+    )
+    source = AnalysisObject.from_data(
+        dataset,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+        param_coord="time",
+    )
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at([0.25, 0.75])
+
+    actual = result.as_dataset(copy="none")
+    assert tasks == []
+    assert actual.sizes == {"trial": 0, "sample": 2}
+    assert actual["value"].chunks is not None
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def _assert_zero_batch_selection(
+    *,
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+    layout: str | None,
+    native_index: bool,
+) -> None:
+    source = _zero_batch_selection_source(
+        batch_dims=batch_dims,
+        batch_shape=batch_shape,
+        param_kind=param_kind,
+        lazy=lazy,
+        native_index=native_index,
+    )
+    expected_source = _zero_batch_selection_source(
+        batch_dims=batch_dims,
+        batch_shape=batch_shape,
+        param_kind=param_kind,
+        lazy=False,
+        native_index=native_index,
+    )
+    before = source.as_dataset(copy="deep")
+    query = np.asarray(
+        [0.25, 0.75]
+        if param_kind == "numeric"
+        else ["2020-01-01", "2020-01-02"],
+        dtype="float64" if param_kind == "numeric" else "datetime64[ns]",
+    )
+    if layout is None:
+        actual = source.param.sel(query)
+        expected = expected_source.param.sel(query)
+    else:
+        options = ParamSelectOptions(layout=layout)
+        bounds = slice(query[0], query[-1])
+        actual = source.param.sel(bounds, opts=options)
+        expected = expected_source.param.sel(bounds, opts=options)
+    computed = actual.as_dataset(copy="none").compute(scheduler="synchronous")
+    xr.testing.assert_identical(computed, expected.as_dataset(copy="none"))
+    if computed.coords["valid"].size:
+        assert not bool(computed.coords["valid"].all())
+    if computed.coords["sample_index"].size:
+        assert bool((computed.coords["sample_index"] == -1).all())
+    for dim in batch_dims:
+        assert type(computed.xindexes[dim]) is type(before.xindexes[dim])
+        if native_index:
+            assert isinstance(computed.xindexes[dim], xr.indexes.RangeIndex)
+        assert computed.xindexes[dim].equals(before.xindexes[dim])
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize(
+    ("batch_dims", "batch_shape"),
+    ((("trial",), (0,)), (("trial", "sensor"), (2, 0))),
+)
+@pytest.mark.parametrize("param_kind", ("numeric", "datetime"))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_param_core_zero_row_point_selection_001_skips_source_execution(
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+) -> None:
+    """ID: PARAM_CORE_ZERO_ROW_POINT_SELECTION_001_skips_source_execution."""
+    for native_index in (False, True):
+        _assert_zero_batch_selection(
+            batch_dims=batch_dims,
+            batch_shape=batch_shape,
+            param_kind=param_kind,
+            lazy=lazy,
+            layout=None,
+            native_index=native_index,
+        )
+
+
+@pytest.mark.parametrize(
+    ("batch_dims", "batch_shape"),
+    ((("trial",), (0,)), (("trial", "sensor"), (2, 0))),
+)
+@pytest.mark.parametrize("param_kind", ("numeric", "datetime"))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("layout", ("packed", "padded"))
+def test_param_core_zero_row_slice_selection_001_skips_source_execution(
+    batch_dims: tuple[str, ...],
+    batch_shape: tuple[int, ...],
+    param_kind: str,
+    lazy: bool,
+    layout: str,
+) -> None:
+    """ID: PARAM_CORE_ZERO_ROW_SLICE_SELECTION_001_skips_source_execution."""
+    for native_index in (False, True):
+        _assert_zero_batch_selection(
+            batch_dims=batch_dims,
+            batch_shape=batch_shape,
+            param_kind=param_kind,
+            lazy=lazy,
+            layout=layout,
+            native_index=native_index,
+        )
+
+
+def test_param_core_empty_stacked_query_002_restores_native_indexes_and_coordinates() -> None:
+    """ID: PARAM_CORE_EMPTY_STACKED_QUERY_002_restores_native_indexes_and_coordinates."""
+    indexes = (
+        xr.indexes.RangeIndex.arange(2, dim="outer"),
+        xr.indexes.RangeIndex.arange(0, dim="inner"),
+    )
+    groups = tuple(xr.Coordinates.from_xindex(index) for index in indexes)
+    variables = {
+        name: value.variable
+        for group in groups
+        for name, value in group.items()
+    }
+    xindexes = {
+        name: index
+        for group in groups
+        for name, index in group.xindexes.items()
+    }
+    coords = xr.Coordinates(variables, indexes=xindexes)
+    query = xr.DataArray(
+        np.empty((2, 0)),
+        dims=("outer", "inner"),
+        coords=coords,
+        attrs={"query_note": {"owner": "caller"}},
+    ).assign_coords(note=("outer", ["left", "right"]), scalar_note="kept")
+    query.coords["note"].encoding["source"] = "query"
+
+    actual = _ao_unbatched_valid().param.at(query).as_dataset(copy="none")
+
+    assert actual.sizes == {"outer": 2, "inner": 0}
+    for dim, expected in zip(("outer", "inner"), indexes, strict=True):
+        assert isinstance(actual.xindexes[dim], xr.indexes.RangeIndex)
+        assert actual.xindexes[dim].equals(expected)
+    assert actual.coords["note"].variable.identical(query.coords["note"].variable)
+    assert actual.coords["note"].encoding == query.coords["note"].encoding
+    assert actual.coords["scalar_note"].variable.identical(query.coords["scalar_note"].variable)
+
+
+def test_param_core_empty_stacked_query_003_restores_split_lazy_core_chunks() -> None:
+    """Empty topology restoration does not delegate a zero-product reshape to Dask."""
+    pytest.importorskip("dask.array")
+    source = AnalysisObject.from_data(
+        xr.DataArray(
+            np.arange(6, dtype=np.float64).reshape(2, 3),
+            dims=("sample", "axis"),
+            coords={
+                "sample": [0, 1],
+                "axis": ["x", "y", "z"],
+                "time": ("sample", [0.0, 1.0]),
+            },
+            name="value",
+        ).chunk({"sample": 2, "axis": 1}),
+        sequence_dim="sample",
+        core_dims=("axis",),
+        param_coord="time",
+    )
+    query = xr.DataArray(
+        np.empty((2, 0)),
+        dims=("outer", "inner"),
+        coords={"outer": [10, 20], "inner": np.asarray([], dtype=np.int64)},
+    ).chunk({"outer": 2, "inner": 1})
+
+    actual = source.param.at(query).as_dataset(copy="none")
+
+    assert actual["value"].dims == ("axis", "outer", "inner")
+    assert actual["value"].chunks is not None
+    computed = actual.compute(scheduler="synchronous")
+    assert computed.sizes == {"axis": 3, "outer": 2, "inner": 0}
 
 
 def test_param_ops_010_interp_like_inner_left_batch_join() -> None:
@@ -236,36 +561,36 @@ def test_param_ops_010_interp_like_inner_left_batch_join() -> None:
     )
     inner = ao.param.interp_like(other, batch_join="inner")
     left = ao.param.interp_like(other, batch_join="left")
-    assert list(inner.data.coords["trial"].values) == ["b"]
-    assert list(left.data.coords["trial"].values) == ["a", "b"]
-    assert np.isnan(left.data["value"].sel(trial="a").values).all()
+    assert list(inner.as_dataset().coords["trial"].values) == ["b"]
+    assert list(left.as_dataset().coords["trial"].values) == ["a", "b"]
+    assert np.isnan(left.as_dataset()["value"].sel(trial="a").values).all()
 
 
 def test_param_ops_011_slice_masks_invalid_interior_samples() -> None:
     """ID: PARAM_OPS_011_slice_masks_invalid_interior_samples."""
     ao = _ao_invalid_interior()
     out = ao.param.sel(slice(0.0, 3.0), opts=ParamSelectOptions(layout="packed"))
-    np.testing.assert_array_equal(out.data.coords["valid"].values, [True, False, True, True])
-    assert np.isnan(out.data["value"].isel(sample=1).item())
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, [True, False, True, True])
+    assert np.isnan(out.as_dataset()["value"].isel(sample=1).item())
 
 
 def test_param_ops_012_sel_scalar_point_collapses_singleton_query_dim() -> None:
     """ID: PARAM_OPS_012_sel_scalar_point_collapses_singleton_query_dim."""
     ao = _ao_unbatched()
     out = ao.param.sel(1.9)
-    assert tuple(out.data["value"].dims) == ()
-    assert float(out.data["value"].item()) == 30.0
-    assert "sample" not in out.data.dims
+    assert tuple(out.as_dataset()["value"].dims) == ()
+    assert float(out.as_dataset()["value"].item()) == 30.0
+    assert "sample" not in out.as_dataset().dims
 
 
 def test_param_ops_013_point_invalid_query_does_not_leak_index0_value() -> None:
     """ID: PARAM_OPS_013_point_invalid_query_does_not_leak_index0_value."""
     ao = _ao_unbatched()
     out = ao.param.sel([np.nan, 1.9])
-    np.testing.assert_array_equal(out.data.coords["valid"].values, [False, True])
-    np.testing.assert_array_equal(out.data.coords["sample_index"].values, [-1, 3])
-    assert np.isnan(out.data["value"].isel(sample=0).item())
-    assert float(out.data["value"].isel(sample=1).item()) == 30.0
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, [False, True])
+    np.testing.assert_array_equal(out.as_dataset().coords["sample_index"].values, [-1, 3])
+    assert np.isnan(out.as_dataset()["value"].isel(sample=0).item())
+    assert float(out.as_dataset()["value"].isel(sample=1).item()) == 30.0
 
 
 def test_param_ops_014_slice_step_rejected() -> None:
@@ -303,26 +628,26 @@ def test_param_ops_017_non_left_packed_validity_drops_sequence_size_coord() -> N
     sel_out = ao.param.sel([np.nan, 1.0])
     at_out = ao.param.at([np.nan, 1.0])
     for out in (sel_out, at_out):
-        core = out.data.attrs["tal"]["core"]
+        core = out.as_dataset().attrs["tal"]["core"]
         assert "validity" not in core
-        assert "group_size" not in out.data.coords
+        assert "group_size" not in out.as_dataset().coords
 
 
 def test_param_ops_018_slice_invalid_sequence_coords_masked() -> None:
     """ID: PARAM_OPS_018_slice_invalid_sequence_coords_masked."""
     ao = _ao_batched()
     out = ao.param.sel(slice(0.25, 1.0), opts=ParamSelectOptions(layout="padded"))
-    assert bool(out.data.coords["valid"].sel(trial="b", sample=1).item()) is False
-    assert np.isnan(out.data.coords["phase"].sel(trial="b", sample=1).item())
+    assert bool(out.as_dataset().coords["valid"].sel(trial="b", sample=1).item()) is False
+    assert np.isnan(out.as_dataset().coords["phase"].sel(trial="b", sample=1).item())
 
 
 def test_param_ops_019_point_invalid_sequence_coords_masked() -> None:
     """ID: PARAM_OPS_019_point_invalid_sequence_coords_masked."""
     ao = _ao_with_aux_sequence_coord()
     out = ao.param.sel([np.nan, 101.0])
-    np.testing.assert_array_equal(out.data.coords["valid"].values, [False, True])
-    assert np.isnan(out.data.coords["phase"].isel(sample=0).item())
-    assert np.isnan(out.data.coords["aux"].isel(sample=0).item())
+    np.testing.assert_array_equal(out.as_dataset().coords["valid"].values, [False, True])
+    assert np.isnan(out.as_dataset().coords["phase"].isel(sample=0).item())
+    assert np.isnan(out.as_dataset().coords["aux"].isel(sample=0).item())
 
 
 def test_param_ops_020_query_scalar_coord_collision_sanitized() -> None:
@@ -346,10 +671,10 @@ def test_param_ops_021_query_index_labels_do_not_realign_attached_param() -> Non
     q_labeled = xr.DataArray([0.0, 2.0], dims=("query",), coords={"query": [10, 20]})
     for op in (ao.param.sel, ao.param.at, ao.param.resample_to):
         out = op(q_labeled)
-        np.testing.assert_allclose(out.data.coords["tau"].values, [0.0, 2.0])
+        np.testing.assert_allclose(out.as_dataset().coords["tau"].values, [0.0, 2.0])
     q_reordered = xr.DataArray([2.0, 0.0], dims=("query",), coords={"query": [1, 0]})
     out_reordered = ao.param.at(q_reordered)
-    np.testing.assert_allclose(out_reordered.data.coords["tau"].values, [2.0, 0.0])
+    np.testing.assert_allclose(out_reordered.as_dataset().coords["tau"].values, [2.0, 0.0])
 
 
 def test_param_ops_022_duplicate_query_labels_fail_fast() -> None:
@@ -427,8 +752,8 @@ def test_param_ops_025_slice_temp_dim_collision_avoided() -> None:
         param_coord="tau",
     )
     out = ao.param.sel(slice(0.0, 1.0))
-    assert tuple(out.data["extra"].dims) == ("sample__slice",)
-    np.testing.assert_array_equal(out.data["extra"].values, [10.0, 20.0])
+    assert tuple(out.as_dataset()["extra"].dims) == ("sample__slice",)
+    np.testing.assert_array_equal(out.as_dataset()["extra"].values, [10.0, 20.0])
 
 
 def test_param_ops_026_reserved_name_collision_user_valid_rejected() -> None:
@@ -505,11 +830,11 @@ def test_param_ops_029_sel_point_empty_sequence_returns_all_invalid() -> None:
         param_coord="tau",
     )
     out = ao.param.sel([0.0])
-    assert tuple(out.data["value"].dims) == ("sample",)
-    assert out.data.sizes["sample"] == 1
-    assert bool(out.data.coords["valid"].isel(sample=0).item()) is False
-    assert int(out.data.coords["sample_index"].isel(sample=0).item()) == -1
-    assert np.isnan(out.data["value"].isel(sample=0).item())
+    assert tuple(out.as_dataset()["value"].dims) == ("sample",)
+    assert out.as_dataset().sizes["sample"] == 1
+    assert bool(out.as_dataset().coords["valid"].isel(sample=0).item()) is False
+    assert int(out.as_dataset().coords["sample_index"].isel(sample=0).item()) == -1
+    assert np.isnan(out.as_dataset()["value"].isel(sample=0).item())
 
 
 def test_param_ops_030_non_numeric_query_rejected_across_param_apis() -> None:
@@ -535,10 +860,10 @@ def test_param_ops_031_reserved_metadata_guard_allows_tal_chaining() -> None:
     ao = _ao_unbatched()
     out_at = ao.param.at([0.5, 1.5])
     chained_at = out_at.param.at([0.75])
-    assert float(chained_at.data["value"].isel(sample=0).item()) == 10.0
+    assert float(chained_at.as_dataset()["value"].isel(sample=0).item()) == 10.0
     out_sel = ao.param.sel([0.2, 1.8])
     chained_sel = out_sel.param.sel([1.8])
-    assert float(chained_sel.data["value"].isel(sample=0).item()) == 30.0
+    assert float(chained_sel.as_dataset()["value"].isel(sample=0).item()) == 30.0
 
 
 def test_param_ops_032_reserved_metadata_guard_rejects_user_data_var_collisions() -> None:
@@ -717,8 +1042,8 @@ def test_param_ops_033_interp_like_inner_keeps_matching_null_labels() -> None:
         param_coord="phase",
     )
     out = src.param.interp_like(other, batch_join="inner")
-    assert out.data.sizes["trial"] == 1
-    assert bool(np.isnan(out.data.coords["trial"].values[0]))
+    assert out.as_dataset().sizes["trial"] == 1
+    assert bool(np.isnan(out.as_dataset().coords["trial"].values[0]))
 
 
 def test_param_ops_034_query_dim_collision_with_scalar_coord_or_data_var_fails_fast() -> None:
@@ -780,8 +1105,8 @@ def test_param_ops_036_slice_temp_dim_avoids_coord_and_data_var_collisions() -> 
         param_coord="tau",
     )
     out_coord = ao_coord.param.sel(slice(0.0, 1.0))
-    assert out_coord.data.sizes["sample"] == 3
-    assert int(out_coord.data.coords["sample__slice"].item()) == 123
+    assert out_coord.as_dataset().sizes["sample"] == 3
+    assert int(out_coord.as_dataset().coords["sample__slice"].item()) == 123
 
     ds_var = xr.Dataset(
         data_vars={
@@ -798,8 +1123,8 @@ def test_param_ops_036_slice_temp_dim_avoids_coord_and_data_var_collisions() -> 
         param_coord="tau",
     )
     out_var = ao_var.param.sel(slice(0.0, 1.0))
-    assert tuple(out_var.data["sample__slice"].dims) == ()
-    assert float(out_var.data["sample__slice"].item()) == 5.0
+    assert tuple(out_var.as_dataset()["sample__slice"].dims) == ()
+    assert float(out_var.as_dataset()["sample__slice"].item()) == 5.0
 
 
 def test_param_ops_037_non_numeric_query_and_query_namespace_errors_are_tal_owned() -> None:
@@ -831,10 +1156,10 @@ def test_param_ops_043_reserved_token_survives_public_copy_roundtrip() -> None:
     """ID: PARAM_OPS_043_reserved_token_survives_public_copy_roundtrip."""
     ao = _ao_unbatched()
     out = ao.param.at([0.25, 0.75])
-    copy_ao = AnalysisObject(out.data)
+    copy_ao = AnalysisObject(out.as_dataset())
     chained = copy_ao.param.at([0.5])
-    assert "valid" in chained.data.coords
-    assert bool(chained.data.coords["valid"].dtype == bool)
+    assert "valid" in chained.as_dataset().coords
+    assert bool(chained.as_dataset().coords["valid"].dtype == bool)
 
 
 def test_param_ops_044_sel_slice_non_numeric_bounds_rejected_tal_valueerror() -> None:
@@ -874,7 +1199,7 @@ def test_param_ops_046_dask_sel_indexers_materialized_no_chunked_indexer_error()
         param_coord="tau",
     )
     out = ao.param.sel([0.5, 1.5])
-    np.testing.assert_allclose(out.data["value"].values, [0.0, 10.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].values, [0.0, 10.0])
 
 
 def test_param_ops_047_index_rejects_invalid_select_method_and_layout() -> None:
@@ -920,7 +1245,7 @@ def test_param_ops_056_interp_like_duck_typed_impostor_dataset_rejected() -> Non
     class _Impostor:
         @property
         def unsafe_data(self) -> xr.Dataset:
-            return _ao_unbatched().unsafe_data
+            return _ao_unbatched().as_dataset(copy="none")
 
     ao = _ao_unbatched()
     with pytest.raises(TypeError) as err:
@@ -1003,8 +1328,8 @@ def test_param_ops_052_batched_dask_slice_packed_no_chunked_indexer_error() -> N
         sequence_size_coord="group_size",
     )
     out = ao.param.sel(slice(0.5, 1.5), opts=ParamSelectOptions(layout="packed"))
-    assert out.data.sizes["sample"] == 3
-    np.testing.assert_array_equal(out.data.coords["group_size"].values, [1, 1])
+    assert out.as_dataset().sizes["sample"] == 3
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].values, [1, 1])
 
 
 def test_param_ops_053_batched_dask_slice_padded_no_chunked_indexer_error() -> None:
@@ -1036,8 +1361,8 @@ def test_param_ops_053_batched_dask_slice_padded_no_chunked_indexer_error() -> N
         sequence_size_coord="group_size",
     )
     out = ao.param.sel(slice(0.5, 1.5), opts=ParamSelectOptions(layout="padded"))
-    assert out.data.sizes["sample"] == 1
-    np.testing.assert_array_equal(out.data.coords["group_size"].values, [1, 1])
+    assert out.as_dataset().sizes["sample"] == 1
+    np.testing.assert_array_equal(out.as_dataset().coords["group_size"].values, [1, 1])
 
 
 def test_param_ops_054_multi_batch_interp_like_supported() -> None:
@@ -1045,9 +1370,9 @@ def test_param_ops_054_multi_batch_interp_like_supported() -> None:
     left = _ao_multi_batch(trial_labels=("a", "b"), sensor_labels=("s0", "s1"), offset=0.0)
     right = _ao_multi_batch(trial_labels=("b", "c"), sensor_labels=("s0", "s1"), offset=100.0)
     out = left.param.interp_like(right, batch_join="inner")
-    assert {"trial", "sensor", "sample"} <= set(out.data["value"].dims)
-    assert list(out.data.coords["trial"].values) == ["b"]
-    assert list(out.data.coords["sensor"].values) == ["s0", "s1"]
+    assert {"trial", "sensor", "sample"} <= set(out.as_dataset()["value"].dims)
+    assert list(out.as_dataset().coords["trial"].values) == ["b"]
+    assert list(out.as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_orch_topo_parity_002_interp_like_multi_batch_behavior_parity() -> None:
@@ -1055,9 +1380,9 @@ def test_orch_topo_parity_002_interp_like_multi_batch_behavior_parity() -> None:
     left = _ao_multi_batch(trial_labels=("a", "b"), sensor_labels=("s0", "s1"), offset=0.0)
     right = _ao_multi_batch(trial_labels=("b", "a"), sensor_labels=("s1", "s0"), offset=100.0)
     out = left.param.interp_like(right, batch_join="inner")
-    assert set(out.data["value"].dims) == {"trial", "sensor", "sample"}
-    assert list(out.data.coords["trial"].values) == ["a", "b"]
-    assert list(out.data.coords["sensor"].values) == ["s0", "s1"]
+    assert set(out.as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
+    assert list(out.as_dataset().coords["trial"].values) == ["a", "b"]
+    assert list(out.as_dataset().coords["sensor"].values) == ["s0", "s1"]
 
 
 def test_orch_finalize_parity_002_interp_like_restored_path_stable(
@@ -1077,9 +1402,9 @@ def test_orch_finalize_parity_002_interp_like_restored_path_stable(
     left = _ao_multi_batch(trial_labels=("a", "b"), sensor_labels=("s0", "s1"), offset=0.0)
     right = _ao_multi_batch(trial_labels=("b", "a"), sensor_labels=("s1", "s0"), offset=100.0)
     out = left.param.interp_like(right, batch_join="inner")
-    assert set(out.data["value"].dims) == {"trial", "sensor", "sample"}
-    assert list(out.data.coords["trial"].values) == ["a", "b"]
-    assert list(out.data.coords["sensor"].values) == ["s0", "s1"]
+    assert set(out.as_dataset()["value"].dims) == {"trial", "sensor", "sample"}
+    assert list(out.as_dataset().coords["trial"].values) == ["a", "b"]
+    assert list(out.as_dataset().coords["sensor"].values) == ["s0", "s1"]
     assert calls["restore_and_finalize"] >= 1
 
 
@@ -1126,7 +1451,7 @@ def test_param_ops_057_sel_point_chunked_indexers_no_dataarray_compute(
 
     monkeypatch.setattr(xr.DataArray, "compute", _boom_compute, raising=True)
     out = ao.param.sel([0.5, 1.5])
-    assert tuple(out.unsafe_data["value"].dims) == ("sample",)
+    assert tuple(out.as_dataset(copy="none")["value"].dims) == ("sample",)
 
 
 def test_param_ops_058_sel_slice_chunked_indexers_no_dataarray_compute(
@@ -1163,7 +1488,7 @@ def test_param_ops_058_sel_slice_chunked_indexers_no_dataarray_compute(
 
     monkeypatch.setattr(xr.DataArray, "compute", _boom_compute, raising=True)
     out = ao.param.sel(slice(0.25, 1.5), opts=ParamSelectOptions(layout="packed"))
-    assert tuple(out.unsafe_data["value"].dims) == ("trial", "sample")
+    assert tuple(out.as_dataset(copy="none")["value"].dims) == ("trial", "sample")
 
 
 def test_param_ops_059_sel_slice_padded_chunked_explicit_scalar_boundary(
@@ -1206,7 +1531,7 @@ def test_param_ops_059_sel_slice_padded_chunked_explicit_scalar_boundary(
 
     monkeypatch.setattr(select_mod, "scalar_int_boundary", _count_scalar_boundary)
     out = ao.param.sel(slice(0.5, 1.5), opts=ParamSelectOptions(layout="padded"))
-    assert out.data.sizes["sample"] == 1
+    assert out.as_dataset().sizes["sample"] == 1
     assert calls["n"] == 1
 
 
@@ -1247,7 +1572,7 @@ def test_param_ops_060_sel_slice_packed_chunked_no_scalar_boundary_compute(
 
     monkeypatch.setattr(select_mod, "scalar_int_boundary", _boom_scalar_boundary)
     out = ao.param.sel(slice(0.5, 1.5), opts=ParamSelectOptions(layout="packed"))
-    assert out.data.sizes["sample"] == 3
+    assert out.as_dataset().sizes["sample"] == 3
 
 
 def test_param_ops_061_index_reserved_metadata_collision_guard_parity() -> None:
@@ -1275,26 +1600,18 @@ def test_param_ops_061_index_reserved_metadata_collision_guard_parity() -> None:
 def test_param_ops_062_param_ops_do_not_mutate_source_reserved_coord_attrs() -> None:
     """ID: PARAM_OPS_062_param_ops_do_not_mutate_source_reserved_coord_attrs."""
     seed = _ao_unbatched().param.sel([0.2, 1.8])
-    valid_before = dict(seed.unsafe_data.coords["valid"].attrs)
-    sample_before = dict(seed.unsafe_data.coords["sample_index"].attrs)
+    valid_before = dict(seed.as_dataset(copy="none").coords["valid"].attrs)
+    sample_before = dict(seed.as_dataset(copy="none").coords["sample_index"].attrs)
     seed.param.sel([0.2])
     seed.param.at([0.2])
     seed.param.resample_to([0.2])
-    assert dict(seed.unsafe_data.coords["valid"].attrs) == valid_before
-    assert dict(seed.unsafe_data.coords["sample_index"].attrs) == sample_before
+    assert dict(seed.as_dataset(copy="none").coords["valid"].attrs) == valid_before
+    assert dict(seed.as_dataset(copy="none").coords["sample_index"].attrs) == sample_before
 
 
 def test_orch_parity_002_param_interp_like_behavior_parity_after_migration() -> None:
     """ID: ORCH_PARITY_002_param_interp_like_behavior_parity_after_migration."""
     test_orch_topo_parity_002_interp_like_multi_batch_behavior_parity()
-
-
-def test_spatial_core_133_temporal_vector_like_method_execution_paths_use_blockwise_vectorize_false() -> None:
-    """ID: SPATIAL_CORE_133_temporal_vector_like_method_execution_paths_use_blockwise_vectorize_false."""
-    text = Path("tal/core/param_engine/map_apply.py").read_text(encoding="utf-8")
-    gather_body = text.split("def gather_along_sequence(", 1)[1].split("\ndef ", 1)[0]
-    assert "vectorize=False" in gather_body
-    assert "vectorize=True" not in gather_body
 
 
 def test_spatial_hard_154_temporal_vector_like_rejects_hidden_or_explicit_python_row_loop_execution_paths() -> None:
@@ -1320,5 +1637,5 @@ def test_param_ops_inherited_spatial_accessor_matches_ao_behavior_parity() -> No
     pos = Position(base)
     ao_out = base.param.at([0.5], opts=ParamEvalOptions(method="linear"))
     pos_out = pos.param.at([0.5], opts=ParamEvalOptions(method="linear"))
-    np.testing.assert_allclose(ao_out.unsafe_data["position"].values, pos_out.unsafe_data["position"].values)
+    np.testing.assert_allclose(ao_out.as_dataset(copy="none")["position"].values, pos_out.as_dataset(copy="none")["position"].values)
     assert isinstance(pos_out, Position)

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from ..orchestration.indexing import dimension_coordinates
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..orchestration.resolve import resolve_param_runtime_context
 from ..param_engine.validity_mask import finite_param_mask
 from ..param_ops.types import ParamRuntimeContext
 from .types import ConditionEvalOptions
+
+if TYPE_CHECKING:
+    from ..analysis_object import AnalysisObject
 
 
 @dataclass(frozen=True)
@@ -20,7 +25,7 @@ class EventEvalContext:
     Public TAL class surface. See class methods/properties for operational semantics.
     """
 
-    ao: "AnalysisObject"
+    ao: AnalysisObject
     runtime: ParamRuntimeContext
     clock: xr.DataArray
     valid_mask: xr.DataArray
@@ -66,12 +71,8 @@ def _canonicalize_runtime_dim_order(
     missing = [dim for dim in runtime.batch_dims if dim not in da.dims]
     out = da
     for dim in missing:
-        coord = runtime.batch_coords.get(dim)
-        if coord is None and dim in runtime.ds.coords:
-            coord = runtime.ds.coords[dim]
-        if coord is None:
-            raise ValueError(f"{owner}: {field} cannot infer labels for missing batch dim {dim!r}.")
-        out = out.expand_dims({dim: coord})
+        out = out.expand_dims({dim: runtime.ds.sizes[dim]})
+        out = out.assign_coords(dimension_coordinates(runtime.ds, dims=(dim,)))
     _assert_dim_labels_match_context(out, runtime=runtime, owner=owner, field=field)
     missing_after = [dim for dim in dims if dim not in out.dims]
     if missing_after:
@@ -127,7 +128,7 @@ def resolve_event_valid_mask_by_mode(
 
 
 def resolve_event_eval_context(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     *,
     opts: ConditionEvalOptions,
     owner: str,

@@ -48,7 +48,7 @@ def _matrix_leaf(*, offset: float = 0.0, row_start: int = 0) -> AnalysisObject:
 
 
 def _core_dims(ao: AnalysisObject) -> tuple[str, ...]:
-    return read_roles(validate_schema_if_needed(ao.unsafe_data))[3]
+    return read_roles(validate_schema_if_needed(ao.as_dataset(copy="none")))[3]
 
 
 def test_linalg_core_021_concat_core_functional_and_typed_constructor_parity() -> None:
@@ -59,7 +59,7 @@ def test_linalg_core_021_concat_core_functional_and_typed_constructor_parity() -
     out_cls = Array.concat_core(leaves, opts=opts, validate=True)
     assert type(out_fn) is Array
     assert type(out_cls) is Array
-    xr.testing.assert_identical(out_fn.unsafe_data, out_cls.unsafe_data)
+    xr.testing.assert_identical(out_fn.as_dataset(copy="none"), out_cls.as_dataset(copy="none"))
 
 
 def test_linalg_hard_063_concat_core_plain_ao_inputs_fallback_to_array() -> None:

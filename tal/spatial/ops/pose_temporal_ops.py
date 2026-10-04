@@ -1,38 +1,29 @@
+"""Pose temporal orchestration with one final composite commit."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import xarray as xr
 
-from tal.core.analysis_object import AnalysisObject
-from tal.core.component_ops import read_components
-from tal.core.component_ops.runtime_checks import select_component_var
-from tal.core.schema_read import read_roles
+from tal.core.dataset_ownership import analysis_object_dataset
+from tal.core.orchestration.composite_commit import _prepare_composite_schema_target
+from tal.core.param_engine.query_output_verify import verify_query_output_plan
+from tal.core.schema_errors import SchemaError
+from tal.core.schema_update import source_schema_view
+from tal.core.schema_validate.finalize import transfer_dataarray_metadata
 
-from ..metadata import get_pose_rep
-from ..temporal.options import PoseTemporalOptions, as_rotation_method, resolve_rotation_method
+from ..association import SpatialAssociationPlan
+from ..temporal.options import PoseTemporalOptions
+from .composite_finalize import commit_spatial_composite
+from .pose_kernel_adapters import apply_components_to_matrix_kernel
+from .pose_temporal_parts import PoseTemporalParts, prepare_pose_temporal_parts
+from .pose_temporal_types import PoseTemporalRequest, PreparedPoseEvaluation
 
 if TYPE_CHECKING:
     from ..pose import Pose
-    from ..position import Position
-    from ..rotation import Rotation
-
-
-@dataclass(frozen=True)
-class PoseTemporalRequest:
-    pose: Pose
-    query: xr.DataArray | np.ndarray | Sequence[float] | float
-    on: str | None
-    opts: PoseTemporalOptions
-    validate: bool
-    sequence_dim: str | None
-    batch_dims: Sequence[str] | None
-    sequence_size_coord: str | None
-    owner: str
-    mode: Literal["at", "resample_to"]
 
 
 def _effective_param_key(request: PoseTemporalRequest) -> str | None:
@@ -41,308 +32,131 @@ def _effective_param_key(request: PoseTemporalRequest) -> str | None:
     if request.opts.on is None or request.opts.on == request.on:
         return request.on
     raise ValueError(
-        f"{request.owner}: conflicting on= value between argument ({request.on!r}) "
-        f"and opts.on ({request.opts.on!r})."
+        f"{request.owner}: conflicting on= value between argument "
+        f"({request.on!r}) and opts.on ({request.opts.on!r})."
     )
 
 
-def _eval_position(
-    position: Position,
-    request: PoseTemporalRequest,
+def _matrix_payload(
+    parts: PoseTemporalParts,
+    source: xr.Dataset,
     *,
-    on: str | None,
-) -> Position:
-    source = position if on is None else position.set_param_coord(name=on, validate=False)
-    kwargs = {
-        "on": on,
-        "opts": request.opts.position_opts,
-        "validate": False,
-        "sequence_dim": request.sequence_dim,
-        "batch_dims": request.batch_dims,
-        "sequence_size_coord": request.sequence_size_coord,
-    }
-    if request.mode == "at":
-        return source.param.at(request.query, **kwargs)
-    return source.param.resample_to(request.query, **kwargs)
+    owner: str,
+) -> xr.DataArray:
+    if parts.matrix_core_dims is None:
+        raise RuntimeError(f"{owner}: matrix core dimensions were not prepared.")
+    row_dim, col_dim = parts.matrix_core_dims
+    position = parts.position
+    rotation = parts.rotation
+    if "valid" in parts.carrier.coords:
+        valid = parts.carrier.coords["valid"]
+        identity = xr.DataArray(
+            [0.0, 0.0, 0.0, 1.0],
+            dims=parts.rotation_dim,
+            coords={parts.rotation_dim: ["x", "y", "z", "w"]},
+        )
+        position = position.where(valid, 0.0)
+        rotation = rotation.where(valid, identity)
+    matrix = apply_components_to_matrix_kernel(
+        position,
+        rotation,
+        pos_dim=parts.position_dim,
+        quat_dim=parts.rotation_dim,
+        row_dim=row_dim,
+        col_dim=col_dim,
+        owner=owner,
+    )
+    source_var = source[parts.position_var]
+    matrix = matrix.transpose(*source_var.dims)
+    return transfer_dataarray_metadata(source_var, matrix)
 
 
-def _eval_rotation(
-    rotation: Rotation,
-    request: PoseTemporalRequest,
+def _assembled_variables(
+    parts: PoseTemporalParts,
+    source: xr.Dataset,
     *,
-    on: str | None,
-) -> Rotation:
-    source = rotation if on is None else rotation.set_param_coord(name=on, validate=False)
-    resolved = as_rotation_method(request.opts.rotation_opts, method=resolve_rotation_method(request.opts.rotation_opts))
-    kwargs = {
-        "on": on,
-        "opts": resolved,
-        "validate": False,
-        "sequence_dim": request.sequence_dim,
-        "batch_dims": request.batch_dims,
-        "sequence_size_coord": request.sequence_size_coord,
-    }
-    if request.mode == "at":
-        return source.param.at(request.query, **kwargs)
-    return source.param.resample_to(request.query, **kwargs)
+    owner: str,
+) -> dict[str, xr.DataArray]:
+    matrix = None
+    if parts.representation == "matrix":
+        matrix = _matrix_payload(parts, source, owner=owner)
+    values: dict[str, xr.DataArray] = {}
+    for name in source.data_vars:
+        if name == parts.position_var:
+            values[name] = parts.position if matrix is None else matrix
+        elif name == parts.rotation_var:
+            values[name] = parts.rotation
+        elif name in parts.carrier.data_vars:
+            values[name] = parts.carrier[name]
+    return values
 
 
-def _eval_payload_carrier(
-    source: Pose,
-    request: PoseTemporalRequest,
-    *,
-    on: str | None,
-) -> xr.Dataset:
-    carrier = AnalysisObject._from_unvalidated(source.unsafe_data)
-    if on is not None:
-        carrier = carrier.set_param_coord(name=on, validate=False)
-    kwargs = {
-        "on": on,
-        "opts": request.opts.position_opts,
-        "validate": False,
-        "sequence_dim": request.sequence_dim,
-        "batch_dims": request.batch_dims,
-        "sequence_size_coord": request.sequence_size_coord,
-    }
-    if request.mode == "at":
-        return carrier.param.at(request.query, **kwargs).unsafe_data
-    return carrier.param.resample_to(request.query, **kwargs).unsafe_data
-
-
-def _overlay_components_payload(
-    carrier_ds: xr.Dataset,
-    typed_ds: xr.Dataset,
+def _assemble_candidate(
+    parts: PoseTemporalParts,
+    source: xr.Dataset,
     *,
     owner: str,
 ) -> xr.Dataset:
-    merged = carrier_ds.copy(deep=True)
-    carrier_registry = read_components(carrier_ds)
-    typed_registry = read_components(typed_ds)
-    for component_name in ("position", "rotation"):
-        carrier_spec = carrier_registry[component_name]
-        typed_spec = typed_registry[component_name]
-        carrier_var = select_component_var(
-            carrier_ds,
-            spec=carrier_spec,
-            component_name=component_name,
-            owner=owner,
-            operand="carrier pose",
-        )
-        typed_var = select_component_var(
-            typed_ds,
-            spec=typed_spec,
-            component_name=component_name,
-            owner=owner,
-            operand="typed pose",
-        )
-        merged[carrier_var] = typed_ds[typed_var]
-    return merged
-
-
-def _resolve_matrix_payload_var(
-    ds: xr.Dataset,
-    *,
-    owner: str,
-    what: str,
-) -> str:
-    _, _, _, core_dims = read_roles(ds)
-    if len(core_dims) != 2:
-        raise ValueError(f"{owner}: {what} requires exactly two matrix core dims; got {core_dims!r}.")
-    row_dim, col_dim = core_dims
-    candidates = [
-        str(name)
-        for name, var in ds.data_vars.items()
-        if np.issubdtype(np.dtype(var.dtype), np.number) and row_dim in var.dims and col_dim in var.dims
-    ]
-    if len(candidates) == 1:
-        return candidates[0]
-    if not candidates:
-        raise ValueError(
-            f"{owner}: {what} requires one numeric matrix payload var containing core dims "
-            f"{(row_dim, col_dim)!r}; found none."
-        )
-    raise ValueError(
-        f"{owner}: {what} is ambiguous; found multiple numeric matrix payload vars "
-        f"{candidates!r} containing core dims {(row_dim, col_dim)!r}."
+    candidate = xr.Dataset(
+        data_vars=_assembled_variables(parts, source, owner=owner),
+        coords=parts.carrier.coords,
     )
+    return source_schema_view(parts.carrier, candidate)
 
 
-def _matrix_only_pose_source(
-    source: Pose,
-    *,
-    owner: str,
-) -> tuple[Pose, str]:
-    matrix_var = _resolve_matrix_payload_var(
-        source.unsafe_data,
-        owner=owner,
-        what="pose temporal source matrix payload",
+def _prepare_pose_temporal_candidate(
+    request: PoseTemporalRequest,
+) -> tuple[xr.Dataset, PoseTemporalParts, xr.Dataset]:
+    source = request.pose
+    source_ds = analysis_object_dataset(source)
+    parts = prepare_pose_temporal_parts(
+        request,
+        on=_effective_param_key(request),
     )
-    matrix_only = source.unsafe_data[[matrix_var]]
-    return source.__class__._from_unvalidated(matrix_only), matrix_var
-
-
-def _overlay_matrix_payload(
-    carrier_ds: xr.Dataset,
-    typed_ds: xr.Dataset,
-    *,
-    source_matrix_var: str,
-    owner: str,
-) -> xr.Dataset:
-    if source_matrix_var not in carrier_ds.data_vars:
-        raise ValueError(f"{owner}: carrier dataset is missing source matrix var {source_matrix_var!r}.")
-    typed_var = _resolve_matrix_payload_var(
-        typed_ds,
-        owner=owner,
-        what="pose temporal typed matrix payload",
+    candidate = _assemble_candidate(parts, source_ds, owner=request.owner)
+    candidate = _prepare_composite_schema_target(
+        candidate,
+        schema=parts.schema,
+        validate=request.validate,
     )
-    carrier_da = carrier_ds[source_matrix_var]
-    typed_da = typed_ds[typed_var]
-    _, source_seq, _, source_core = read_roles(carrier_ds)
-    _, typed_seq, _, typed_core = read_roles(typed_ds)
-    rename_map: dict[str, str] = {}
-    if typed_seq is not None and source_seq is not None and typed_seq != source_seq:
-        rename_map[typed_seq] = source_seq
-    if source_core and typed_core:
-        if len(source_core) != len(typed_core):
-            raise ValueError(
-                f"{owner}: source/typed matrix core dims are incompatible: "
-                f"{source_core!r} vs {typed_core!r}."
-            )
-        for typed_dim, source_dim in zip(typed_core, source_core, strict=True):
-            if typed_dim != source_dim:
-                rename_map[typed_dim] = source_dim
-    if rename_map:
-        typed_da = typed_da.reset_coords(drop=True).rename(rename_map)
-    if set(typed_da.dims) != set(carrier_da.dims):
-        raise ValueError(
-            f"{owner}: typed matrix payload dims {list(typed_da.dims)!r} are incompatible with "
-            f"carrier dims {list(carrier_da.dims)!r}."
-        )
-    typed_da = typed_da.transpose(*carrier_da.dims)
-    for dim in carrier_da.dims:
-        if dim in carrier_ds.coords and dim in typed_da.dims:
-            typed_da = typed_da.assign_coords({dim: carrier_ds.coords[dim]})
-    merged = carrier_ds.copy(deep=True)
-    merged[source_matrix_var] = typed_da
-    return merged
-
-
-def _needs_matrix_aux_rebind(
-    *,
-    validate: bool,
-    matrix_template_ds: xr.Dataset | None,
-    merged_ds: xr.Dataset,
-) -> bool:
-    return (not validate) and matrix_template_ds is not None and len(merged_ds.data_vars) > 1
-
-
-def _require_matrix_aux_rebind_compatibility(
-    *,
-    matrix_template_ds: xr.Dataset,
-    merged_ds: xr.Dataset,
-    owner: str,
-) -> None:
-    template_var = _resolve_matrix_payload_var(
-        matrix_template_ds,
-        owner=owner,
-        what="pose temporal matrix template payload",
+    verify_query_output_plan(
+        candidate,
+        plan=parts.output_plan,
+        topology=parts.query_topology,
     )
-    merged_var = _resolve_matrix_payload_var(
-        merged_ds,
-        owner=owner,
-        what="pose temporal merged matrix payload",
-    )
-    template_shape = tuple(int(size) for size in matrix_template_ds[template_var].shape)
-    merged_shape = tuple(int(size) for size in merged_ds[merged_var].shape)
-    if len(template_shape) != len(merged_shape):
-        raise ValueError(
-            f"{owner}: validate=False matrix aux rebind requires matching matrix payload rank; "
-            f"template={template_shape!r}, merged={merged_shape!r}."
-        )
-    if tuple(sorted(template_shape)) != tuple(sorted(merged_shape)):
-        raise ValueError(
-            f"{owner}: validate=False matrix aux rebind requires matching matrix payload shapes; "
-            f"template={template_shape!r}, merged={merged_shape!r}."
-        )
+    return candidate, parts, source_ds
 
 
-def _rewrap_matrix_aux_unvalidated(
-    source: Pose,
-    *,
-    merged_ds: xr.Dataset,
-    matrix_template_ds: xr.Dataset,
-    owner: str,
-) -> Pose:
-    _require_matrix_aux_rebind_compatibility(
-        matrix_template_ds=matrix_template_ds,
-        merged_ds=merged_ds,
-        owner=owner,
-    )
-    out = source.__class__._from_unvalidated(matrix_template_ds)
-    out._bind_dataset(merged_ds)
-    return out
-
-
-def _rewrap_pose_temporal_output(
-    source: Pose,
-    *,
-    merged_ds: xr.Dataset,
-    validate: bool,
-) -> Pose:
-    if validate:
-        return source.__class__._from_validated(merged_ds)
-    return source.__class__._from_unvalidated(merged_ds)
+def _prepare_owned_candidate(
+    request: PoseTemporalRequest,
+) -> tuple[xr.Dataset, PoseTemporalParts, xr.Dataset]:
+    try:
+        return _prepare_pose_temporal_candidate(request)
+    except SchemaError:
+        raise
+    except (TypeError, ValueError) as exc:
+        if type(exc) not in (TypeError, ValueError):
+            raise
+        prefix = f"{request.owner}:"
+        if str(exc).startswith(prefix):
+            raise
+        raise type(exc)(f"{prefix} {exc}") from exc
 
 
 def _run_pose_temporal_request(request: PoseTemporalRequest) -> Pose:
     source = request.pose
-    source_rep = get_pose_rep(source.unsafe_data, owner=request.owner)
-    on = _effective_param_key(request)
-    carrier_ds = _eval_payload_carrier(source, request, on=on)
-    matrix_source_var: str | None = None
-    decompose_source = source
-    if source_rep == "matrix":
-        decompose_source, matrix_source_var = _matrix_only_pose_source(source, owner=request.owner)
-    position, rotation = decompose_source.decompose(validate=False)
-    position_out = _eval_position(position, request, on=on)
-    rotation_out = _eval_rotation(rotation, request, on=on)
-    recomposed = source.__class__.from_components(rotation_out, position_out, validate=False)
-    matrix_template_ds: xr.Dataset | None = None
-    if source_rep == "matrix":
-        if matrix_source_var is None:
-            raise ValueError(f"{request.owner}: missing source matrix payload selection.")
-        typed_matrix = recomposed.as_matrix(validate=False).unsafe_data
-        matrix_template_ds = typed_matrix
-        merged_ds = _overlay_matrix_payload(
-            carrier_ds,
-            typed_matrix,
-            source_matrix_var=matrix_source_var,
-            owner=request.owner,
-        )
-    else:
-        merged_ds = _overlay_components_payload(
-            carrier_ds,
-            recomposed.unsafe_data,
-            owner=request.owner,
-        )
-    if _needs_matrix_aux_rebind(
+    candidate, parts, source_ds = _prepare_owned_candidate(request)
+    result = commit_spatial_composite(
+        candidate,
+        schema=parts.schema,
+        components=parts.components,
+        prototype=source,
+        association=SpatialAssociationPlan(source.graph),
+        resource_sources=(source_ds,),
         validate=request.validate,
-        matrix_template_ds=matrix_template_ds,
-        merged_ds=merged_ds,
-    ):
-        if matrix_template_ds is None:
-            raise ValueError(f"{request.owner}: missing matrix template for validate=False matrix aux rebind.")
-        return _rewrap_matrix_aux_unvalidated(
-            source,
-            merged_ds=merged_ds,
-            matrix_template_ds=matrix_template_ds,
-            owner=request.owner,
-        )
-    return _rewrap_pose_temporal_output(
-        source,
-        merged_ds=merged_ds,
-        validate=request.validate,
+        owner=request.owner,
     )
+    return cast("Pose", result)
 
 
 def pose_param_at(
@@ -356,8 +170,9 @@ def pose_param_at(
     batch_dims: Sequence[str] | None,
     sequence_size_coord: str | None,
     owner: str,
+    prepared: PreparedPoseEvaluation | None = None,
 ) -> Pose:
-    request = PoseTemporalRequest(
+    return _run_pose_temporal_request(PoseTemporalRequest(
         pose=pose,
         query=query,
         on=on,
@@ -368,14 +183,8 @@ def pose_param_at(
         sequence_size_coord=sequence_size_coord,
         owner=owner,
         mode="at",
-    )
-    try:
-        return _run_pose_temporal_request(request)
-    except (TypeError, ValueError) as exc:
-        text = str(exc)
-        if text.startswith(f"{owner}:"):
-            raise
-        raise type(exc)(f"{owner}: {text}") from exc
+        prepared=prepared,
+    ))
 
 
 def pose_param_resample_to(
@@ -390,7 +199,7 @@ def pose_param_resample_to(
     sequence_size_coord: str | None,
     owner: str,
 ) -> Pose:
-    request = PoseTemporalRequest(
+    return _run_pose_temporal_request(PoseTemporalRequest(
         pose=pose,
         query=grid,
         on=on,
@@ -401,14 +210,7 @@ def pose_param_resample_to(
         sequence_size_coord=sequence_size_coord,
         owner=owner,
         mode="resample_to",
-    )
-    try:
-        return _run_pose_temporal_request(request)
-    except (TypeError, ValueError) as exc:
-        text = str(exc)
-        if text.startswith(f"{owner}:"):
-            raise
-        raise type(exc)(f"{owner}: {text}") from exc
+    ))
 
 
-__all__ = ["pose_param_at", "pose_param_resample_to"]
+__all__ = ["PreparedPoseEvaluation", "pose_param_at", "pose_param_resample_to"]

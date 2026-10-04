@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
+from ..core.dataset_ownership import analysis_object_dataset
 from .array import Array
 from .lifecycle import MATRIX_LIFECYCLE, matrix_core_dims
 
@@ -25,7 +26,7 @@ class Matrix(Array):
     LIFECYCLE = MATRIX_LIFECYCLE
 
     def _matrix_core_dims(self, *, owner: str) -> tuple[str, str]:
-        return matrix_core_dims(self.unsafe_data, owner=owner)
+        return matrix_core_dims(analysis_object_dataset(self), owner=owner)
 
     def set_core_dims(self, *dims: str) -> "Matrix":
         """Set matrix core dimensions (exactly two distinct names).
@@ -59,7 +60,7 @@ class Matrix(Array):
             Resolved property value.
         """
         row_dim, col_dim = self._matrix_core_dims(owner="Matrix.T")
-        dims = list(self.unsafe_data.dims)
+        dims = list(analysis_object_dataset(self).dims)
         row_idx = dims.index(row_dim)
         col_idx = dims.index(col_dim)
         dims[row_idx], dims[col_idx] = dims[col_idx], dims[row_idx]
@@ -115,7 +116,7 @@ class Matrix(Array):
         ...     core_dims=("row",),
         ...     validate=True,
         ... ))
-        >>> A.solve(b, opts=SolveOptions(method="solve")).unsafe_data["datavar"].values.tolist()
+        >>> A.solve(b, opts=SolveOptions(method="solve")).as_dataset()["datavar"].values.tolist()
         [[4.0, 5.0]]
         """
         from .ops import solve
@@ -139,7 +140,7 @@ class Matrix(Array):
         ...     core_dims=("row", "col"),
         ...     validate=True,
         ... ))
-        >>> A.inv().unsafe_data["datavar"].to_numpy().tolist()
+        >>> A.inv().as_dataset()["datavar"].to_numpy().tolist()
         [[[0.5, 0.0], [0.0, 0.25]]]
         """
         from .ops import inv
@@ -186,7 +187,7 @@ class Matrix(Array):
         ...     core_dims=("row", "col"),
         ...     validate=True,
         ... ))
-        >>> A.pinv(opts=PInvOptions(rcond=1e-8)).unsafe_data["datavar"].values.tolist()
+        >>> A.pinv(opts=PInvOptions(rcond=1e-8)).as_dataset()["datavar"].values.tolist()
         [[[0.5, 0.0], [0.0, 0.25]]]
         """
         from .ops import pinv

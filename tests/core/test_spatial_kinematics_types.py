@@ -63,7 +63,7 @@ def _vector3_dataset(
         core_dims=(core_dim,),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _batched_vector3_dataset(
@@ -122,7 +122,7 @@ def _batched_vector3_dataset(
         sequence_size_coord="sample_size",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _temporal_vector3_dataset(
@@ -151,7 +151,7 @@ def _temporal_vector3_dataset(
         sequence_size_coord="group_size",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _as_dataarray_with_schema(ds: xr.Dataset, *, var_name: str) -> xr.DataArray:
@@ -230,8 +230,8 @@ def test_spatial_core_024_linear_velocity_constructor_accepts_ao_dataset_dataarr
     assert isinstance(from_ao, LinearVelocity)
     assert isinstance(from_ds, LinearVelocity)
     assert isinstance(from_da, LinearVelocity)
-    assert get_linear_velocity_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "linear_velocity"
+    assert get_linear_velocity_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.as_dataset(copy="none"), owner="test") == "linear_velocity"
 
 
 def test_spatial_core_025_angular_velocity_constructor_accepts_ao_dataset_dataarray_deterministically() -> None:
@@ -247,8 +247,8 @@ def test_spatial_core_025_angular_velocity_constructor_accepts_ao_dataset_dataar
     assert isinstance(from_ao, AngularVelocity)
     assert isinstance(from_ds, AngularVelocity)
     assert isinstance(from_da, AngularVelocity)
-    assert get_angular_velocity_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "angular_velocity"
+    assert get_angular_velocity_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.as_dataset(copy="none"), owner="test") == "angular_velocity"
 
 
 def test_spatial_core_026_velocity_spatial6_from_linear_angular_composition_boundary_deterministic() -> None:
@@ -259,8 +259,8 @@ def test_spatial_core_026_velocity_spatial6_from_linear_angular_composition_boun
     vel = Velocity.from_linear_angular(linear, angular, validate=True)
 
     assert isinstance(vel, Velocity)
-    assert get_velocity_rep(vel.unsafe_data, owner="test") == "components"
-    assert get_kinematics_kind(vel.unsafe_data, owner="test") == "velocity"
+    assert get_velocity_rep(vel.as_dataset(copy="none"), owner="test") == "components"
+    assert get_kinematics_kind(vel.as_dataset(copy="none"), owner="test") == "velocity"
     assert set(read_components(vel).keys()) == {"linear", "angular"}
 
 
@@ -277,8 +277,8 @@ def test_spatial_core_027_linear_acceleration_constructor_accepts_ao_dataset_dat
     assert isinstance(from_ao, LinearAcceleration)
     assert isinstance(from_ds, LinearAcceleration)
     assert isinstance(from_da, LinearAcceleration)
-    assert get_linear_acceleration_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "linear_acceleration"
+    assert get_linear_acceleration_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.as_dataset(copy="none"), owner="test") == "linear_acceleration"
 
 
 def test_spatial_core_028_angular_acceleration_constructor_accepts_ao_dataset_dataarray_deterministically() -> None:
@@ -294,8 +294,8 @@ def test_spatial_core_028_angular_acceleration_constructor_accepts_ao_dataset_da
     assert isinstance(from_ao, AngularAcceleration)
     assert isinstance(from_ds, AngularAcceleration)
     assert isinstance(from_da, AngularAcceleration)
-    assert get_angular_acceleration_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "angular_acceleration"
+    assert get_angular_acceleration_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.as_dataset(copy="none"), owner="test") == "angular_acceleration"
 
 
 def test_spatial_core_029_acceleration_spatial6_from_linear_angular_composition_boundary_deterministic() -> None:
@@ -306,8 +306,8 @@ def test_spatial_core_029_acceleration_spatial6_from_linear_angular_composition_
     acc = Acceleration.from_linear_angular(linear, angular, validate=True)
 
     assert isinstance(acc, Acceleration)
-    assert get_acceleration_rep(acc.unsafe_data, owner="test") == "components"
-    assert get_kinematics_kind(acc.unsafe_data, owner="test") == "acceleration"
+    assert get_acceleration_rep(acc.as_dataset(copy="none"), owner="test") == "components"
+    assert get_kinematics_kind(acc.as_dataset(copy="none"), owner="test") == "acceleration"
     assert set(read_components(acc).keys()) == {"linear", "angular"}
 
 
@@ -324,8 +324,8 @@ def test_spatial_hard_182_typed_lifecycle_linear_velocity_parity() -> None:
     assert isinstance(from_ao, LinearVelocity)
     assert isinstance(from_ds, LinearVelocity)
     assert isinstance(from_da, LinearVelocity)
-    assert get_linear_velocity_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "linear_velocity"
+    assert get_linear_velocity_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.as_dataset(copy="none"), owner="test") == "linear_velocity"
     bad = _with_core_labels(ds, core_dim="axis", labels=("x", "z", "y"))
     with pytest.raises(ValueError, match="labels must equal"):
         _ = LinearVelocity._from_validated(bad)
@@ -346,8 +346,8 @@ def test_spatial_hard_183_typed_lifecycle_angular_velocity_parity() -> None:
     assert isinstance(from_ao, AngularVelocity)
     assert isinstance(from_ds, AngularVelocity)
     assert isinstance(from_da, AngularVelocity)
-    assert get_angular_velocity_rep(from_ds.unsafe_data, owner="test") == "cart"
-    assert get_kinematics_kind(from_ds.unsafe_data, owner="test") == "angular_velocity"
+    assert get_angular_velocity_rep(from_ds.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_kinematics_kind(from_ds.as_dataset(copy="none"), owner="test") == "angular_velocity"
     bad = _with_core_labels(ds, core_dim="axis", labels=("x", "z", "y"))
     with pytest.raises(ValueError, match="labels must equal"):
         _ = AngularVelocity._from_validated(bad)
@@ -358,13 +358,13 @@ def test_spatial_hard_183_typed_lifecycle_angular_velocity_parity() -> None:
 def test_spatial_hard_184_typed_lifecycle_velocity_family_parity() -> None:
     """ID: SPATIAL_HARD_184_typed_lifecycle_velocity_family_parity."""
     vel = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True)
-    reparsed = Velocity(vel.unsafe_data)
+    reparsed = Velocity(vel.as_dataset(copy="none"))
     vector6 = reparsed.as_vector6(validate=True)
-    vector6_reparsed = Velocity(vector6.unsafe_data)
+    vector6_reparsed = Velocity(vector6.as_dataset(copy="none"))
     restored = vector6_reparsed.to_rep("components", validate=True)
 
-    assert get_velocity_rep(reparsed.unsafe_data, owner="test") == "components"
-    assert get_velocity_rep(vector6_reparsed.unsafe_data, owner="test") == "vector6"
+    assert get_velocity_rep(reparsed.as_dataset(copy="none"), owner="test") == "components"
+    assert get_velocity_rep(vector6_reparsed.as_dataset(copy="none"), owner="test") == "vector6"
     assert set(read_components(reparsed).keys()) == {"linear", "angular"}
     assert set(read_components(restored).keys()) == {"linear", "angular"}
 
@@ -374,15 +374,15 @@ def test_spatial_hard_185_typed_lifecycle_acceleration_family_parity() -> None:
     linear = _linear_acceleration()
     angular = _angular_acceleration()
     acc = Acceleration.from_linear_angular(linear, angular, validate=True)
-    reparsed = Acceleration(acc.unsafe_data)
+    reparsed = Acceleration(acc.as_dataset(copy="none"))
     vector6 = reparsed.as_vector6(validate=True)
-    vector6_reparsed = Acceleration(vector6.unsafe_data)
+    vector6_reparsed = Acceleration(vector6.as_dataset(copy="none"))
     restored = vector6_reparsed.to_rep("components", validate=True)
 
-    assert get_linear_acceleration_rep(linear.unsafe_data, owner="test") == "cart"
-    assert get_angular_acceleration_rep(angular.unsafe_data, owner="test") == "cart"
-    assert get_acceleration_rep(reparsed.unsafe_data, owner="test") == "components"
-    assert get_acceleration_rep(vector6_reparsed.unsafe_data, owner="test") == "vector6"
+    assert get_linear_acceleration_rep(linear.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_angular_acceleration_rep(angular.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_acceleration_rep(reparsed.as_dataset(copy="none"), owner="test") == "components"
+    assert get_acceleration_rep(vector6_reparsed.as_dataset(copy="none"), owner="test") == "vector6"
     assert set(read_components(reparsed).keys()) == {"linear", "angular"}
     assert set(read_components(restored).keys()) == {"linear", "angular"}
 
@@ -407,13 +407,13 @@ def test_spatial_core_032_velocity_from_linear_angular_one_framed_operand_inheri
     linear_framed = frame_retag(_linear_velocity(), parent="world", child="body", validate=True)
     angular_unframed = _angular_velocity()
     vel_linear_framed = Velocity.from_linear_angular(linear_framed, angular_unframed, validate=True)
-    assert get_frames(vel_linear_framed.unsafe_data) == ("world", "body")
+    assert get_frames(vel_linear_framed.as_dataset(copy="none")) == ("world", "body")
     assert set(read_components(vel_linear_framed).keys()) == {"linear", "angular"}
 
     linear_unframed = _linear_velocity()
     angular_framed = frame_retag(_angular_velocity(), parent="map", child="imu", validate=True)
     vel_angular_framed = Velocity.from_linear_angular(linear_unframed, angular_framed, validate=True)
-    assert get_frames(vel_angular_framed.unsafe_data) == ("map", "imu")
+    assert get_frames(vel_angular_framed.as_dataset(copy="none")) == ("map", "imu")
     assert set(read_components(vel_angular_framed).keys()) == {"linear", "angular"}
 
 
@@ -422,13 +422,13 @@ def test_spatial_core_033_acceleration_from_linear_angular_one_framed_operand_in
     linear_framed = frame_retag(_linear_acceleration(), parent="world", child="body", validate=True)
     angular_unframed = _angular_acceleration()
     acc_linear_framed = Acceleration.from_linear_angular(linear_framed, angular_unframed, validate=True)
-    assert get_frames(acc_linear_framed.unsafe_data) == ("world", "body")
+    assert get_frames(acc_linear_framed.as_dataset(copy="none")) == ("world", "body")
     assert set(read_components(acc_linear_framed).keys()) == {"linear", "angular"}
 
     linear_unframed = _linear_acceleration()
     angular_framed = frame_retag(_angular_acceleration(), parent="odom", child="sensor", validate=True)
     acc_angular_framed = Acceleration.from_linear_angular(linear_unframed, angular_framed, validate=True)
-    assert get_frames(acc_angular_framed.unsafe_data) == ("odom", "sensor")
+    assert get_frames(acc_angular_framed.as_dataset(copy="none")) == ("odom", "sensor")
     assert set(read_components(acc_angular_framed).keys()) == {"linear", "angular"}
 
 
@@ -449,11 +449,11 @@ def test_bcast_core_054_kinematics_component_assembly_preserves_declared_param_a
         )
     )
     out = Velocity.from_linear_angular(linear, angular, validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
     angular_spec = read_components(out)["angular"]
     assert angular_spec.var is not None
-    assert out.unsafe_data[angular_spec.var].sizes["trial"] == 2
+    assert out.as_dataset(copy="none")[angular_spec.var].sizes["trial"] == 2
 
 
 def test_bcast_hard_046_component_assembly_frame_mismatch_fails_before_topology_selection(
@@ -492,12 +492,12 @@ def test_spatial_core_031_kinematics_representation_policy_alignment_locked() ->
     vel = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True)
     acc = Acceleration.from_linear_angular(_linear_acceleration(), _angular_acceleration(), validate=True)
 
-    assert get_linear_velocity_rep(_linear_velocity().unsafe_data, owner="test") == "cart"
-    assert get_angular_velocity_rep(_angular_velocity().unsafe_data, owner="test") == "cart"
-    assert get_velocity_rep(vel.unsafe_data, owner="test") == "components"
-    assert get_linear_acceleration_rep(_linear_acceleration().unsafe_data, owner="test") == "cart"
-    assert get_angular_acceleration_rep(_angular_acceleration().unsafe_data, owner="test") == "cart"
-    assert get_acceleration_rep(acc.unsafe_data, owner="test") == "components"
+    assert get_linear_velocity_rep(_linear_velocity().as_dataset(copy="none"), owner="test") == "cart"
+    assert get_angular_velocity_rep(_angular_velocity().as_dataset(copy="none"), owner="test") == "cart"
+    assert get_velocity_rep(vel.as_dataset(copy="none"), owner="test") == "components"
+    assert get_linear_acceleration_rep(_linear_acceleration().as_dataset(copy="none"), owner="test") == "cart"
+    assert get_angular_acceleration_rep(_angular_acceleration().as_dataset(copy="none"), owner="test") == "cart"
+    assert get_acceleration_rep(acc.as_dataset(copy="none"), owner="test") == "components"
 
 
 def test_spatial_hard_025_linear_velocity_constructor_type_mismatch_fail_closed() -> None:
@@ -515,11 +515,11 @@ def test_spatial_hard_026_angular_velocity_constructor_type_mismatch_fail_closed
 def test_spatial_hard_027_velocity_spatial6_constructor_semantic_mismatch_fail_closed() -> None:
     """ID: SPATIAL_HARD_027_velocity_spatial6_constructor_semantic_mismatch_fail_closed."""
     vel = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True)
-    wrong_rep = _set_rep(vel.unsafe_data, "cart")
+    wrong_rep = _set_rep(vel.as_dataset(copy="none"), "cart")
     with pytest.raises(ValueError, match="unsupported velocity representation"):
         Velocity(wrong_rep)
 
-    wrong_kind = _set_roles(vel.unsafe_data, {"kinematics_kind": "linear_velocity"})
+    wrong_kind = _set_roles(vel.as_dataset(copy="none"), {"kinematics_kind": "linear_velocity"})
     with pytest.raises(ValueError, match="kinematics_kind must be 'velocity'"):
         Velocity(wrong_kind)
 
@@ -539,18 +539,18 @@ def test_spatial_hard_029_angular_acceleration_constructor_type_mismatch_fail_cl
 def test_spatial_hard_030_acceleration_spatial6_constructor_semantic_mismatch_fail_closed() -> None:
     """ID: SPATIAL_HARD_030_acceleration_spatial6_constructor_semantic_mismatch_fail_closed."""
     acc = Acceleration.from_linear_angular(_linear_acceleration(), _angular_acceleration(), validate=True)
-    wrong_rep = _set_rep(acc.unsafe_data, "cart")
+    wrong_rep = _set_rep(acc.as_dataset(copy="none"), "cart")
     with pytest.raises(ValueError, match="unsupported acceleration representation"):
         Acceleration(wrong_rep)
 
-    wrong_kind = _set_roles(acc.unsafe_data, {"kinematics_kind": "angular_acceleration"})
+    wrong_kind = _set_roles(acc.as_dataset(copy="none"), {"kinematics_kind": "angular_acceleration"})
     with pytest.raises(ValueError, match="kinematics_kind must be 'acceleration'"):
         Acceleration(wrong_kind)
 
 
 def test_spatial_hard_115_velocity_component_var_missing_declared_non_core_dims_rejected_by_core_component_runtime_checks() -> None:
     """ID: SPATIAL_HARD_115_velocity_component_var_missing_declared_non_core_dims_rejected_by_core_component_runtime_checks."""
-    ds = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).unsafe_data
+    ds = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_dataset(copy="none")
     linear_spec = read_components(Velocity(ds))["linear"]
     linear_values = ds[linear_spec.var].isel(sample=0).values
     ds = ds.drop_vars(linear_spec.var)
@@ -600,8 +600,8 @@ def test_spatial_core_105_temporal_vector_like_nearest_and_linear_methods_determ
     linear = lin.param.at([0.5], opts=ParamEvalOptions(method="linear"))
     assert isinstance(nearest, LinearVelocity)
     assert isinstance(linear, LinearVelocity)
-    np.testing.assert_allclose(nearest.unsafe_data["linear_velocity"].isel(sample=0).values, [1.0, 2.0, 3.0])
-    np.testing.assert_allclose(linear.unsafe_data["linear_velocity"].isel(sample=0).values, [2.5, 3.5, 4.5])
+    np.testing.assert_allclose(nearest.as_dataset(copy="none")["linear_velocity"].isel(sample=0).values, [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(linear.as_dataset(copy="none")["linear_velocity"].isel(sample=0).values, [2.5, 3.5, 4.5])
 
 
 def test_spatial_core_107_temporal_vector_like_batch_isolation_no_cross_batch_interpolation() -> None:
@@ -620,8 +620,8 @@ def test_spatial_core_107_temporal_vector_like_batch_isolation_no_cross_batch_in
     )
     out = lin.param.at(query, opts=ParamEvalOptions(method="linear", query_dim="query"))
     assert isinstance(out, LinearVelocity)
-    t0 = out.unsafe_data["linear_velocity"].sel(trial="t0").isel(sample=0).values
-    t1 = out.unsafe_data["linear_velocity"].sel(trial="t1").isel(sample=0).values
+    t0 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t0").isel(sample=0).values
+    t1 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t1").isel(sample=0).values
     assert not np.allclose(t0, t1)
 
 
@@ -640,8 +640,8 @@ def test_spatial_hard_131_temporal_vector_like_no_hidden_batch_broadcast_bleed()
         coords={"trial": ["t0", "t1"], "query": [0]},
     )
     out = lin.param.at(query, opts=ParamEvalOptions(method="linear", query_dim="query"))
-    row0 = out.unsafe_data["linear_velocity"].sel(trial="t0").isel(sample=0).values
-    row1 = out.unsafe_data["linear_velocity"].sel(trial="t1").isel(sample=0).values
+    row0 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t0").isel(sample=0).values
+    row1 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t1").isel(sample=0).values
     assert not np.allclose(row0, row1)
 
 
@@ -657,8 +657,8 @@ def test_spatial_core_129_temporal_vector_like_interp_uses_specified_param_coord
     out_default = lin.param.at([0.5], on="time_s", opts=ParamEvalOptions(method="linear"))
     out_alt = lin.param.at([5.0], on="alt_time", opts=ParamEvalOptions(method="linear"))
     np.testing.assert_allclose(
-        out_default.unsafe_data["linear_velocity"].isel(sample=0).values,
-        out_alt.unsafe_data["linear_velocity"].isel(sample=0).values,
+        out_default.as_dataset(copy="none")["linear_velocity"].isel(sample=0).values,
+        out_alt.as_dataset(copy="none")["linear_velocity"].isel(sample=0).values,
     )
 
 
@@ -698,7 +698,7 @@ def test_spatial_core_121_kinematics_integral_baseline_position_from_velocity_bo
     )
     out = linear.integrate(validate=True)
     assert isinstance(out, Position)
-    assert out.unsafe_data.sizes["sample"] == linear.unsafe_data.sizes["sample"]
+    assert out.as_dataset(copy="none").sizes["sample"] == linear.as_dataset(copy="none").sizes["sample"]
 
 
 def test_spatial_core_151_kinematics_integral_simpson_same_length_baseline_and_trailing_invalid_nan() -> None:
@@ -737,12 +737,12 @@ def test_spatial_core_151_kinematics_integral_simpson_same_length_baseline_and_t
         validate=True,
     )
     assert isinstance(out, Position)
-    assert out.unsafe_data.sizes["sample"] == 5
+    assert out.as_dataset(copy="none").sizes["sample"] == 5
     np.testing.assert_allclose(
-        out.unsafe_data["linear_velocity"].isel(sample=0).values,
+        out.as_dataset(copy="none")["linear_velocity"].isel(sample=0).values,
         np.asarray([[2.0, 2.0, 2.0], [2.0, 2.0, 2.0]], dtype="float64"),
     )
-    assert np.isnan(out.unsafe_data["linear_velocity"].sel(trial="t1").isel(sample=4)).all()
+    assert np.isnan(out.as_dataset(copy="none")["linear_velocity"].sel(trial="t1").isel(sample=4)).all()
 
 
 def test_spatial_core_154_kinematics_integral_simpson_honors_valid_prefix_with_padded_tail_coords() -> None:
@@ -775,13 +775,13 @@ def test_spatial_core_154_kinematics_integral_simpson_honors_valid_prefix_with_p
             opts=KinematicsIntegralOptions(method="simpson", initial_value=5.0),
             validate=True,
         )
-        assert out.unsafe_data.sizes["sample"] == 5
+        assert out.as_dataset(copy="none").sizes["sample"] == 5
         np.testing.assert_allclose(
-            out.unsafe_data["linear_velocity"].isel(sample=0).values,
+            out.as_dataset(copy="none")["linear_velocity"].isel(sample=0).values,
             np.asarray([5.0, 5.0, 5.0], dtype="float64"),
         )
-        assert np.isnan(out.unsafe_data["linear_velocity"].isel(sample=3)).all()
-        assert np.isnan(out.unsafe_data["linear_velocity"].isel(sample=4)).all()
+        assert np.isnan(out.as_dataset(copy="none")["linear_velocity"].isel(sample=3)).all()
+        assert np.isnan(out.as_dataset(copy="none")["linear_velocity"].isel(sample=4)).all()
 
 
 def test_spatial_core_122_kinematics_integral_baseline_velocity_from_acceleration_boundary() -> None:
@@ -819,7 +819,7 @@ def test_spatial_core_123_kinematics_methods_support_nonuniform_param_spacing_ba
         )
     )
     out = linear.differentiate(validate=True)
-    np.testing.assert_allclose(out.unsafe_data["linear_velocity"].isel(linear_axis=0).values, [0.5, 0.5, 2.5])
+    np.testing.assert_allclose(out.as_dataset(copy="none")["linear_velocity"].isel(linear_axis=0).values, [0.5, 0.5, 2.5])
 
 
 def test_spatial_core_125_kinematics_frame_kind_rep_truthfulness_preserved_through_derivative_integral() -> None:
@@ -839,11 +839,11 @@ def test_spatial_core_125_kinematics_frame_kind_rep_truthfulness_preserved_throu
     )
     acc = linear.differentiate(validate=True)
     pos = linear.integrate(validate=True)
-    assert get_frames(acc.unsafe_data) == ("world", "body")
-    assert get_frames(pos.unsafe_data) == ("world", "body")
-    assert get_kinematics_kind(acc.unsafe_data, owner="test") == "linear_acceleration"
-    assert get_linear_acceleration_rep(acc.unsafe_data, owner="test") == "cart"
-    assert get_position_intent(pos.unsafe_data, owner="test") == "delta"
+    assert get_frames(acc.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(pos.as_dataset(copy="none")) == ("world", "body")
+    assert get_kinematics_kind(acc.as_dataset(copy="none"), owner="test") == "linear_acceleration"
+    assert get_linear_acceleration_rep(acc.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_position_intent(pos.as_dataset(copy="none"), owner="test") == "delta"
 
 
 def test_spatial_core_126_kinematics_temporal_validity_and_sequence_size_metadata_truthful() -> None:
@@ -856,9 +856,9 @@ def test_spatial_core_126_kinematics_temporal_validity_and_sequence_size_metadat
         )
     )
     out = linear.differentiate(validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
-    np.testing.assert_array_equal(out.unsafe_data.coords["sample_size"].values, [2, 2])
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["sample_size"].values, [2, 2])
 
 
 def test_spatial_core_127_kinematics_temporal_dask_lazy_boundary_preserved() -> None:
@@ -874,7 +874,7 @@ def test_spatial_core_127_kinematics_temporal_dask_lazy_boundary_preserved() -> 
     )
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("axis",), param_coord="time_s", validate=True)
     out = LinearVelocity(ao).differentiate(validate=True)
-    assert getattr(out.unsafe_data["linear_velocity"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none")["linear_velocity"].data, "chunks", None) is not None
 
 
 def test_spatial_core_128_kinematics_batch_isolation_no_cross_batch_transport_bleed() -> None:
@@ -887,8 +887,8 @@ def test_spatial_core_128_kinematics_batch_isolation_no_cross_batch_transport_bl
         )
     )
     out = linear.differentiate(validate=True)
-    row0 = out.unsafe_data["linear_velocity"].sel(trial="t0").isel(sample=0).values
-    row1 = out.unsafe_data["linear_velocity"].sel(trial="t1").isel(sample=0).values
+    row0 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t0").isel(sample=0).values
+    row1 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t1").isel(sample=0).values
     assert not np.allclose(row0, row1)
 
 
@@ -904,8 +904,8 @@ def test_spatial_core_142_linear_velocity_integrate_outputs_baseline_relative_po
     )
     out = linear.integrate(validate=True)
     assert isinstance(out, Position)
-    assert get_position_intent(out.unsafe_data, owner="test") == "delta"
-    np.testing.assert_allclose(out.unsafe_data["linear_velocity"].isel(linear_axis=0).values, [0.0, 1.0, 2.0])
+    assert get_position_intent(out.as_dataset(copy="none"), owner="test") == "delta"
+    np.testing.assert_allclose(out.as_dataset(copy="none")["linear_velocity"].isel(linear_axis=0).values, [0.0, 1.0, 2.0])
 
 
 def test_spatial_hard_141_kinematics_integral_requires_numeric_monotonic_param_domain() -> None:
@@ -935,8 +935,8 @@ def test_spatial_hard_152_kinematics_temporal_param_key_paths_do_not_fallback_to
     out_default = linear.differentiate(on="time_s", validate=True)
     out_alt = linear.differentiate(on="alt_time", validate=True)
     np.testing.assert_allclose(
-        out_default.unsafe_data["linear_velocity"].isel(linear_axis=0).values,
-        10.0 * out_alt.unsafe_data["linear_velocity"].isel(linear_axis=0).values,
+        out_default.as_dataset(copy="none")["linear_velocity"].isel(linear_axis=0).values,
+        10.0 * out_alt.as_dataset(copy="none")["linear_velocity"].isel(linear_axis=0).values,
     )
 
 
@@ -980,12 +980,12 @@ def test_spatial_core_157_d6_velocity_wrapper_differentiate_and_smooth_preserve_
         smoothed = velocity.smooth(validate=True)
         assert isinstance(differentiated, Acceleration)
         assert isinstance(smoothed, Velocity)
-        assert get_acceleration_rep(differentiated.unsafe_data, owner="test") == rep
-        assert get_velocity_rep(smoothed.unsafe_data, owner="test") == rep
-        assert get_frames(differentiated.unsafe_data) == ("world", "body")
-        assert get_frames(smoothed.unsafe_data) == ("world", "body")
-        assert get_kinematics_kind(differentiated.unsafe_data, owner="test") == "acceleration"
-        assert get_kinematics_kind(smoothed.unsafe_data, owner="test") == "velocity"
+        assert get_acceleration_rep(differentiated.as_dataset(copy="none"), owner="test") == rep
+        assert get_velocity_rep(smoothed.as_dataset(copy="none"), owner="test") == rep
+        assert get_frames(differentiated.as_dataset(copy="none")) == ("world", "body")
+        assert get_frames(smoothed.as_dataset(copy="none")) == ("world", "body")
+        assert get_kinematics_kind(differentiated.as_dataset(copy="none"), owner="test") == "acceleration"
+        assert get_kinematics_kind(smoothed.as_dataset(copy="none"), owner="test") == "velocity"
 
 
 def test_spatial_core_158_d6_acceleration_wrapper_integrate_and_smooth_preserve_rep_and_frames() -> None:
@@ -1028,12 +1028,12 @@ def test_spatial_core_158_d6_acceleration_wrapper_integrate_and_smooth_preserve_
         smoothed = acceleration.smooth(validate=True)
         assert isinstance(integrated, Velocity)
         assert isinstance(smoothed, Acceleration)
-        assert get_velocity_rep(integrated.unsafe_data, owner="test") == rep
-        assert get_acceleration_rep(smoothed.unsafe_data, owner="test") == rep
-        assert get_frames(integrated.unsafe_data) == ("world", "body")
-        assert get_frames(smoothed.unsafe_data) == ("world", "body")
-        assert get_kinematics_kind(integrated.unsafe_data, owner="test") == "velocity"
-        assert get_kinematics_kind(smoothed.unsafe_data, owner="test") == "acceleration"
+        assert get_velocity_rep(integrated.as_dataset(copy="none"), owner="test") == rep
+        assert get_acceleration_rep(smoothed.as_dataset(copy="none"), owner="test") == rep
+        assert get_frames(integrated.as_dataset(copy="none")) == ("world", "body")
+        assert get_frames(smoothed.as_dataset(copy="none")) == ("world", "body")
+        assert get_kinematics_kind(integrated.as_dataset(copy="none"), owner="test") == "velocity"
+        assert get_kinematics_kind(smoothed.as_dataset(copy="none"), owner="test") == "acceleration"
 
 
 def test_spatial_core_143_kinematics_typed_smoothing_boundaries_present() -> None:
@@ -1066,10 +1066,10 @@ def test_spatial_core_177_kinematics_vector_like_norm_magnitude_value_parity() -
 
     assert isinstance(lin_l2, Array)
     assert isinstance(ang_l1, Array)
-    np.testing.assert_allclose(lin_l2.unsafe_data["datavar"].values, np.asarray([5.0, 3.0], dtype="float64"))
-    np.testing.assert_allclose(ang_l1.unsafe_data["datavar"].values, np.asarray([3.0, 15.0], dtype="float64"))
-    xr.testing.assert_identical(lin_l2.unsafe_data, linear.magnitude().unsafe_data)
-    xr.testing.assert_identical(angular.norm(ord=2).unsafe_data, angular.magnitude().unsafe_data)
+    np.testing.assert_allclose(lin_l2.as_dataset(copy="none")["datavar"].values, np.asarray([5.0, 3.0], dtype="float64"))
+    np.testing.assert_allclose(ang_l1.as_dataset(copy="none")["datavar"].values, np.asarray([3.0, 15.0], dtype="float64"))
+    xr.testing.assert_identical(lin_l2.as_dataset(copy="none"), linear.magnitude().as_dataset(copy="none"))
+    xr.testing.assert_identical(angular.norm(ord=2).as_dataset(copy="none"), angular.magnitude().as_dataset(copy="none"))
 
 
 def test_spatial_core_178_kinematics_acceleration_magnitude_preserves_scalar_topology_and_metadata() -> None:
@@ -1093,25 +1093,25 @@ def test_spatial_core_178_kinematics_acceleration_magnitude_preserves_scalar_top
 
     assert isinstance(linear_mag, Array)
     assert isinstance(angular_norm, Array)
-    assert tuple(linear_mag.unsafe_data.data_vars) == ("datavar",)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(linear_mag.unsafe_data)
+    assert tuple(linear_mag.as_dataset(copy="none").data_vars) == ("datavar",)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(linear_mag.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ()
-    assert read_param_coord_name(linear_mag.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(linear_mag.unsafe_data) == "sample_size"
+    assert read_param_coord_name(linear_mag.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(linear_mag.as_dataset(copy="none")) == "sample_size"
     expected_angular = xr.apply_ufunc(
         np.linalg.norm,
-        angular.unsafe_data["angular_acceleration"],
+        angular.as_dataset(copy="none")["angular_acceleration"],
         input_core_dims=[["angular_axis"]],
         output_core_dims=[[]],
         vectorize=False,
         dask="allowed",
         kwargs={"ord": 2, "axis": -1},
     ).rename("datavar")
-    xr.testing.assert_allclose(angular_norm.unsafe_data["datavar"], expected_angular)
-    xr.testing.assert_identical(angular_norm.unsafe_data, angular.magnitude().unsafe_data)
+    xr.testing.assert_allclose(angular_norm.as_dataset(copy="none")["datavar"], expected_angular)
+    xr.testing.assert_identical(angular_norm.as_dataset(copy="none"), angular.magnitude().as_dataset(copy="none"))
 
 
 def test_spatial_hard_164_kinematics_temporal_placeholder_methods_fail_closed() -> None:

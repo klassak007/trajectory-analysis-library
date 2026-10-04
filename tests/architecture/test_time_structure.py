@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+
+
+
+
+
+def test_arch_time_t1_004_datetime_local_deltas_owned_by_param_map() -> None:
+    """ID: ARCH_TIME_T1_004_datetime_local_deltas_owned_by_param_map."""
+    text = Path("tal/core/param_engine/datetime_rows.py").read_text(encoding="utf-8")
+    assert "def _local_ns(" in text
+    assert "anchor" in text
+    assert "float(q - t0) / float(t1 - t0)" in text
+
+
+def test_arch_time_t1_005_datetime_autogrid_returns_datetime64_with_nat_padding() -> None:
+    """ID: ARCH_TIME_T1_005_datetime_autogrid_returns_datetime64_with_nat_padding."""
+    autogrid = Path("tal/core/param_ops/sync_autogrid.py").read_text(encoding="utf-8")
+    backend = Path("tal/core/param_ops/sync_autogrid_backend.py").read_text(encoding="utf-8")
+    assert "join_datetime_rows_batched" in autogrid
+    assert '.view("datetime64[ns]")' in autogrid
+    assert "_NAT_INT" in backend
+    assert "np.full((len(rows), width), _NAT_INT" in backend
+
+
+def test_arch_time_t1_006_outer_batch_reindex_is_datetime_fill_aware() -> None:
+    """ID: ARCH_TIME_T1_006_outer_batch_reindex_is_datetime_fill_aware."""
+    text = Path("tal/core/param_ops/sync_runtime.py").read_text(encoding="utf-8")
+    assert "def _outer_batch_reindex_fill_values(" in text
+    assert 'np.datetime64("NaT", "ns")' in text
+    assert 'np.timedelta64("NaT", "ns")' in text
+    assert "reindex({dim: labels}, fill_value=np.nan)" not in text

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..core.analysis_object import AnalysisObject
+from ..core.dataset_ownership import analysis_object_dataset
 from ..core.schema_read import read_roles
 from .array import Array
 
@@ -45,7 +46,7 @@ def _builtin_output_array_type_for_core_arity(output_core_dims: tuple[str, ...])
 
 def _left_declared_core_arity(left: Array) -> int | None:
     try:
-        declared, sequence_dim, _, core_dims = read_roles(left.unsafe_data)
+        declared, sequence_dim, _, core_dims = read_roles(analysis_object_dataset(left))
     except Exception:  # pragma: no cover - defensive schema-read fallback
         return None
     if not declared:
@@ -84,7 +85,7 @@ def rewrap_binary_output_array(
 ) -> Array:
     if type(finalized) is output_cls:
         return finalized
-    return output_cls._from_validated(finalized.unsafe_data)
+    return output_cls._from_validated(analysis_object_dataset(finalized))
 
 
 __all__ = [

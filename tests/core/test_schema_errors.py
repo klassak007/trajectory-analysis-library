@@ -40,6 +40,7 @@ CANONICAL_CODES = {
     "schema.validity.sequence_size_coord.dims.invalid",
     "schema.validity.sequence_size_coord.values.invalid",
     "schema.validity.layout.invalid",
+    "schema.patch.alias.ambiguous",
     "schema.patch.root.invalid",
     "schema.patch.type.invalid",
 }

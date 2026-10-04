@@ -37,7 +37,7 @@ ao = AnalysisObject.from_data(
 
 head = ao.isel(sample=slice(0, 3))
 trial_t0 = ao.sel(trial="t0")
-positive = ao.where(ao.unsafe_data["signal"] > 0.0)
+positive = ao.where(ao.as_dataset()["signal"] > 0.0)
 index = ao.param.index([0.18, 0.52], on="time_s")
 nearest = ao.param.sel([0.18, 0.52], on="time_s")
 interp = ao.param.at([0.18, 0.52], on="time_s", opts=ParamEvalOptions(method="linear"))
@@ -45,6 +45,10 @@ interp = ao.param.at([0.18, 0.52], on="time_s", opts=ParamEvalOptions(method="li
 
 The first three operations are structural xarray-style operations. The last
 three ask TAL to interpret `time_s` as the query domain.
+
+For a visual comparison, see the {doc}`illustrated_example`: sample index 2
+corresponds to times 0.20, 0.31, and 0.23 seconds across its three trials.
+Interpolation at 0.20 seconds instead evaluates each trial on its own time grid.
 
 ## Choosing The Right Selection API
 
@@ -65,12 +69,15 @@ three ask TAL to interpret `time_s` as the query domain.
 - Shared dimensions align by labels, not by raw position.
 - `ao.param.sel(...)` selects recorded samples; use `ao.param.at(...)` when you
   need interpolation.
+- Point selection keeps coordinates sampled from the source. Rename a caller
+  query axis or index if it has the same name as one of those coordinates;
+  a same-named caller auxiliary coordinate cannot replace the sampled values.
 
 ## Quick Checks
 
-- Inspect `ao.unsafe_data.sizes`.
-- Inspect `ao.unsafe_data.coords["time_s"]`.
-- Compare `index`, `nearest.unsafe_data`, and `interp.unsafe_data` to confirm
+- Inspect `ao.as_dataset().sizes`.
+- Inspect `ao.as_dataset().coords["time_s"]`.
+- Compare `index`, `nearest.as_dataset()`, and `interp.as_dataset()` to confirm
   whether you wanted sample lookup or interpolation.
 
 ## See Also

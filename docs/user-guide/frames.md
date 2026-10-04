@@ -37,14 +37,20 @@ ao = AnalysisObject.from_data(
     core_dims=(),
     validate=True,
 )
-retagged = ao.frames.retag(parent="world", child="drone")
+retagged = ao.frames.retag(parent="ship", child="drone")
 parent, child = retagged.frames.ids()
-bound_parent, bound_child = retagged.frames.bind(graph=graph, create_missing=True)
-renamed = retagged.frames.rename_frame("drone", "drone_0", graph=graph)
+resolved_parent, resolved_child = retagged.frames.resolve(graph)
+drone.rename("drone_0")
+renamed = retagged.frames.remap_ids({"drone": "drone_0"})
 ```
 
-The AO carries only metadata until it is bound or used by a spatial operation.
-The graph is the runtime object that owns topology.
+The AO carries frame metadata while the graph owns topology. Resolution is a
+read-only lookup; graph mutation and metadata remapping remain explicit,
+separate operations.
+
+Active graph selection is task-local. A synchronous `with graph:` block may
+span asyncio `await` points without sharing its context-entry state with sibling
+tasks. This context isolation does not make concurrent topology mutation atomic.
 
 ## Working With Frame Topology
 
@@ -60,9 +66,9 @@ graph drawing requires the plotting dependencies used by `draw_frame_graph`.
 
 ## Working With AO Frame Metadata
 
-`ao.frames.retag(...)`, `.ids()`, `.bind(...)`, `.remap_ids(...)`, and
-`.rename_frame(...)` manage frame IDs attached to an AO. `retag(...)` is
-metadata-only; it does not transform values.
+`ao.frames.retag(...)`, `.ids()`, `.remap_ids(...)`, and `.resolve(...)` manage
+or inspect frame IDs attached to an AO. `retag(...)` and `remap_ids(...)` are
+metadata-only; `resolve(...)` never changes graph topology.
 
 Topology changes, such as reparenting or renaming frames in a graph, require
 explicit conflict policies so graph edits remain deterministic.
@@ -75,8 +81,8 @@ operations, not by the frame graph registry itself.
 
 - Frames from different graphs cannot be path-solved together.
 - Frozen graphs reject mutation.
-- `ao.frames.bind(...)` fails if metadata references missing frames and
-  `create_missing=False`.
+- `ao.frames.resolve(...)` fails if a present metadata ID is not registered in
+  the selected graph.
 - Frame ID remaps must be injective.
 - Reparent or rename conflicts fail closed unless an explicit replace policy is
   requested.
@@ -85,10 +91,46 @@ operations, not by the frame graph registry itself.
 
 - Inspect `path.nodes` and `steps`.
 - Inspect `ascii_tree`.
-- Compare `retagged.frames.ids()` and `renamed.frames.ids()` after graph edits.
+- Compare `retagged.frames.ids()` and `renamed.frames.ids()` after separate
+  graph and metadata edits.
 
 ## See Also
 
 - {doc}`spatial`
 - {doc}`viewing`
 - API: {doc}`../api/frames`
+
+## Bound spatial transforms
+
+Use `tal.spatial.bind_pose(graph, parent, child, pose)` to attach a pose value
+or a `(child, parent)` callback to an edge. Transform with
+`position.to_frame(destination, graph=graph)` or solve with
+`Pose.solve_path_transform(source, destination, graph=graph)`. Rotation paths
+use the bound pose's rotation component. See the self-contained
+[bound-pose example](../api/types/path_solve.md#minimal-example).
+
+The graph endpoints are the complete edge relation. Each provider frame tag,
+when present, must match its corresponding endpoint; the graph supplies omitted
+tags. The numerical representation must be in the edge-parent basis. Call
+`pose.express_in(parent, graph=graph)` before binding a third-frame value. Lazy
+provider payloads are non-owning: keep their owning AO open through dependent
+computation. Replacing or removing a binding never closes it.
+
+This differs from `ao.frames.resolve(...)`, which only looks up metadata IDs
+and never installs a provider. Registering a pose leaves motion and inertial
+declarations unchanged.
+
+## Passive spatial association
+
+Spatial constructors accept frame declarations and an optional graph without
+mutating that graph. For example, `Position(data, parent="camera", graph=graph)`
+associates a newly constructed position, while
+`position.with_graph(other_graph)` returns a distinct associated alias.
+
+`position.graph` is wrapper-local runtime context used by later graph-required
+operations when no explicit graph is supplied. It is not serialized into the
+Dataset, and ordinary construction or algebra never falls back to the active
+graph. Association is separate from `bind_pose(...)`: the former remembers a
+graph. For a canonical parent/child Pose, `pose.register()` installs that Pose
+as the associated edge provider and returns the same Pose. Use
+`bind_pose(...)` for callable or exact unparameterized providers.

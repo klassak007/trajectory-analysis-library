@@ -7,8 +7,15 @@ import xarray as xr
 
 from tal.core.group_ops.foundation import resolve_grouping_foundation_context
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
-from tal.core.reducer_ops.validity import apply_structural_mask, resolve_structural_valid_mask
-from tal.utils.xarray_namespace import dataarray_namespace_names, dataset_namespace_names, unique_temp_dim
+from tal.core.reducer_ops.validity import (
+    apply_structural_mask,
+    resolve_structural_valid_mask,
+)
+from tal.utils.xarray_namespace import (
+    dataarray_namespace_names,
+    dataset_namespace_names,
+    unique_temp_dim,
+)
 
 from .options import VizKind
 from .plan import VizRuntimeContext
@@ -140,7 +147,12 @@ def _mask_source_var_for_dataset(ds: xr.Dataset, *, runtime: VizRuntimeContext) 
     return None
 
 
-def _apply_validity(data: xr.DataArray | xr.Dataset, *, runtime: VizRuntimeContext) -> xr.DataArray | xr.Dataset:
+def _apply_validity(
+    data: xr.DataArray | xr.Dataset,
+    *,
+    runtime: VizRuntimeContext,
+    owner: str,
+) -> xr.DataArray | xr.Dataset:
     if runtime.opts.validity == "ignore":
         return data
     if isinstance(data, xr.Dataset):
@@ -152,6 +164,7 @@ def _apply_validity(data: xr.DataArray | xr.Dataset, *, runtime: VizRuntimeConte
             sequence_dim=runtime.context.sequence_dim,
             sequence_size_coord=runtime.context.sequence_size_coord,
             var=source_var,
+            owner=owner,
         )
         if mask is None:
             return data
@@ -161,6 +174,7 @@ def _apply_validity(data: xr.DataArray | xr.Dataset, *, runtime: VizRuntimeConte
         sequence_dim=runtime.context.sequence_dim,
         sequence_size_coord=runtime.context.sequence_size_coord,
         var=data,
+        owner=owner,
     )
     return apply_structural_mask(data, mask=mask)
 
@@ -223,7 +237,7 @@ def _attach_group_key_coord(
         owner=f"{owner}.group_key",
     )
     if len(foundation.keys) != 1:
-        raise ValueError(f"{owner}: opts.group_key must resolve to exactly one key in Slice A/B.")
+        raise ValueError(f"{owner}: opts.group_key must resolve to exactly one key.")
     key = foundation.keys[0].data
     missing = tuple(dim for dim in key.dims if dim not in data.dims)
     if missing:
@@ -298,7 +312,7 @@ def prepare_viz_payload(runtime: VizRuntimeContext, *, owner: str) -> VizPrepare
     else:
         data = _resolve_plot_dataarray(runtime, owner=owner)
         data, x_name = _resolve_x(data, runtime=runtime, owner=owner)
-    data = _apply_validity(data, runtime=runtime)
+    data = _apply_validity(data, runtime=runtime, owner=owner)
     data, by, groupby = _prepare_channels_and_group_key(
         data,
         runtime=runtime,

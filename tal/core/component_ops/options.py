@@ -203,6 +203,8 @@ def _require_component_core_dim(
     dim = _require_nonempty_name(core_dim, field=f"registry[{name!r}].core_dim", owner=owner)
     if dim not in core_dims:
         raise ValueError(f"{owner}: registry[{name!r}].core_dim {dim!r} is not in declared core_dims {core_dims!r}.")
+    if dim not in ds.dims:
+        raise ValueError(f"{owner}: registry[{name!r}].core_dim {dim!r} is not a dataset dimension.")
     if dim not in ds.coords:
         raise ValueError(f"{owner}: registry[{name!r}] requires explicit coordinate labels for dim {dim!r}.")
     return dim
@@ -216,6 +218,12 @@ def _require_labels_present_on_dim(
     name: str,
     owner: str,
 ) -> None:
+    native = ds.xindexes.get(core_dim)
+    if not isinstance(native, xr.indexes.PandasIndex):
+        raise TypeError(
+            f"{owner}: registry[{name!r}] requires a materialized, pandas-compatible "
+            f"label index on core dim {core_dim!r}."
+        )
     index = ds.get_index(core_dim)
     if index.has_duplicates:
         raise ValueError(f"{owner}: registry[{name!r}] requires unique coordinate labels on dim {core_dim!r}.")

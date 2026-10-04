@@ -21,7 +21,8 @@ from tal.frames import Frame, FrameGraph, get_active_frame_graph, get_or_create_
 
 `FrameGraph` owns `Frame` nodes. It supports context-scoped active graphs,
 explicit reparent and rename policies, and optional freezing to prevent further
-mutation.
+mutation. Active graph selection and nested context entry are task-local across
+asyncio `await` boundaries; this does not synchronize concurrent graph mutations.
 
 ```python
 from tal.frames import find_path, fold_path
@@ -57,20 +58,28 @@ structure without mutating graph state. Drawing requires optional `networkx` and
 ao.frames.ids()
 ao.frames.retag(parent="world", child="camera")
 ao.frames.remap_ids({"camera": "cam0"})
-ao.frames.bind(graph=graph, create_missing=True)
-ao.frames.rename_frame("camera", "cam0", graph=graph)
+parent, child = ao.frames.resolve(graph)
 ```
 
 Frame IDs are stored under `ds.attrs["tal"]["ext"]["frames"]`. Metadata writes
-use the schema writer path. Binding connects those IDs to concrete `Frame`
-objects in a runtime graph; it does not numerically transform AO values.
+use the schema writer path. Resolution looks up present IDs without changing
+runtime graph topology or numerically transforming AO values.
+
+Spatial wrappers may also remember a graph through constructor `graph=` or
+`with_graph(...)`. That passive association is wrapper-local, is lost on raw
+xarray conversion, and never mutates graph topology or registers a provider.
 
 Functional helpers are also available:
 
 ```python
-from tal.utils.frame_ops import frame_bind, frame_ids, frame_remap_ids, frame_rename, frame_retag
+from tal.utils.frame_ops import frame_ids, frame_remap_ids, frame_retag
 from tal.utils.frame_schema import get_frames, set_frames
 ```
+
+Graph creation, reparenting, and renaming remain explicit `FrameGraph`/`Frame`
+operations. After a graph-only rename, use `ao.frames.remap_ids(...)` separately
+when an AO's metadata should follow it; coordinated graph-and-object rename is
+not part of this API.
 
 ## Invariants
 
@@ -80,6 +89,7 @@ from tal.utils.frame_schema import get_frames, set_frames
 - Frozen graphs reject mutation.
 - Graph conflicts require explicit `on_conflict` policies.
 - Metadata-only retagging does not transform spatial payload values.
+- Passive association and provider registration are distinct operations.
 
 ## Autosummary
 
@@ -106,13 +116,10 @@ from tal.utils.frame_schema import get_frames, set_frames
    tal.utils.frame_ops.frame_ids
    tal.utils.frame_ops.frame_retag
    tal.utils.frame_ops.frame_remap_ids
-   tal.utils.frame_ops.frame_bind
-   tal.utils.frame_ops.frame_rename
    tal.utils.frame_ops.FramesAccessor.ids
    tal.utils.frame_ops.FramesAccessor.retag
    tal.utils.frame_ops.FramesAccessor.remap_ids
-   tal.utils.frame_ops.FramesAccessor.bind
-   tal.utils.frame_ops.FramesAccessor.rename_frame
+   tal.utils.frame_ops.FramesAccessor.resolve
 ```
 
 ## See Also

@@ -127,7 +127,7 @@ def inv(
     ...     core_dims=("row", "col"),
     ...     validate=True,
     ... ))
-    >>> inv(A).unsafe_data["datavar"].to_numpy().tolist()
+    >>> inv(A).as_dataset()["datavar"].to_numpy().tolist()
     [[[0.5, 0.0], [0.0, 0.25]]]
     """
     owner = "linalg.inv"

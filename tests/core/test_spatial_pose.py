@@ -1,18 +1,36 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
-import tal.spatial.pose as pose_module
+from scipy.spatial.transform import Rotation as SciRotation
+from scipy.spatial.transform import Slerp
 
+import tal.spatial.pose as pose_module
 from tal import AnalysisObject
-from tal.core import ComponentRegistryOptions, ComponentSpec, define_components, extract_components, read_components
+from tal.core import (
+    ComponentRegistryOptions,
+    ComponentSpec,
+    define_components,
+    extract_components,
+    read_components,
+)
 from tal.core.param_ops.types import ParamEvalOptions
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
 from tal.core.schema_errors import SchemaError
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
 from tal.frames import FrameGraph
-from tal.spatial import Pose, Position, Rotation
-from tal.spatial.metadata import get_pose_rep, get_position_rep, get_rotation_rep, set_pose_rep
+from tal.spatial import Pose, Position, Rotation, bind_pose, solve_pose_path_transform
+from tal.spatial.metadata import (
+    get_pose_rep,
+    get_position_rep,
+    get_rotation_rep,
+    set_pose_rep,
+)
 from tal.spatial.temporal.options import PoseTemporalOptions, RotationTemporalOptions
 from tal.utils.frame_ops import frame_retag
 from tal.utils.frame_schema import get_frames, set_frames
@@ -40,7 +58,7 @@ def _position_dataset(
         core_dims=("axis",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _rotation_dataset(
@@ -62,7 +80,7 @@ def _rotation_dataset(
         core_dims=("quat",),
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _batched_position_dataset() -> xr.Dataset:
@@ -94,7 +112,7 @@ def _batched_position_dataset() -> xr.Dataset:
         sequence_size_coord="sample_size",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _batched_rotation_dataset(*, include_trial_dim: bool) -> xr.Dataset:
@@ -151,7 +169,7 @@ def _batched_rotation_dataset(*, include_trial_dim: bool) -> xr.Dataset:
         sequence_size_coord="sample_size",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _matrix_dataset(*, var_name: str = "pose_matrix") -> xr.Dataset:
@@ -175,7 +193,7 @@ def _matrix_dataset(*, var_name: str = "pose_matrix") -> xr.Dataset:
         name=var_name,
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name=var_name), sequence_dim="sample", core_dims=("row", "col"), validate=True)
-    return set_pose_rep(ao.unsafe_data, rep="matrix", validate=False, owner="test")
+    return set_pose_rep(ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
 
 
 def _as_dataarray_with_schema(ds: xr.Dataset, *, var_name: str) -> xr.DataArray:
@@ -210,8 +228,8 @@ def _component_pose_with_frames(parent: str, child: str) -> Pose:
 
 def _matrix_payload(pose: Pose) -> np.ndarray:
     matrix_pose = pose.as_matrix(validate=True)
-    var_name = str(next(iter(matrix_pose.unsafe_data.data_vars)))
-    return matrix_pose.unsafe_data[var_name].values
+    var_name = str(next(iter(matrix_pose.as_dataset(copy="none").data_vars)))
+    return matrix_pose.as_dataset(copy="none")[var_name].values
 
 
 def _assert_quat_equivalent(actual: np.ndarray, expected: np.ndarray, *, atol: float = 1e-6) -> None:
@@ -271,7 +289,7 @@ def _pose_temporal_dataset(*, batched: bool = False) -> xr.Dataset:
             core_dims=("axis",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
         rot_ds = AnalysisObject.from_data(
             rotation.to_dataset(name="rotation"),
             sequence_dim="sample",
@@ -279,7 +297,7 @@ def _pose_temporal_dataset(*, batched: bool = False) -> xr.Dataset:
             core_dims=("quat",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
     else:
         position = xr.DataArray(
             np.asarray([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float),
@@ -315,24 +333,269 @@ def _pose_temporal_dataset(*, batched: bool = False) -> xr.Dataset:
             core_dims=("axis",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
         rot_ds = AnalysisObject.from_data(
             rotation.to_dataset(name="rotation"),
             sequence_dim="sample",
             core_dims=("quat",),
             param_coord="time_s",
             validate=True,
-        ).unsafe_data
+        ).as_dataset(copy="none")
     pos = frame_retag(Position(pos_ds), parent="world", child="body", validate=True)
     rot = frame_retag(Rotation(rot_ds), parent="world", child="body", validate=True)
-    return Pose.from_components(rot, pos, validate=True).unsafe_data
+    return Pose.from_components(rot, pos, validate=True).as_dataset(copy="none")
+
+
+@pytest.mark.parametrize("rep", ("components", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+def test_pose_typed_query_components_share_flattened_topology(rep: str, operation: str) -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_003_pose_components_share_flattened_layout."""
+    graph = FrameGraph()
+    source = Pose(_pose_temporal_dataset()).with_graph(graph)
+    if rep == "matrix":
+        source = source.as_matrix(validate=True)
+    before = source.as_dataset(copy="deep")
+    query = xr.DataArray(
+        [[0.25, 0.75], [0.5, 0.9]],
+        dims=("row_query", "when"),
+        coords={
+            "row_query": ["a", "b"],
+            "when": ["early", "late"],
+            "label": (("row_query", "when"), [["a1", "a2"], ["b1", "b2"]]),
+        },
+    )
+    result = getattr(source.param, operation)(query, validate=True)
+    assert result.graph is graph
+    dataset = result.as_dataset(copy="none")
+    assert dataset.sizes["sample"] == 4
+    assert get_pose_rep(dataset, owner="test") == rep
+    np.testing.assert_array_equal(dataset.coords["row_query"], ["a", "a", "b", "b"])
+    np.testing.assert_array_equal(dataset.coords["when"], ["early", "late", "early", "late"])
+    np.testing.assert_array_equal(dataset.coords["label"], ["a1", "a2", "b1", "b2"])
+    position, rotation = result.decompose(validate=True)
+    axis_dim = "axis" if rep == "components" else "row"
+    np.testing.assert_allclose(
+        position.as_dataset(copy="none")["position"].transpose("sample", axis_dim).data[:, 0],
+        2 * query.data.ravel(),
+    )
+    endpoints = SciRotation.from_quat(
+        _pose_temporal_dataset()["rotation"].transpose("sample", "quat").data,
+    )
+    expected = Slerp([0.0, 1.0], endpoints)(query.data.ravel()).as_matrix()
+    actual = rotation.as_matrix().as_dataset(copy="none")["rotation"].transpose("sample", "row", "col")
+    np.testing.assert_allclose(actual, expected, atol=1e-6)
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("rep", ("components", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+@pytest.mark.parametrize("shape", ((2, 0), (0, 2)))
+@pytest.mark.parametrize("lazy", (False, True))
+def test_pose_typed_empty_query_retains_caller_topology(
+    rep: str, operation: str, shape: tuple[int, int], lazy: bool,
+) -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_006_pose_empty_typed_topology."""
+    from dask.callbacks import Callback
+
+    graph = FrameGraph()
+    source = Pose(_pose_temporal_dataset()).with_graph(graph)
+    if rep == "matrix":
+        source = source.as_matrix(validate=True)
+    if lazy:
+        source = Pose(source.as_dataset(copy="none").chunk({"sample": 1})).with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    query = xr.DataArray(
+        np.empty(shape), dims=("row_query", "when"),
+        coords={"row_query": np.arange(shape[0]), "when": np.arange(shape[1])},
+    )
+    if lazy:
+        query = query.chunk({"row_query": max(shape[0], 1), "when": max(shape[1], 1)})
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = getattr(source.param, operation)(query, validate=True)
+    assert tasks == []
+    assert result.graph is graph
+    dataset = result.as_dataset(copy="none")
+    assert get_pose_rep(dataset, owner="test") == rep
+    assert dataset.sizes["sample"] == 0
+    assert dataset.coords["row_query"].dims == ("sample",)
+    assert dataset.coords["when"].dims == ("sample",)
+    assert dataset.coords["time_s"].dims == ("sample",)
+    assert dataset.coords["valid"].dims == ("sample",)
+    assert not bool(dataset.coords["valid"].any())
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("validate", (False, True))
+def test_pose_typed_query_keeps_shared_batch_lane(lazy: bool, validate: bool) -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_004_pose_retains_shared_batch_lane."""
+    from dask.callbacks import Callback
+
+    source_ds = _pose_temporal_dataset(batched=True)
+    if lazy:
+        source_ds = source_ds.chunk({"sample": 1})
+    source = Pose(source_ds)
+    query = xr.DataArray(
+        [[0.25, 0.75], [0.5, 0.9]],
+        dims=("trial", "when"),
+        coords={"trial": ["t0", "t1"], "when": ["early", "late"]},
+    )
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at(query, validate=validate)
+    assert tasks == []
+    actual = result.as_dataset(copy="none")
+    assert actual.sizes["trial"] == 2 and actual.sizes["sample"] == 2
+    assert actual.xindexes["trial"].equals(query.xindexes["trial"])
+    assert actual.coords["when"].dims == ("trial", "sample")
+    np.testing.assert_array_equal(actual.coords["when"], [["early", "late"], ["early", "late"]])
+    if lazy:
+        actual = actual.compute(scheduler="synchronous")
+    np.testing.assert_allclose(actual.coords["time_s"], query)
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_pose_typed_query_retains_component_auxiliary_payload() -> None:
+    """ID: SPATIAL_CORE_QUERY_OUTPUT_005_pose_aux_payload_is_preserved."""
+    dataset = _pose_temporal_dataset()
+    dataset["aux"] = ("sample", [2.0, 4.0])
+    source = Pose(dataset)
+    query = xr.DataArray([[0.25, 0.75], [0.5, 0.9]], dims=("row_query", "when"))
+    result = source.param.at(query).as_dataset(copy="none")
+    assert result["aux"].dims == ("sample",)
+    np.testing.assert_allclose(result["aux"], [2.5, 3.5, 3.0, 3.8])
+    assert result["position"].sizes["sample"] == result["rotation"].sizes["sample"] == 4
+
+
+@pytest.mark.parametrize("name", ("valid", "time_s"))
+def test_pose_query_axis_cannot_replace_carrier_metadata(name: str) -> None:
+    """ID: SPATIAL_HARD_QUERY_OUTPUT_003_pose_carrier_name_preflight."""
+    from dask.callbacks import Callback
+
+    source = Pose(_pose_temporal_dataset().chunk({"sample": 1}))
+    query = xr.DataArray([0.25, 0.75], dims=name)
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)), pytest.raises(
+        ValueError, match=rf"^spatial\.pose\.param\.at: .*query axis or index '{name}'",
+    ):
+        source.param.at(query)
+    assert tasks == []
+
+
+def test_pose_typed_query_recomposes_indeterminate_caller_labels_once() -> None:
+    """ID: SPATIAL_HARD_QUERY_OUTPUT_002_indeterminate_label_recomposes_once."""
+    query = xr.DataArray(
+        [0.25, 0.75], dims="when",
+        coords={"marker": ("when", np.asarray([pd.NA, "known"], dtype=object))},
+    )
+    result = Pose(_pose_temporal_dataset()).param.at(query).as_dataset(copy="none")
+    assert result.sizes["sample"] == 2
+    assert pd.isna(result.coords["marker"].data[0])
+    assert result.coords["marker"].data[1] == "known"
+
+
+@pytest.mark.parametrize("rep", ("components", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+def test_pose_accepts_query_lane_named_like_output_sequence(rep: str, operation: str) -> None:
+    """ID: SPATIAL_CORE_QUERY_LANE_001_pose_consumes_source_named_query_axis."""
+    source = Pose(_pose_temporal_dataset())
+    if rep == "matrix":
+        source = source.as_matrix(validate=True)
+    query = xr.DataArray([0.25, 0.75], dims="sample", coords={"sample": [10, 20]})
+    actual = getattr(source.param, operation)(query).as_dataset(copy="none")
+    reference = getattr(source.param, operation)([0.25, 0.75]).as_dataset(copy="none")
+    assert get_pose_rep(actual, owner="test") == rep
+    np.testing.assert_array_equal(actual.coords["sample"], [0, 1])
+    for name in reference.data_vars:
+        np.testing.assert_allclose(actual[name], reference[name])
+
+
+@pytest.mark.parametrize("rep", ("components", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+@pytest.mark.parametrize("nearest", (False, True))
+@pytest.mark.parametrize("source_chained", (False, True))
+def test_pose_chained_query_uses_current_validity(
+    rep: str, operation: str, nearest: bool, source_chained: bool,
+) -> None:
+    """ID: SPATIAL_CORE_QUERY_VALIDITY_001_pose_components_agree_on_current_query."""
+    base = Pose(_pose_temporal_dataset())
+    prior = base.param.at([-1.0]).as_dataset(copy="none")
+    query = prior.coords["time_s"].copy(data=np.asarray([0.25]))
+    clean = query.drop_vars(("valid", "time_s"))
+    assert not bool(query.coords["valid"].all())
+    source = base.param.at([0.25, 0.75]) if source_chained else base
+    if rep == "matrix":
+        source = source.as_matrix(validate=True)
+    options = (
+        PoseTemporalOptions(
+            position_opts=ParamEvalOptions(method="nearest"),
+            rotation_opts=RotationTemporalOptions(method="nearest"),
+        ) if nearest else None
+    )
+    actual = getattr(source.param, operation)(query, opts=options).as_dataset(copy="none")
+    expected = getattr(source.param, operation)(clean, opts=options).as_dataset(copy="none")
+    xr.testing.assert_identical(actual, expected)
+    assert bool(actual.coords["valid"].all())
+
+
+@pytest.mark.parametrize("rep", ("components", "matrix"))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+def test_pose_empty_query_projects_lazy_caller_label(rep: str, operation: str) -> None:
+    """ID: SPATIAL_CORE_EMPTY_QUERY_LABEL_001_pose_lazy_projection_is_empty."""
+    da = pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    source = Pose(_pose_temporal_dataset())
+    if rep == "matrix":
+        source = source.as_matrix(validate=True)
+    source = Pose(source.as_dataset(copy="none").chunk({"sample": 1}))
+    query = xr.DataArray(
+        np.empty((2, 0)), dims=("row_query", "when"),
+        coords={"label": ("row_query", da.from_array(np.asarray([7, 8]), chunks=1))},
+    )
+    query.coords["label"].attrs["origin"] = "caller"
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = getattr(source.param, operation)(query).as_dataset(copy="none")
+    assert tasks == []
+    assert actual.sizes["sample"] == 0
+    assert actual.coords["label"].dims == ("sample",)
+    assert actual.coords["label"].chunks is not None
+    assert actual.coords["label"].attrs == {"origin": "caller"}
+    assert get_pose_rep(actual, owner="test") == rep
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_pose_empty_lazy_label_retains_current_domain_validation() -> None:
+    """ID: SPATIAL_HARD_EMPTY_QUERY_LABEL_001_pose_validation_dependency_survives."""
+    da = pytest.importorskip("dask.array")
+    from dask import delayed
+    from dask.callbacks import Callback
+
+    domain = da.from_delayed(delayed(np.array)([1.0, 0.0]), shape=(2,), dtype=float)
+    dataset = _pose_temporal_dataset().assign_coords(time_s=("sample", domain))
+    source = Pose(dataset)
+    query = xr.DataArray(
+        np.empty((2, 0)), dims=("row_query", "when"),
+        coords={"label": ("row_query", da.from_array(np.asarray([7, 8]), chunks=1))},
+    )
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        actual = source.param.at(query).as_dataset(copy="none")
+    assert tasks == [] and actual.coords["label"].chunks is not None
+    with pytest.raises(ValueError, match="build_param_map: parameter coordinate must be monotonic"):
+        actual.compute(scheduler="synchronous")
 
 
 def test_spatial_core_018_pose_constructor_accepts_ao_dataset_dataarray_deterministically() -> None:
     """ID: SPATIAL_CORE_018_pose_constructor_accepts_ao_dataset_dataarray_deterministically."""
     component_pose = _component_pose()
-    from_components_ao = Pose(AnalysisObject._from_validated(component_pose.unsafe_data))
-    from_components_ds = Pose(component_pose.unsafe_data)
+    from_components_ao = Pose(AnalysisObject._from_validated(component_pose.as_dataset(copy="none")))
+    from_components_ds = Pose(component_pose.as_dataset(copy="none"))
 
     matrix_ds = _matrix_dataset(var_name="matrix")
     from_matrix_ao = Pose(AnalysisObject._from_validated(matrix_ds))
@@ -351,8 +614,8 @@ def test_spatial_core_019_pose_layout_rep_boundary_matrix_vs_components_determin
     component_pose = _component_pose()
     matrix_pose = Pose(_matrix_dataset())
 
-    assert get_pose_rep(component_pose.unsafe_data, owner="test") == "components"
-    assert get_pose_rep(matrix_pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(component_pose.as_dataset(copy="none"), owner="test") == "components"
+    assert get_pose_rep(matrix_pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert set(read_components(component_pose).keys()) == {"position", "rotation"}
     assert read_components(matrix_pose) == {}
 
@@ -364,8 +627,8 @@ def test_spatial_core_020_pose_components_storage_defaults_to_cart_quat() -> Non
 
     assert isinstance(pos, Position)
     assert isinstance(rot, Rotation)
-    assert get_position_rep(pos.unsafe_data, owner="test") == "cart"
-    assert get_rotation_rep(rot.unsafe_data, owner="test") == "quat"
+    assert get_position_rep(pos.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_rotation_rep(rot.as_dataset(copy="none"), owner="test") == "quat"
 
 
 def test_spatial_core_021_pose_matrix_storage_decompose_default_is_cart_quat() -> None:
@@ -373,15 +636,15 @@ def test_spatial_core_021_pose_matrix_storage_decompose_default_is_cart_quat() -
     pose = Pose(_matrix_dataset())
     pos, rot = pose.decompose(validate=True)
 
-    assert get_position_rep(pos.unsafe_data, owner="test") == "cart"
-    assert get_rotation_rep(rot.unsafe_data, owner="test") == "quat"
-    assert list(pos.unsafe_data.data_vars) == ["position"]
-    assert list(rot.unsafe_data.data_vars) == ["rotation"]
-    assert "datavar" not in pos.unsafe_data.data_vars
-    assert "datavar" not in rot.unsafe_data.data_vars
-    np.testing.assert_allclose(pos.unsafe_data["position"].values, np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float))
+    assert get_position_rep(pos.as_dataset(copy="none"), owner="test") == "cart"
+    assert get_rotation_rep(rot.as_dataset(copy="none"), owner="test") == "quat"
+    assert list(pos.as_dataset(copy="none").data_vars) == ["position"]
+    assert list(rot.as_dataset(copy="none").data_vars) == ["rotation"]
+    assert "datavar" not in pos.as_dataset(copy="none").data_vars
+    assert "datavar" not in rot.as_dataset(copy="none").data_vars
+    np.testing.assert_allclose(pos.as_dataset(copy="none")["position"].values, np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=float))
     np.testing.assert_allclose(
-        rot.unsafe_data["rotation"].values,
+        rot.as_dataset(copy="none")["rotation"].values,
         np.asarray([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.70710678, 0.70710678]], dtype=float),
         atol=1e-6,
     )
@@ -396,7 +659,7 @@ def test_spatial_core_022_pose_component_boundary_reuses_phase7_5_owners() -> No
         "position": ComponentSpec(core_dim="axis", labels=_XYZ, var="position"),
         "rotation": ComponentSpec(core_dim="quat", labels=_QUAT, var="rotation"),
     }
-    extracted = extract_components(AnalysisObject._from_validated(pose.unsafe_data), validate=True)
+    extracted = extract_components(AnalysisObject._from_validated(pose.as_dataset(copy="none")), validate=True)
     assert set(extracted.keys()) == {"position", "rotation"}
 
 
@@ -406,11 +669,11 @@ def test_spatial_core_023_pose_frame_metadata_boundary_reuses_phase7_owners() ->
     rot = frame_retag(Rotation(_rotation_dataset()), parent="world", child="body", validate=True)
 
     pose = Pose.from_components(rot, pos, validate=True)
-    assert get_frames(pose.unsafe_data) == ("world", "body")
+    assert get_frames(pose.as_dataset(copy="none")) == ("world", "body")
 
     pos_out, rot_out = pose.decompose(validate=True)
-    assert get_frames(pos_out.unsafe_data) == ("world", "body")
-    assert get_frames(rot_out.unsafe_data) == ("world", "body")
+    assert get_frames(pos_out.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(rot_out.as_dataset(copy="none")) == ("world", "body")
 
 
 def test_spatial_hard_016_pose_constructor_type_mismatch_fail_closed() -> None:
@@ -499,7 +762,7 @@ def test_spatial_hard_023_pose_from_components_rejects_coordinate_mismatch_no_ou
 
 def test_spatial_hard_114_pose_component_var_missing_declared_non_core_dims_rejected_by_core_component_runtime_checks() -> None:
     """ID: SPATIAL_HARD_114_pose_component_var_missing_declared_non_core_dims_rejected_by_core_component_runtime_checks."""
-    ds = _component_pose().unsafe_data
+    ds = _component_pose().as_dataset(copy="none")
     pos_values = ds["position"].isel(sample=0).values
     ds = ds.drop_vars("position")
     ds["position"] = xr.DataArray(pos_values, dims=("axis",), coords={"axis": list(_XYZ)})
@@ -522,10 +785,202 @@ def test_spatial_hard_024_pose_from_matrix_clears_preexisting_component_registry
     )
 
     pose = Pose.from_matrix(with_registry, validate=True)
-    assert get_pose_rep(pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert read_components(pose) == {}
-    np.testing.assert_allclose(pose.unsafe_data["pose_matrix"].values, with_registry.unsafe_data["pose_matrix"].values)
-    assert pose.unsafe_data["pose_matrix"].dims == with_registry.unsafe_data["pose_matrix"].dims
+    np.testing.assert_allclose(pose.as_dataset(copy="none")["pose_matrix"].values, with_registry.as_dataset(copy="none")["pose_matrix"].values)
+    assert pose.as_dataset(copy="none")["pose_matrix"].dims == with_registry.as_dataset(copy="none")["pose_matrix"].dims
+
+
+@pytest.mark.parametrize(
+    "rotation",
+    [
+        pytest.param(np.diag([2.0, 1.0, 1.0]), id="scale"),
+        pytest.param(np.asarray([[1.0, 0.2, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), id="shear"),
+        pytest.param(np.diag([-1.0, 1.0, 1.0]), id="reflection"),
+    ],
+)
+def test_spatial_hard_192_pose_matrix_rejects_non_rigid_rotation_blocks(rotation: np.ndarray) -> None:
+    """ID: SPATIAL_HARD_192_pose_matrix_rejects_non_rigid_rotation_blocks."""
+    ds = _matrix_dataset()
+    ds["pose_matrix"].data[0, :3, :3] = rotation
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(ds, validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.__init__"):
+        Pose(ds)
+
+    near = _matrix_dataset()
+    near["pose_matrix"].data[0, 0, 0] += 1.0e-7
+    near["pose_matrix"].data[0, 3, 0] = 5.0e-7
+    Pose.from_matrix(near, validate=True)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ("nan", "inf", "complex", "bottom_x", "bottom_y", "bottom_z", "bottom_w"),
+)
+def test_spatial_hard_193_pose_matrix_rejects_nonfinite_values_and_malformed_bottom_rows(case: str) -> None:
+    """ID: SPATIAL_HARD_193_pose_matrix_rejects_nonfinite_values_and_malformed_bottom_rows."""
+    ds = _matrix_dataset()
+    if case == "complex":
+        ds["pose_matrix"] = ds["pose_matrix"].astype(np.complex128)
+        ds["pose_matrix"].data[0, 0, 3] += 1j
+    elif case == "nan":
+        ds["pose_matrix"].data[0, 0, 3] = np.nan
+    elif case == "inf":
+        ds["pose_matrix"].data[0, 1, 1] = np.inf
+    else:
+        index = {"bottom_x": 0, "bottom_y": 1, "bottom_z": 2, "bottom_w": 3}[case]
+        ds["pose_matrix"].data[0, 3, index] = 0.25 if index < 3 else 0.75
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(ds, validate=True)
+
+
+def test_spatial_hard_194_pose_matrix_conversion_revalidates_unvalidated_inputs() -> None:
+    """ID: SPATIAL_HARD_194_pose_matrix_conversion_revalidates_unvalidated_inputs."""
+    ds = _matrix_dataset()
+    ds["pose_matrix"].data[0, 3, 0] = 0.5
+    pose = Pose.from_matrix(ds, validate=False)
+
+    with pytest.raises(ValueError, match="spatial.pose.decompose"):
+        pose.decompose(validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.to_rep"):
+        pose.as_components(validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.to_rep"):
+        pose.as_matrix(validate=True)
+    with pytest.raises(ValueError, match="Pose._from_validated"):
+        pose.rename({"sample": "step"}, validate=True)
+
+
+def test_spatial_hard_195_pose_matrix_validation_ignores_structural_padding() -> None:
+    """ID: SPATIAL_HARD_195_pose_matrix_validation_ignores_structural_padding."""
+    values = np.broadcast_to(np.eye(4), (2, 3, 4, 4)).copy()
+    values[0, 2] = 0.0
+    values[1, 1:] = 0.0
+    arr = xr.DataArray(
+        values,
+        dims=("trial", "sample", "row", "col"),
+        coords={
+            "trial": ["a", "b"],
+            "sample": [0, 1, 2],
+            "row": list(_QUAT),
+            "col": list(_QUAT),
+            "sample_size": ("trial", [2, 1]),
+        },
+        name="pose_matrix",
+    )
+    ao = AnalysisObject.from_data(
+        arr.to_dataset(),
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        sequence_size_coord="sample_size",
+        validate=True,
+    )
+    ds = set_pose_rep(ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
+    pose = Pose.from_matrix(ds, validate=True)
+    np.testing.assert_array_equal(pose.as_dataset(copy="none")["pose_matrix"].values, values)
+    converted = pose.as_components(validate=True)
+    assert read_sequence_size_coord_name(converted.as_dataset(copy="none")) == "sample_size"
+    np.testing.assert_array_equal(converted.as_dataset(copy="none").coords["sample_size"], [2, 1])
+
+    invariant = np.broadcast_to(np.eye(4), (3, 4, 4)).copy()
+    invariant[2] = 0.0
+    invariant_arr = xr.DataArray(
+        invariant,
+        dims=("sample", "row", "col"),
+        coords={
+            "sample": [0, 1, 2],
+            "row": list(_QUAT),
+            "col": list(_QUAT),
+        },
+        name="pose_matrix",
+    )
+    invariant_ds_raw = invariant_arr.to_dataset().assign_coords(
+        trial=("trial", ["a", "b"]),
+        sample_size=("trial", [2, 1]),
+    )
+    invariant_ao = AnalysisObject.from_data(
+        invariant_ds_raw,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        sequence_size_coord="sample_size",
+        validate=True,
+    )
+    invariant_ds = set_pose_rep(invariant_ao.as_dataset(copy="none"), rep="matrix", validate=False, owner="test")
+    Pose.from_matrix(invariant_ds, validate=True)
+    invariant_ds["pose_matrix"].data[1] = 0.0
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(invariant_ds, validate=True)
+
+    sequence_invariant = np.broadcast_to(np.eye(4), (2, 4, 4)).copy()
+    sequence_invariant[0] = 0.0
+    sequence_invariant_arr = xr.DataArray(
+        sequence_invariant,
+        dims=("trial", "row", "col"),
+        coords={
+            "trial": ["a", "b"],
+            "row": list(_QUAT),
+            "col": list(_QUAT),
+        },
+        name="pose_matrix",
+    )
+    sequence_invariant_raw = sequence_invariant_arr.to_dataset().assign_coords(
+        sample=("sample", [0, 1, 2]),
+        sample_size=("trial", [0, 1]),
+    )
+    sequence_invariant_ao = AnalysisObject.from_data(
+        sequence_invariant_raw,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=("row", "col"),
+        sequence_size_coord="sample_size",
+        validate=True,
+    )
+    sequence_invariant_ds = set_pose_rep(
+        sequence_invariant_ao.as_dataset(copy="none"),
+        rep="matrix",
+        validate=False,
+        owner="test",
+    )
+    Pose.from_matrix(sequence_invariant_ds, validate=True)
+    sequence_invariant_ds["pose_matrix"].data[1] = 0.0
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        Pose.from_matrix(sequence_invariant_ds, validate=True)
+
+
+def test_spatial_perf_001_pose_matrix_validation_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: SPATIAL_PERF_001_pose_matrix_validation_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+    ds = _matrix_dataset()
+    expected = ds["pose_matrix"].values.copy()
+    ds["pose_matrix"].attrs["matrix_kind"] = "rigid"
+    ds["pose_matrix"] = xr.DataArray(
+        da.from_array(expected, chunks=(1, 2, 2)),
+        dims=ds["pose_matrix"].dims,
+        coords=ds["pose_matrix"].coords,
+        attrs=ds["pose_matrix"].attrs,
+        name="pose_matrix",
+    )
+    with monkeypatch.context() as guarded:
+        guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
+        pose = Pose.from_matrix(ds, validate=True)
+        assert getattr(pose.as_dataset(copy="none")["pose_matrix"].data, "chunks", None) is not None
+        assert pose.as_dataset(copy="none")["pose_matrix"].dims == ds["pose_matrix"].dims
+        assert pose.as_dataset(copy="none")["pose_matrix"].attrs["matrix_kind"] == "rigid"
+    np.testing.assert_allclose(pose.as_dataset(copy="none")["pose_matrix"].compute(), expected)
+
+    bad = ds.copy(deep=True)
+    bad_values = expected.copy()
+    bad_values[0, 0, 0] = 2.0
+    bad["pose_matrix"].data = da.from_array(bad_values, chunks=(1, 2, 2))
+    with monkeypatch.context() as guarded:
+        guarded.setattr(da.Array, "compute", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("eager")))
+        bad_pose = Pose.from_matrix(bad, validate=True)
+    with pytest.raises(ValueError, match="spatial.pose.from_matrix"):
+        bad_pose.as_dataset(copy="none")["pose_matrix"].compute()
 
 
 def test_spatial_core_045_pose_to_rep_components_to_matrix_deterministic() -> None:
@@ -534,7 +989,7 @@ def test_spatial_core_045_pose_to_rep_components_to_matrix_deterministic() -> No
     matrix_pose = pose.to_rep("matrix", validate=True)
 
     assert isinstance(matrix_pose, Pose)
-    assert get_pose_rep(matrix_pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(matrix_pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert read_components(matrix_pose) == {}
     np.testing.assert_allclose(_matrix_payload(matrix_pose), _matrix_payload(pose), atol=1e-8)
 
@@ -544,7 +999,7 @@ def test_spatial_core_046_pose_to_rep_matrix_to_components_deterministic() -> No
     pose = Pose(_matrix_dataset())
     components_pose = pose.to_rep("components", validate=True)
 
-    assert get_pose_rep(components_pose.unsafe_data, owner="test") == "components"
+    assert get_pose_rep(components_pose.as_dataset(copy="none"), owner="test") == "components"
     assert set(read_components(components_pose).keys()) == {"position", "rotation"}
     np.testing.assert_allclose(_matrix_payload(components_pose), _matrix_payload(pose), atol=1e-6)
 
@@ -554,8 +1009,8 @@ def test_spatial_core_047_pose_conversion_roundtrip_components_matrix_preserves_
     pose = _component_pose_with_frames("world", "body")
     roundtrip = pose.as_matrix(validate=True).as_components(validate=True)
 
-    assert get_frames(roundtrip.unsafe_data) == ("world", "body")
-    assert get_pose_rep(roundtrip.unsafe_data, owner="test") == "components"
+    assert get_frames(roundtrip.as_dataset(copy="none")) == ("world", "body")
+    assert get_pose_rep(roundtrip.as_dataset(copy="none"), owner="test") == "components"
     np.testing.assert_allclose(_matrix_payload(roundtrip), _matrix_payload(pose), atol=1e-6)
 
 
@@ -567,7 +1022,7 @@ def test_spatial_core_048_pose_compose_tip_tail_chain_deterministic() -> None:
 
     expected = np.matmul(_matrix_payload(right), _matrix_payload(left))
     np.testing.assert_allclose(_matrix_payload(composed), expected, atol=1e-6)
-    assert get_frames(composed.unsafe_data) == ("world", "sensor")
+    assert get_frames(composed.as_dataset(copy="none")) == ("world", "sensor")
 
 
 def test_spatial_core_049_pose_compose_mixed_rep_executes_via_canonical_split_and_returns_left_rep() -> None:
@@ -576,7 +1031,7 @@ def test_spatial_core_049_pose_compose_mixed_rep_executes_via_canonical_split_an
     right = _component_pose_with_frames("body", "sensor")
     composed = left.compose(right, validate=True)
 
-    assert get_pose_rep(composed.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(composed.as_dataset(copy="none"), owner="test") == "matrix"
     expected = np.matmul(_matrix_payload(right), _matrix_payload(left))
     np.testing.assert_allclose(_matrix_payload(composed), expected, atol=1e-6)
 
@@ -605,7 +1060,7 @@ def test_spatial_core_052_pose_compose_frame_policy_one_framed_inherits_tags() -
     unframed = _component_pose()
     composed = framed.compose(unframed, validate=True)
 
-    assert get_frames(composed.unsafe_data) == ("world", "body")
+    assert get_frames(composed.as_dataset(copy="none")) == ("world", "body")
 
 
 def test_spatial_hard_044_pose_to_rep_rejects_unsupported_target_rep() -> None:
@@ -651,7 +1106,7 @@ def test_spatial_hard_048_pose_inverse_fail_closed_on_malformed_internal_state()
     pose = _component_pose()
     rotation_spec = read_components(pose)["rotation"]
     assert rotation_spec.var is not None
-    pose.unsafe_data[rotation_spec.var].data[0, :] = 0.0
+    pose.as_dataset(copy="none")[rotation_spec.var].data[0, :] = 0.0
     with pytest.raises(ValueError, match="spatial.pose.inverse"):
         pose.inverse(validate=True)
 
@@ -659,7 +1114,7 @@ def test_spatial_hard_048_pose_inverse_fail_closed_on_malformed_internal_state()
 def test_spatial_hard_049_pose_compose_malformed_frame_schema_fail_closed() -> None:
     """ID: SPATIAL_HARD_049_pose_compose_malformed_frame_schema_fail_closed."""
     left = _component_pose()
-    right_ds = left.unsafe_data.copy(deep=True)
+    right_ds = left.as_dataset(copy="none").copy(deep=True)
     tal = dict(right_ds.attrs["tal"])
     ext = dict(tal.get("ext", {}))
     ext["frames"] = {"parent": "world", "child": "body", "extra": "bad"}
@@ -673,7 +1128,7 @@ def test_spatial_hard_050_pose_to_rep_matrix_clears_stale_component_registry_tru
     """ID: SPATIAL_HARD_050_pose_to_rep_matrix_clears_stale_component_registry_truthfully."""
     pose = _component_pose()
     matrix_pose = pose.to_rep("matrix", validate=True)
-    assert get_pose_rep(matrix_pose.unsafe_data, owner="test") == "matrix"
+    assert get_pose_rep(matrix_pose.as_dataset(copy="none"), owner="test") == "matrix"
     assert read_components(matrix_pose) == {}
 
 
@@ -707,11 +1162,11 @@ def test_bcast_core_053_pose_component_assembly_preserves_declared_param_and_seq
     rotation = Rotation(_batched_rotation_dataset(include_trial_dim=False))
     position = Position(_batched_position_dataset())
     out = Pose.from_components(rotation, position, validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
     rotation_spec = read_components(out)["rotation"]
     assert rotation_spec.var is not None
-    assert out.unsafe_data[rotation_spec.var].sizes["trial"] == 2
+    assert out.as_dataset(copy="none")[rotation_spec.var].sizes["trial"] == 2
 
 
 def test_bcast_core_054_pose_compose_static_dynamic_mix_adopts_dynamic_series_roles() -> None:
@@ -727,13 +1182,13 @@ def test_bcast_core_054_pose_compose_static_dynamic_mix_adopts_dynamic_series_ro
         validate=True,
     )
     out = left.compose(right, validate=True)
-    declared, sequence_dim, batch_dims, _ = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, _ = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     out_pos, out_rot = out.decompose(validate=True)
-    assert out_pos.unsafe_data["position"].sizes["trial"] == 2
-    assert out_rot.unsafe_data["rotation"].sizes["trial"] == 2
+    assert out_pos.as_dataset(copy="none")["position"].sizes["trial"] == 2
+    assert out_rot.as_dataset(copy="none")["rotation"].sizes["trial"] == 2
 
 
 def test_spatial_core_118_pose_inverse_preserves_declared_batch_only_roles() -> None:
@@ -770,15 +1225,15 @@ def test_spatial_core_118_pose_inverse_preserves_declared_batch_only_roles() -> 
         validate=True,
     )
     inv = pose.inverse(validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim is None
     assert batch_dims == ("trial",)
     assert core_dims == ("axis", "quat")
-    assert read_param_coord_name(inv.unsafe_data) is None
-    assert read_sequence_size_coord_name(inv.unsafe_data) is None
+    assert read_param_coord_name(inv.as_dataset(copy="none")) is None
+    assert read_sequence_size_coord_name(inv.as_dataset(copy="none")) is None
 
-    ident = pose.compose(inv, validate=True).as_matrix(validate=True).unsafe_data["pose_matrix"].values
+    ident = pose.compose(inv, validate=True).as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values
     expected = np.broadcast_to(np.eye(4, dtype=float), ident.shape)
     np.testing.assert_allclose(ident, expected, atol=1e-6)
 
@@ -841,8 +1296,8 @@ def test_spatial_core_119_pose_inverse_succeeds_with_reserved_valid_coord_attr_d
     )
     synced_ship = ship_ao.param.interp_like(drone_ao, on="time", validate=True)
     ship_pos = frame_retag(Position(synced_ship), parent="world", child="ship", validate=True)
-    assert "valid" in ship_pos.unsafe_data.coords
-    assert ship_pos.unsafe_data.coords["valid"].attrs
+    assert "valid" in ship_pos.as_dataset(copy="none").coords
+    assert ship_pos.as_dataset(copy="none").coords["valid"].attrs
 
     identity_rot = frame_retag(
         Rotation(
@@ -864,15 +1319,15 @@ def test_spatial_core_119_pose_inverse_succeeds_with_reserved_valid_coord_attr_d
 
     pose = Pose.from_components(identity_rot, ship_pos, validate=True)
     inv = pose.inverse(validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(inv.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("axis", "quat")
-    assert read_param_coord_name(inv.unsafe_data) == "time"
-    assert read_sequence_size_coord_name(inv.unsafe_data) is None
+    assert read_param_coord_name(inv.as_dataset(copy="none")) == "time"
+    assert read_sequence_size_coord_name(inv.as_dataset(copy="none")) is None
 
-    ident = pose.compose(inv, validate=True).as_matrix(validate=True).unsafe_data["pose_matrix"].values
+    ident = pose.compose(inv, validate=True).as_matrix(validate=True).as_dataset(copy="none")["pose_matrix"].values
     expected = np.broadcast_to(np.eye(4, dtype=float), ident.shape)
     np.testing.assert_allclose(ident, expected, atol=1e-6)
 
@@ -940,10 +1395,10 @@ def test_spatial_core_117_rotation_pose_alignment_uses_shared_param_runtime_and_
     pose = Pose(_pose_temporal_dataset(batched=True))
     out = pose.param.at([0.5], validate=True)
     pos, rot = out.decompose(validate=True)
-    pos_values = pos.unsafe_data["position"].transpose("sample", "trial", "axis").values
+    pos_values = pos.as_dataset(copy="none")["position"].transpose("sample", "trial", "axis").values
     np.testing.assert_allclose(pos_values[0, 0], np.asarray([1.0, 0.0, 0.0], dtype=float), atol=1e-6)
     np.testing.assert_allclose(pos_values[0, 1], np.asarray([12.0, 0.0, 0.0], dtype=float), atol=1e-6)
-    quat = rot.as_quat(validate=True).unsafe_data["rotation"].transpose("sample", "trial", "quat").values
+    quat = rot.as_quat(validate=True).as_dataset(copy="none")["rotation"].transpose("sample", "trial", "quat").values
     assert quat.shape[1] == 2
     assert not np.allclose(quat[0, 0, :], quat[0, 1, :], atol=1e-6, rtol=0.0)
 
@@ -961,13 +1416,13 @@ def test_spatial_core_137_pose_param_default_uses_split_typed_preferred_interpol
     pos_default, rot_default = out_default_at.decompose(validate=True)
     pos_explicit, rot_explicit = out_explicit_at.decompose(validate=True)
     np.testing.assert_allclose(
-        pos_default.unsafe_data["position"].values,
-        pos_explicit.unsafe_data["position"].values,
+        pos_default.as_dataset(copy="none")["position"].values,
+        pos_explicit.as_dataset(copy="none")["position"].values,
         atol=1e-6,
     )
     _assert_quat_equivalent(
-        rot_default.as_quat(validate=True).unsafe_data["rotation"].values,
-        rot_explicit.as_quat(validate=True).unsafe_data["rotation"].values,
+        rot_default.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
+        rot_explicit.as_quat(validate=True).as_dataset(copy="none")["rotation"].values,
         atol=1e-6,
     )
     np.testing.assert_allclose(
@@ -975,8 +1430,333 @@ def test_spatial_core_137_pose_param_default_uses_split_typed_preferred_interpol
         _matrix_payload(out_default_at),
         atol=1e-6,
     )
-    assert get_pose_rep(out_default_at.unsafe_data, owner="test") == get_pose_rep(pose.unsafe_data, owner="test")
-    assert get_frames(out_default_at.unsafe_data) == get_frames(pose.unsafe_data)
+    assert get_pose_rep(out_default_at.as_dataset(copy="none"), owner="test") == get_pose_rep(pose.as_dataset(copy="none"), owner="test")
+    assert get_frames(out_default_at.as_dataset(copy="none")) == get_frames(pose.as_dataset(copy="none"))
+
+
+def test_spatial_core_empty_pose_query_001_lazy_slerp_uses_empty_owner() -> None:
+    """ID: SPATIAL_CORE_EMPTY_POSE_QUERY_001_lazy_slerp_uses_empty_owner."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    eager = Pose(_pose_temporal_dataset())
+    dataset = eager.as_dataset(copy="none").chunk({"sample": 1})
+    graph = FrameGraph()
+    source = Pose(dataset).with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at([], validate=True)
+
+    actual = result.as_dataset(copy="none")
+    expected = eager.param.at([], validate=True).as_dataset(copy="none")
+    assert tasks == []
+    assert result.graph is graph
+    assert all(variable.chunks is not None for variable in actual.data_vars.values())
+    xr.testing.assert_identical(actual.compute(scheduler="synchronous"), expected)
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_spatial_core_zero_batch_pose_eval_001_skips_lazy_kernels() -> None:
+    """ID: SPATIAL_CORE_ZERO_BATCH_POSE_EVAL_001_skips_lazy_kernels."""
+    pytest.importorskip("dask.array")
+    from dask.callbacks import Callback
+
+    dataset = _pose_temporal_dataset(batched=True).isel(trial=slice(0, 0)).chunk(
+        {"sample": 2, "trial": 1}
+    )
+    dataset = dataset.assign_coords(time_s=dataset.coords["time_s"].chunk({"sample": 2}))
+    graph = FrameGraph()
+    source = Pose(dataset).with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        result = source.param.at([0.25, 0.75])
+
+    actual = result.as_dataset(copy="none")
+    assert tasks == []
+    assert actual.sizes["trial"] == 0
+    assert actual.sizes["sample"] == 2
+    assert result.graph is graph
+    assert all(variable.chunks is not None for variable in actual.data_vars.values())
+    actual.compute(scheduler="synchronous")
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("batched", (False, True))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+@pytest.mark.parametrize("validate", (False, True))
+@pytest.mark.parametrize("query", ((), (0.25, 0.75)))
+def test_empty_matrix_pose_query_retains_validity_and_rigid_placeholder(
+    batched: bool, lazy: bool, operation: str, validate: bool,
+    query: tuple[float, ...],
+) -> None:
+    """ID: SPATIAL_CORE_EMPTY_MATRIX_POSE_001_zero_source_samples_remain_typed."""
+    eager = Pose(_pose_temporal_dataset(batched=batched)).as_matrix(validate=True)
+    empty = eager.as_dataset(copy="none").isel(sample=slice(0, 0))
+    if lazy:
+        pytest.importorskip("dask.array")
+        empty = empty.chunk({"sample": 1, **({"trial": 1} if batched else {})})
+    graph = FrameGraph()
+    source = Pose(empty).with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    tasks: list[object] = []
+    if lazy:
+        from dask.callbacks import Callback
+
+        with Callback(pretask=lambda key, *_: tasks.append(key)):
+            result = getattr(source.param, operation)(query, validate=validate)
+    else:
+        result = getattr(source.param, operation)(query, validate=validate)
+    actual = result.as_dataset(copy="none")
+    eager_empty = Pose(eager.as_dataset(copy="none").isel(sample=slice(0, 0)))
+    expected = getattr(eager_empty.param, operation)(
+        query, validate=validate,
+    ).as_dataset(copy="none")
+    assert tasks == []
+    assert result.graph is graph
+    assert get_pose_rep(actual, owner="test") == "matrix"
+    assert actual.sizes["sample"] == len(query)
+    assert not bool(actual.coords["valid"].any())
+    if lazy:
+        assert actual["pose_matrix"].chunks is not None
+    xr.testing.assert_identical(actual.compute(scheduler="synchronous"), expected)
+    matrix = actual["pose_matrix"].transpose(
+        *(dim for dim in actual["pose_matrix"].dims if dim not in {"row", "col"}),
+        "row", "col",
+    ).compute(scheduler="synchronous").data
+    np.testing.assert_allclose(matrix, np.broadcast_to(np.eye(4), matrix.shape))
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_empty_matrix_pose_query_preserves_auxiliary_payload() -> None:
+    """ID: SPATIAL_CORE_EMPTY_MATRIX_POSE_002_auxiliary_payload_remains_missing."""
+    eager = Pose(_pose_temporal_dataset()).as_matrix(validate=True)
+    source = Pose(eager.as_dataset(copy="none").isel(sample=slice(0, 0)))
+    dataset = source.as_dataset(copy="none")
+    dataset["temp"] = xr.DataArray(
+        np.empty(0, dtype=float), dims="sample",
+        coords={"sample": dataset.coords["sample"]},
+    )
+    before = dataset.copy(deep=True)
+    actual = source.param.at([0.25, 0.75], validate=False).as_dataset(copy="none")
+    assert list(actual.data_vars) == ["pose_matrix", "temp"]
+    assert not bool(actual.coords["valid"].any())
+    assert np.isnan(actual["temp"]).all()
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_empty_matrix_pose_never_executes_zero_source_payload() -> None:
+    """ID: SPATIAL_PERF_EMPTY_MATRIX_POSE_001_no_source_payload_on_compute."""
+    da = pytest.importorskip("dask.array")
+    delayed = pytest.importorskip("dask").delayed
+
+    def unavailable_payload() -> np.ndarray:
+        raise AssertionError("zero-sample matrix payload was executed")
+
+    eager = Pose(_pose_temporal_dataset()).as_matrix(validate=True)
+    dataset = eager.as_dataset(copy="none").isel(sample=slice(0, 0)).copy(deep=False)
+    matrix = dataset["pose_matrix"]
+    dataset["pose_matrix"] = matrix.copy(data=da.from_delayed(
+        delayed(unavailable_payload)(), shape=matrix.shape, dtype=float,
+    ))
+    source = Pose(dataset)
+    result = source.param.at([0.25, 0.75])
+    actual = result.as_dataset(copy="none").compute(scheduler="synchronous")
+    assert not bool(actual.coords["valid"].any())
+    matrix_values = actual["pose_matrix"].transpose("sample", "row", "col").data
+    np.testing.assert_allclose(matrix_values, np.broadcast_to(np.eye(4), matrix_values.shape))
+
+
+@pytest.mark.parametrize("batched", (False, True))
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+@pytest.mark.parametrize("rotation_method", ("nearest", "slerp"))
+def test_empty_matrix_pose_result_remains_structurally_missing_when_reused(
+    batched: bool, lazy: bool, operation: str, rotation_method: str,
+) -> None:
+    """ID: SPATIAL_HARD_EMPTY_MATRIX_POSE_001_reuse_retains_zero_valid_size."""
+    eager = Pose(_pose_temporal_dataset(batched=batched)).as_matrix(validate=True)
+    empty = eager.as_dataset(copy="none").isel(sample=slice(0, 0))
+    if lazy:
+        pytest.importorskip("dask.array")
+        empty = empty.chunk({"sample": 1, **({"trial": 1} if batched else {})})
+    source = Pose(empty)
+    before = source.as_dataset(copy="deep")
+    opts = PoseTemporalOptions(rotation_opts=RotationTemporalOptions(method=rotation_method))
+    tasks: list[object] = []
+    if lazy:
+        from dask.callbacks import Callback
+
+        with Callback(pretask=lambda key, *_: tasks.append(key)):
+            first = getattr(source.param, operation)([0.0, 1.0], opts=opts)
+            second = first.param.at([0.5], opts=opts)
+            resampled = first.param.resample_to([0.5], opts=opts)
+    else:
+        first = getattr(source.param, operation)([0.0, 1.0], opts=opts)
+        second = first.param.at([0.5], opts=opts)
+        resampled = first.param.resample_to([0.5], opts=opts)
+    assert tasks == []
+    sample_index = first.param.index([0.5])
+    np.testing.assert_array_equal(sample_index, np.full(sample_index.shape, -1))
+    for result in (first, second, resampled):
+        dataset = result.as_dataset(copy="none")
+        size_name = read_sequence_size_coord_name(dataset)
+        assert size_name is not None
+        np.testing.assert_array_equal(dataset.coords[size_name], np.zeros(dataset.coords[size_name].shape))
+        assert not bool(dataset.coords["valid"].compute(scheduler="synchronous").any())
+        assert get_pose_rep(dataset, owner="test") == "matrix"
+        matrix_var = dataset["pose_matrix"]
+        matrix = matrix_var.transpose(
+            *(dim for dim in matrix_var.dims if dim not in {"row", "col"}),
+            "row", "col",
+        ).compute(scheduler="synchronous").data
+        np.testing.assert_allclose(matrix, np.broadcast_to(np.eye(4), matrix.shape))
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("representation", ("components", "matrix"))
+def test_empty_matrix_pose_provider_rejects_strict_coverage(
+    lazy: bool, representation: str,
+) -> None:
+    """ID: SPATIAL_HARD_EMPTY_POSE_002_provider_has_no_coverage."""
+    eager = Pose(_pose_temporal_dataset())
+    if representation == "matrix":
+        eager = eager.as_matrix(validate=True)
+    empty = eager.as_dataset(copy="none").isel(sample=slice(0, 0))
+    if lazy:
+        pytest.importorskip("dask.array")
+        empty = empty.chunk({"sample": 1})
+    source = Pose(empty)
+    first = source.param.at([0.0, 1.0])
+    graph = FrameGraph()
+    bind_pose(graph, "world", "body", first)
+    tasks: list[object] = []
+    if lazy:
+        from dask.callbacks import Callback
+
+        with Callback(pretask=lambda key, *_: tasks.append(key)), pytest.raises(
+            ValueError, match="spatial.path_solve.pose:.*closed parameter domain",
+        ):
+            solve_pose_path_transform("body", "world", graph=graph, query=[0.5])
+    else:
+        with pytest.raises(ValueError, match="spatial.path_solve.pose:.*closed parameter domain"):
+            solve_pose_path_transform("body", "world", graph=graph, query=[0.5])
+    assert tasks == []
+
+
+def test_empty_matrix_pose_size_name_does_not_replace_caller_label() -> None:
+    """ID: SPATIAL_CORE_EMPTY_MATRIX_POSE_003_size_namespace_isolated."""
+    source = Pose(Pose(_pose_temporal_dataset()).as_matrix().as_dataset(copy="none").isel(sample=slice(0, 0)))
+    query = xr.DataArray(
+        [0.0, 1.0], dims="query", coords={"sample_size": ("query", [7, 8])},
+    )
+    result = source.param.at(query).as_dataset(copy="none")
+    size_name = read_sequence_size_coord_name(result)
+    assert size_name is not None and size_name != "sample_size"
+    np.testing.assert_array_equal(result.coords["sample_size"], [7, 8])
+    np.testing.assert_array_equal(result.coords[size_name], 0)
+
+
+@pytest.mark.parametrize("lazy", (False, True))
+@pytest.mark.parametrize("rotation_method", ("nearest", "slerp"))
+def test_empty_component_pose_result_remains_structurally_missing(
+    lazy: bool, rotation_method: str,
+) -> None:
+    """ID: SPATIAL_HARD_EMPTY_POSE_003_component_reuse_has_no_samples."""
+    empty = _pose_temporal_dataset().isel(sample=slice(0, 0))
+    if lazy:
+        pytest.importorskip("dask.array")
+        empty = empty.chunk({"sample": 1})
+    source = Pose(empty)
+    before = source.as_dataset(copy="deep")
+    opts = PoseTemporalOptions(rotation_opts=RotationTemporalOptions(method=rotation_method))
+    tasks: list[object] = []
+    if lazy:
+        from dask.callbacks import Callback
+
+        with Callback(pretask=lambda key, *_: tasks.append(key)):
+            first = source.param.at([0.0, 1.0], opts=opts)
+            second = first.param.resample_to([0.5], opts=opts)
+    else:
+        first = source.param.at([0.0, 1.0], opts=opts)
+        second = first.param.resample_to([0.5], opts=opts)
+    assert tasks == []
+    for result in (first, second):
+        dataset = result.as_dataset(copy="none")
+        size_name = read_sequence_size_coord_name(dataset)
+        assert size_name is not None
+        np.testing.assert_array_equal(dataset.coords[size_name], 0)
+        assert not bool(dataset.coords["valid"].compute(scheduler="synchronous").any())
+        assert get_pose_rep(dataset, owner="test") == "components"
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+@pytest.mark.parametrize("batched", (False, True))
+@pytest.mark.parametrize("operation", ("at", "resample_to"))
+def test_dask_matrix_pose_query_coalesces_only_fixed_core_axes(
+    batched: bool, operation: str,
+) -> None:
+    """ID: SPATIAL_CORE_MATRIX_POSE_CHUNKS_001_lazy_query_matches_eager."""
+    pytest.importorskip("dask.array")
+
+    eager = Pose(_pose_temporal_dataset(batched=batched)).as_matrix(validate=True)
+    chunks = {"sample": 1, **({"trial": 1} if batched else {})}
+    graph = FrameGraph()
+    source = Pose(eager.as_dataset(copy="none").chunk(chunks)).with_graph(graph)
+    before = source.as_dataset(copy="deep")
+    query = [0.25, 0.75]
+    expected = getattr(eager.param, operation)(query).as_dataset(copy="none")
+    result = getattr(source.param, operation)(query)
+    actual = result.as_dataset(copy="none")
+    assert result.graph is graph
+    assert actual["pose_matrix"].chunks is not None
+    xr.testing.assert_identical(actual.compute(scheduler="synchronous"), expected)
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
+
+
+def test_dask_matrix_pose_query_does_not_execute_source_payload() -> None:
+    """ID: SPATIAL_PERF_MATRIX_POSE_CHUNKS_001_planning_keeps_payload_lazy."""
+    da = pytest.importorskip("dask.array")
+    delayed = pytest.importorskip("dask").delayed
+
+    def unavailable_payload() -> np.ndarray:
+        raise AssertionError("source matrix payload executed during query planning")
+
+    eager = Pose(_pose_temporal_dataset()).as_matrix(validate=True)
+    dataset = eager.as_dataset(copy="none").copy(deep=False)
+    template = dataset["pose_matrix"]
+    blocks = [
+        da.from_delayed(delayed(unavailable_payload)(), shape=(1, 4, 4), dtype=float)
+        for _ in range(2)
+    ]
+    dataset["pose_matrix"] = template.copy(data=da.concatenate(blocks, axis=0))
+    source = Pose(dataset)
+    result = source.param.at([0.25, 0.75])
+    assert result.as_dataset(copy="none")["pose_matrix"].chunks is not None
+
+
+@pytest.mark.parametrize("operation", ("inverse", "compose"))
+def test_pose_fixed_component_core_chunks_preserve_lazy_outer_topology(operation: str) -> None:
+    """ID: SPATIAL_CORE_FIXED_CORE_CHUNKS_003_pose_operations_accept_split_axes."""
+    pytest.importorskip("dask.array")
+
+    eager = Pose(_pose_temporal_dataset())
+    source = Pose(eager.as_dataset(copy="none").chunk(
+        {"sample": 1, "axis": (2, 1), "quat": (2, 2)},
+    ))
+    before = source.as_dataset(copy="deep")
+    other = eager.inverse()
+    actual = source.compose(other) if operation == "compose" else source.inverse()
+    expected = eager.compose(other) if operation == "compose" else other
+    assert all(var.chunks is not None for var in actual.as_dataset(copy="none").data_vars.values())
+    xr.testing.assert_identical(
+        actual.as_dataset(copy="none").compute(scheduler="synchronous"),
+        expected.as_dataset(copy="none"),
+    )
+    xr.testing.assert_identical(source.as_dataset(copy="none"), before)
 
 
 def test_spatial_core_139_pose_temporal_components_preserves_auxiliary_payload_vars() -> None:
@@ -991,10 +1771,10 @@ def test_spatial_core_139_pose_temporal_components_preserves_auxiliary_payload_v
     out_at = pose.param.at([0.5], validate=True)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=True)
 
-    assert {"position", "rotation", "temp"}.issubset(set(out_at.unsafe_data.data_vars))
-    assert {"position", "rotation", "temp"}.issubset(set(out_resample.unsafe_data.data_vars))
-    np.testing.assert_allclose(out_at.unsafe_data["temp"].values, np.asarray([15.0]), atol=1e-6)
-    np.testing.assert_allclose(out_resample.unsafe_data["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
+    assert {"position", "rotation", "temp"}.issubset(set(out_at.as_dataset(copy="none").data_vars))
+    assert {"position", "rotation", "temp"}.issubset(set(out_resample.as_dataset(copy="none").data_vars))
+    np.testing.assert_allclose(out_at.as_dataset(copy="none")["temp"].values, np.asarray([15.0]), atol=1e-6)
+    np.testing.assert_allclose(out_resample.as_dataset(copy="none")["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
 
 
 def test_spatial_core_140_pose_temporal_matrix_preserves_source_matrix_var_name() -> None:
@@ -1004,37 +1784,37 @@ def test_spatial_core_140_pose_temporal_matrix_preserves_source_matrix_var_name(
     out_at = pose.param.at([0.5], validate=True)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=True)
 
-    assert list(out_at.unsafe_data.data_vars) == ["tf_world_body"]
-    assert list(out_resample.unsafe_data.data_vars) == ["tf_world_body"]
-    assert "pose_matrix" not in out_at.unsafe_data.data_vars
-    assert "pose_matrix" not in out_resample.unsafe_data.data_vars
+    assert list(out_at.as_dataset(copy="none").data_vars) == ["tf_world_body"]
+    assert list(out_resample.as_dataset(copy="none").data_vars) == ["tf_world_body"]
+    assert "pose_matrix" not in out_at.as_dataset(copy="none").data_vars
+    assert "pose_matrix" not in out_resample.as_dataset(copy="none").data_vars
 
 
 def test_spatial_core_141_pose_temporal_matrix_preserves_auxiliary_numeric_payload_vars() -> None:
     """ID: SPATIAL_CORE_141_pose_temporal_matrix_preserves_auxiliary_numeric_payload_vars."""
     ds = _matrix_dataset(var_name="tf_world_body").assign_coords(time_s=("sample", [0.0, 1.0]))
     pose = Pose(ds).set_param_coord(name="time_s", validate=False)
-    pose.unsafe_data["temp"] = xr.DataArray(
+    pose.as_dataset(copy="none")["temp"] = xr.DataArray(
         np.asarray([10.0, 20.0], dtype=float),
         dims=("sample",),
-        coords={"sample": pose.unsafe_data.coords["sample"]},
+        coords={"sample": pose.as_dataset(copy="none").coords["sample"]},
     )
     out_at = pose.param.at([0.5], validate=False)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=False)
 
-    assert {"tf_world_body", "temp"}.issubset(set(out_at.unsafe_data.data_vars))
-    assert {"tf_world_body", "temp"}.issubset(set(out_resample.unsafe_data.data_vars))
-    np.testing.assert_allclose(out_at.unsafe_data["temp"].values, np.asarray([15.0]), atol=1e-6)
-    np.testing.assert_allclose(out_resample.unsafe_data["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
-    assert "pose_matrix" not in out_at.unsafe_data.data_vars
-    assert "pose_matrix" not in out_resample.unsafe_data.data_vars
+    assert {"tf_world_body", "temp"}.issubset(set(out_at.as_dataset(copy="none").data_vars))
+    assert {"tf_world_body", "temp"}.issubset(set(out_resample.as_dataset(copy="none").data_vars))
+    np.testing.assert_allclose(out_at.as_dataset(copy="none")["temp"].values, np.asarray([15.0]), atol=1e-6)
+    np.testing.assert_allclose(out_resample.as_dataset(copy="none")["temp"].values, np.asarray([12.5, 17.5]), atol=1e-6)
+    assert "pose_matrix" not in out_at.as_dataset(copy="none").data_vars
+    assert "pose_matrix" not in out_resample.as_dataset(copy="none").data_vars
 
 
 def test_spatial_hard_160_pose_temporal_matrix_payload_resolution_fails_closed_on_ambiguous_candidates() -> None:
     """ID: SPATIAL_HARD_160_pose_temporal_matrix_payload_resolution_fails_closed_on_ambiguous_candidates."""
     ds = _matrix_dataset(var_name="tf_world_body").assign_coords(time_s=("sample", [0.0, 1.0]))
     pose = Pose(ds).set_param_coord(name="time_s", validate=False)
-    pose.unsafe_data["tf_alt"] = pose.unsafe_data["tf_world_body"].copy(deep=True)
+    pose.as_dataset(copy="none")["tf_alt"] = pose.as_dataset(copy="none")["tf_world_body"].copy(deep=True)
 
     with pytest.raises(ValueError) as exc_info:
         pose.param.at([0.5], validate=False)
@@ -1047,15 +1827,15 @@ def test_spatial_hard_161_pose_temporal_matrix_aux_rebind_is_validate_false_only
     """ID: SPATIAL_HARD_161_pose_temporal_matrix_aux_rebind_is_validate_false_only_and_preserve_path."""
     ds = _matrix_dataset(var_name="tf_world_body").assign_coords(time_s=("sample", [0.0, 1.0]))
     pose = Pose(ds).set_param_coord(name="time_s", validate=False)
-    pose.unsafe_data["temp"] = xr.DataArray(
+    pose.as_dataset(copy="none")["temp"] = xr.DataArray(
         np.asarray([10.0, 20.0], dtype=float),
         dims=("sample",),
-        coords={"sample": pose.unsafe_data.coords["sample"]},
+        coords={"sample": pose.as_dataset(copy="none").coords["sample"]},
     )
     out_at = pose.param.at([0.5], validate=False)
     out_resample = pose.param.resample_to([0.25, 0.75], validate=False)
-    assert {"tf_world_body", "temp"}.issubset(set(out_at.unsafe_data.data_vars))
-    assert {"tf_world_body", "temp"}.issubset(set(out_resample.unsafe_data.data_vars))
+    assert {"tf_world_body", "temp"}.issubset(set(out_at.as_dataset(copy="none").data_vars))
+    assert {"tf_world_body", "temp"}.issubset(set(out_resample.as_dataset(copy="none").data_vars))
     with pytest.raises(ValueError) as at_error:
         pose.param.at([0.5], validate=True)
     with pytest.raises(ValueError) as resample_error:
@@ -1085,7 +1865,7 @@ def test_spatial_hard_052_pose_compose_kernel_failure_wrapped_with_operation_own
     right = _component_pose()
     rotation_spec = read_components(right)["rotation"]
     assert rotation_spec.var is not None
-    right.unsafe_data[rotation_spec.var].data[:, :] = 0.0
+    right.as_dataset(copy="none")[rotation_spec.var].data[:, :] = 0.0
 
     with pytest.raises(ValueError) as exc_info:
         left.compose(right, validate=True)
@@ -1100,7 +1880,7 @@ def test_spatial_hard_053_pose_to_rep_matrix_kernel_failure_wrapped_with_operati
     pose = _component_pose()
     rotation_spec = read_components(pose)["rotation"]
     assert rotation_spec.var is not None
-    pose.unsafe_data[rotation_spec.var].data[:, :] = 0.0
+    pose.as_dataset(copy="none")[rotation_spec.var].data[:, :] = 0.0
 
     with pytest.raises(ValueError) as exc_info:
         pose.to_rep("matrix", validate=True)
@@ -1114,7 +1894,7 @@ def test_spatial_hard_054_pose_decompose_matrix_kernel_failure_wrapped_with_deco
     """ID: SPATIAL_HARD_054_pose_decompose_matrix_kernel_failure_wrapped_with_decompose_owner_context."""
     matrix_ds = _matrix_dataset()
     matrix_ds["pose_matrix"].data[:, :3, :3] = 0.0
-    pose = Pose(matrix_ds)
+    pose = Pose.from_matrix(matrix_ds, validate=False)
 
     with pytest.raises(ValueError) as exc_info:
         pose.decompose(validate=True)
@@ -1135,12 +1915,12 @@ def test_spatial_hard_055_pose_decompose_matrix_dask_lazy_kernel_failure_wrapped
         dims=matrix_ds["pose_matrix"].dims,
         coords=matrix_ds["pose_matrix"].coords,
     )
-    pose = Pose(matrix_ds)
+    pose = Pose.from_matrix(matrix_ds, validate=False)
 
     _, rot = pose.decompose(validate=True)
-    rot_var = str(next(iter(rot.unsafe_data.data_vars)))
+    rot_var = str(next(iter(rot.as_dataset(copy="none").data_vars)))
     with pytest.raises(ValueError) as exc_info:
-        rot.unsafe_data[rot_var].compute()
+        rot.as_dataset(copy="none")[rot_var].compute()
 
     message = str(exc_info.value)
     assert "spatial.pose.decompose" in message
@@ -1154,8 +1934,8 @@ def test_spatial_hard_116_pose_decompose_matrix_non_trailing_core_dims_preserve_
     pose = Pose(matrix_ds)
 
     position, rotation = pose.decompose(validate=True)
-    _, pos_seq, _, pos_core = read_roles(position.unsafe_data)
-    _, rot_seq, _, rot_core = read_roles(rotation.unsafe_data)
+    _, pos_seq, _, pos_core = read_roles(position.as_dataset(copy="none"))
+    _, rot_seq, _, rot_core = read_roles(rotation.as_dataset(copy="none"))
 
     assert pos_seq == "sample"
     assert pos_core == ("row",)
@@ -1166,11 +1946,11 @@ def test_spatial_hard_116_pose_decompose_matrix_non_trailing_core_dims_preserve_
 def test_topo_core_006_pose_compose_uses_core_topology_touchpoint() -> None:
     """ID: TOPO_CORE_006_pose_compose_uses_core_topology_touchpoint."""
     left = _component_pose()
-    right = Pose(_component_pose().unsafe_data.transpose("axis", "quat", "sample"))
+    right = Pose(_component_pose().as_dataset(copy="none").transpose("axis", "quat", "sample"))
     out = left.compose(right, validate=True)
     expected = left.compose(_component_pose(), validate=True)
     np.testing.assert_allclose(
-        out.decompose(validate=True)[0].unsafe_data["position"].values,
-        expected.decompose(validate=True)[0].unsafe_data["position"].values,
+        out.decompose(validate=True)[0].as_dataset(copy="none")["position"].values,
+        expected.decompose(validate=True)[0].as_dataset(copy="none")["position"].values,
         atol=1e-6,
     )

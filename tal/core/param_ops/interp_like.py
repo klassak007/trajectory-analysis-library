@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import restore_and_finalize
 from ..orchestration.inputs import query_coord_from_other_input
 from ..orchestration.topology import (
@@ -81,7 +82,8 @@ def _reindex_left_batch(context: ParamRuntimeContext, *, query: xr.DataArray) ->
     if dim not in query.dims:
         return query
     _assert_unique_batch_labels(context, query=query, dim=dim)
-    return query.reindex({dim: context.batch_coords[dim]}, fill_value=np.nan)
+    fill = np.datetime64("NaT", "ns") if context.param_kind == "datetime64" else np.nan
+    return query.reindex({dim: context.batch_coords[dim]}, fill_value=fill)
 
 
 def interp_like_param(
@@ -138,7 +140,7 @@ def interp_like_param(
         return out
     return restore_and_finalize(
         context.ao,
-        out.unsafe_data,
+        analysis_object_dataset(out),
         plan=plan,
         validate=validate,
         owner="interp_like",

@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from ..ordered_dtypes import is_ordered_real_numeric_dtype
 from .common import ALLOWED_PARAM_KEYS
 from .common import (
     fail,
@@ -75,6 +76,14 @@ def allowed_param_dims(sequence_dim: str, batch_dims: list[str]) -> list[tuple[s
     return out
 
 
+def _is_supported_param_dtype(dtype: object) -> bool:
+    try:
+        resolved = np.dtype(dtype)
+    except (TypeError, ValueError):
+        return False
+    return is_ordered_real_numeric_dtype(resolved) or np.issubdtype(resolved, np.datetime64)
+
+
 def phase_param_coord(
     ds: xr.Dataset,
     *,
@@ -113,11 +122,12 @@ def phase_param_coord(
             actual={"coord": name, "dims": list(dims)},
             hint="use dims (sequence_dim,) or (*batch_dims, sequence_dim)",
         )
-    if not np.issubdtype(np.dtype(ds.coords[name].dtype), np.number):
+    dtype = ds.coords[name].dtype
+    if not _is_supported_param_dtype(dtype):
         fail(
             code="schema.param_coord.dtype.invalid",
             path="tal.core.param_coord.name",
-            expected="numeric coordinate dtype",
-            actual={"coord": name, "dtype": str(ds.coords[name].dtype)},
-            hint="set param_coord to a numeric coordinate",
+            expected="ordered real numeric or datetime64 coordinate dtype",
+            actual={"coord": name, "dtype": str(dtype)},
+            hint="set param_coord to an integer, floating-point, or datetime64 coordinate",
         )

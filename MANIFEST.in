@@ -1,0 +1,5 @@
+recursive-include tools *.py
+recursive-include docs *.md *.rst *.py
+prune docs/api/_generated
+prune docs/api/types/_generated
+prune extensions

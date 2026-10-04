@@ -5,13 +5,14 @@ from collections.abc import Sequence
 from ...core import assemble_core as _core_assemble_core
 from ...core import block_core as _core_block_core
 from ...core import stack_core as _core_stack_core
+from ...core.dataset_ownership import analysis_object_dataset
 from ..array import Array
 
 
 def _rewrap_array_output(result: "AnalysisObject") -> Array:
     if isinstance(result, Array):
         return result
-    return Array._from_validated(result.unsafe_data)
+    return Array._from_validated(analysis_object_dataset(result))
 
 
 def assemble_core(

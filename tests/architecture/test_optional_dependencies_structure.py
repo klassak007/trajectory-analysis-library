@@ -1,0 +1,468 @@
+from __future__ import annotations
+
+import ast
+import inspect
+import sys
+import tomllib
+from pathlib import Path
+
+from tal.core.param_engine.map_build import build_param_bounds_map, build_param_map
+from tools.architecture_budget import (
+    function_control_depths,
+    function_parameter_counts,
+)
+
+
+def _assert_no_direct_numba_import(text: str) -> None:
+    module = ast.parse(text)
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] != "numba" for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] != "numba"
+
+
+_NUMBA_IMPL_PATHS = (
+    Path("tal/core/param_engine/numba_backends.py"),
+    Path("tal/core/event_ops/numba_backends.py"),
+    Path("tal/linalg/ops/numba_backends.py"),
+    Path("tal/spatial/kernels/rotation_interp_numba_backends.py"),
+    Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+    Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+    Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
+    Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
+    Path("tal/spatial/kernels/rotation_mean_numba_backends.py"),
+    Path("tal/spatial/kernels/higher_order_interp_numba_backends.py"),
+)
+
+_NUMBA_CLEANED_NESTING_FUNCTIONS = (
+    ("tal/core/param_engine/numba_backends.py", "_fill_source"),
+    ("tal/core/param_engine/numba_backends.py", "_nearest_pick"),
+    ("tal/core/param_engine/numba_backends.py", "_map_nearest_row"),
+    ("tal/core/param_engine/numba_backends.py", "_map_linear_interior"),
+    ("tal/core/param_engine/numba_backends.py", "_map_linear_query"),
+    ("tal/core/param_engine/numba_backends.py", "_map_linear_row"),
+    ("tal/core/param_engine/numba_backends.py", "_map_row"),
+    ("tal/core/param_engine/numba_backends.py", "_map_block_impl"),
+    ("tal/core/event_ops/numba_backends.py", "_append_transition"),
+    ("tal/core/event_ops/numba_backends.py", "_transition_candidates"),
+    ("tal/core/event_ops/numba_backends.py", "_trigger_candidates"),
+    ("tal/core/event_ops/numba_backends.py", "_interval_has_trigger_collision"),
+    ("tal/core/event_ops/numba_backends.py", "_skip_interval_segment"),
+    ("tal/core/event_ops/numba_backends.py", "_write_interval_segments"),
+    ("tal/spatial/kernels/topology_scan_numba_backends.py", "_compose_next_pose"),
+    ("tal/spatial/kernels/topology_scan_numba_backends.py", "_write_pose_output"),
+    ("tal/spatial/kernels/topology_scan_numba_backends.py", "_chain_pose_row_impl"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_param_at"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_value_at"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_subinterval_integral"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_forward_unequal_interval"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_reverse_unequal_interval"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_interval_integral"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_row_impl"),
+    ("tal/spatial/kernels/kinematics_temporal_numba_backends.py", "_simpson_block_impl"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_squad_sample"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_pose_sample"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_squad_block_impl"),
+    ("tal/spatial/kernels/higher_order_interp_numba_backends.py", "_pose_block_impl"),
+)
+
+
+def _function_section(text: str, start: str, end: str) -> str:
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def test_numba_opt_001_numba_extra_is_optional_only() -> None:
+    """ID: NUMBA_OPT_001_numba_extra_is_optional_only."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    deps = pyproject["project"]["dependencies"]
+    optional = pyproject["project"]["optional-dependencies"]
+    assert optional["numba"] == ["numba>=0.65.1"]
+    assert all(not dep.startswith("numba") for dep in deps)
+    assert all("tal[numba]" not in dep for dep in optional["test"])
+    assert all("tal[numba]" not in dep for dep in optional["dev"])
+    assert all("tal[numba]" not in dep for dep in optional["full"])
+
+
+
+
+
+
+def test_numba_arch_001_no_unguarded_numba_imports_in_core_import_path() -> None:
+    """ID: NUMBA_ARCH_001_no_unguarded_numba_imports_in_core_import_path."""
+    offenders = []
+    for path in sorted(Path("tal").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(module):
+            if isinstance(node, ast.Import):
+                offenders.extend((path.as_posix(), alias.name) for alias in node.names if alias.name == "numba")
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "numba":
+                offenders.append((path.as_posix(), node.module))
+    assert offenders == []
+
+
+def test_numba_arch_002_optional_import_helper_has_no_domain_imports() -> None:
+    """ID: NUMBA_ARCH_002; the optional helper has only stdlib static imports.
+
+    Direct Import/ImportFrom nodes are inspected; dynamic imports are outside
+    this guard. Standard-library refactoring remains unrestricted. Runtime
+    optional-dependency tests cover the lazy Numba import boundary separately.
+    """
+    module = ast.parse(Path("tal/utils/numba_support.py").read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert all(name.split(".")[0] in sys.stdlib_module_names for name in imports)
+
+
+def test_numba_arch_003_numba_kernels_are_schema_free() -> None:
+    """ID: NUMBA_ARCH_003_numba_kernels_are_schema_free."""
+    banned = [
+        "import xarray",
+        "xr.",
+        'attrs["tal"]',
+        "attrs['tal']",
+        "set_roles(",
+        "set_param_coord(",
+        "set_validity(",
+        "ParamMap",
+        "ParamBoundsMap",
+    ]
+    for path in [
+        Path("tal/core/param_engine/numba_backends.py"),
+        Path("tal/core/event_ops/numba_backends.py"),
+        Path("tal/linalg/ops/numba_backends.py"),
+        Path("tal/spatial/kernels/rotation_interp_numba_backends.py"),
+        Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+        Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
+        Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
+        Path("tal/spatial/kernels/rotation_mean_numba_backends.py"),
+    ]:
+        text = path.read_text(encoding="utf-8")
+        assert [token for token in banned if token in text] == []
+
+
+def test_numba_arch_004_numba_backend_dispatch_keeps_public_signatures_stable() -> None:
+    """ID: NUMBA_ARCH_004_numba_backend_dispatch_keeps_public_signatures_stable."""
+    map_params = inspect.signature(build_param_map).parameters
+    bounds_params = inspect.signature(build_param_bounds_map).parameters
+    assert tuple(map_params) == ("param", "query", "sequence_dim", "query_dim", "valid_mask", "options", "param_kind")
+    assert tuple(bounds_params) == ("param", "start", "stop", "sequence_dim", "valid_mask", "param_kind")
+    assert all(param.kind is inspect.Parameter.KEYWORD_ONLY for param in map_params.values())
+    assert all(param.kind is inspect.Parameter.KEYWORD_ONLY for param in bounds_params.values())
+
+
+def test_numba_arch_005_numba_expected_failures_translate_through_wrappers() -> None:
+    """ID: NUMBA_ARCH_005_numba_expected_failures_translate_through_wrappers."""
+    helper = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    param_text = Path("tal/core/param_engine/numba_backends.py").read_text(encoding="utf-8")
+    event_text = Path("tal/core/event_ops/numba_backends.py").read_text(encoding="utf-8")
+    linalg_text = Path("tal/linalg/ops/numba_backends.py").read_text(encoding="utf-8")
+    spatial_text = Path("tal/spatial/kernels/rotation_interp_numba_backends.py").read_text(encoding="utf-8")
+    assert "Install with 'tal[numba]'" in helper
+    assert "def _raise_map_status(" in param_text
+    assert "def _raise_bounds_status(" in param_text
+    assert "_DUPLICATE_BRACKET_ERROR" in param_text
+    assert "_MAP_MONOTONIC_ERROR" in param_text
+    assert "_BOUNDS_MONOTONIC_ERROR" in param_text
+    assert "extracted event boundaries include non-finite clock values" in event_text
+    assert "require_numba(owner)" in linalg_text
+    assert "def _raise_slerp_status(" in spatial_text
+    assert "finite alpha values must be within [0, 1]" in spatial_text
+
+
+def test_numba_arch_006_shared_block_rows_helper_is_schema_free() -> None:
+    """ID: NUMBA_ARCH_006_shared_block_rows_helper_is_schema_free."""
+    path = Path("tal/utils/block_rows.py")
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == ["__future__", "dataclasses", "numpy"]
+    text = path.read_text(encoding="utf-8")
+    assert "xarray" not in text
+    assert "tal.core" not in text
+    assert "tal.linalg" not in text
+    assert "tal.spatial" not in text
+    _assert_no_direct_numba_import(text)
+
+
+def test_numba_arch_007_shared_block_rows_helper_preserves_owner_boundaries() -> None:
+    """ID: NUMBA_ARCH_007_shared_block_rows_helper_preserves_owner_boundaries."""
+    text = Path("tal/utils/block_rows.py").read_text(encoding="utf-8")
+    banned = ["param", "event", "lstsq", "quaternion", "PARAM_", "EVENT_", "LSTSQ_", "SPATIAL_"]
+    assert [token for token in banned if token in text] == []
+
+
+def test_numba_arch_008_numba_compile_policy_helper_is_minimal() -> None:
+    """ID: NUMBA_ARCH_008_numba_compile_policy_helper_is_minimal."""
+    text = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    assert "def njit_kernel(" in text
+    assert "cache=True" in text
+    assert "fastmath=False" in text
+    assert "parallel=True" not in text
+    assert "**kwargs" not in text
+
+
+def test_numba_arch_009_numba_benchmark_protocol_is_shared() -> None:
+    """ID: NUMBA_ARCH_009_numba_benchmark_protocol_is_shared."""
+    helper = Path("tal/utils/numba_bench.py").read_text(encoding="utf-8")
+    shim = Path("benchmarks/_numba_bench.py").read_text(encoding="utf-8")
+    assert "NUMBA_CACHE_DIR" in helper
+    assert "TemporaryDirectory" in helper
+    assert "sys.executable" in helper
+    assert "from tal.utils.numba_bench import" in shim
+    for path in [
+        Path("benchmarks/bench_param_numba_backends.py"),
+        Path("benchmarks/bench_event_numba_backends.py"),
+        Path("benchmarks/bench_linalg_lstsq_numba_backends.py"),
+        Path("benchmarks/bench_spatial_slerp_numba_backends.py"),
+        Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py"),
+        Path("benchmarks/bench_spatial_kinematics_stencil_numba_backends.py"),
+        Path("benchmarks/bench_spatial_kinematics_local_poly_numba_backends.py"),
+        Path("benchmarks/bench_spatial_topology_scan_numba_backends.py"),
+        Path("benchmarks/bench_spatial_fixed_size_numba_backends.py"),
+        Path("benchmarks/bench_spatial_rotation_mean_numba_backends.py"),
+        Path("benchmarks/bench_spatial_higher_order_interp_numba_backends.py"),
+    ]:
+        text = path.read_text(encoding="utf-8")
+        assert "from _numba_bench import" in text
+        assert "NUMBA_CACHE_DIR" not in text
+        assert "TemporaryDirectory" not in text
+
+
+def test_numba_arch_010_numba_scan_helper_is_schema_free() -> None:
+    """ID: NUMBA_ARCH_010_numba_scan_helper_is_schema_free."""
+    path = Path("tal/utils/numba_scan.py")
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == ["__future__", "dataclasses", "typing", "numpy", "tal.utils.block_rows"]
+    text = path.read_text(encoding="utf-8")
+    assert "xarray" not in text
+    assert "tal.core" not in text
+    assert "tal.linalg" not in text
+    assert "tal.spatial" not in text
+    _assert_no_direct_numba_import(text)
+
+
+def test_numba_arch_011_numba_scan_helper_preserves_owner_boundaries() -> None:
+    """ID: NUMBA_ARCH_011_numba_scan_helper_preserves_owner_boundaries."""
+    text = Path("tal/utils/numba_scan.py").read_text(encoding="utf-8")
+    banned = [
+        "kalman",
+        "quaternion",
+        "event",
+        "frame",
+        "joint",
+        "lstsq",
+        "PARAM_",
+        "EVENT_",
+        "LSTSQ_",
+        "SPATIAL_",
+        "KINEMATICS_",
+    ]
+    assert [token for token in banned if token in text] == []
+
+
+def test_numba_arch_012_numba_scan_substrate_has_no_generic_callback_executor() -> None:
+    """ID: NUMBA_ARCH_012_numba_scan_substrate_has_no_generic_callback_executor."""
+    text = Path("tal/utils/numba_scan.py").read_text(encoding="utf-8")
+    assert "Callable" not in text
+    assert "callback" not in text.lower()
+    assert "def scan(" not in text
+    assert "njit" not in text
+
+
+def test_numba_arch_013_ordered_axes_are_not_inferred_from_batch_dims() -> None:
+    """ID: NUMBA_ARCH_013_ordered_axes_are_not_inferred_from_batch_dims."""
+    text = Path("tal/utils/numba_scan.py").read_text(encoding="utf-8")
+    assert "ordered_axes:" in text
+    assert "_validate_axes(axis_tuple" in text
+    assert "spec.ordered_ndim != len(axes)" in text
+    assert "axis.name ==" not in text
+    assert "batch" not in text
+
+
+def test_numba_arch_020_public_numba_utility_surface_import_boundaries() -> None:
+    """ID: NUMBA_ARCH_020_public_numba_utility_surface_import_boundaries."""
+    _assert_no_direct_numba_import("from tal.utils import numba as tal_numba")
+    try:
+        _assert_no_direct_numba_import("import numba.core")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("dotted numba import was not rejected")
+
+    facade = Path("tal/utils/numba/__init__.py")
+    stencil = Path("tal/utils/numba_stencil.py")
+    bench = Path("tal/utils/numba_bench.py")
+    assert facade.exists()
+    assert stencil.exists()
+    assert bench.exists()
+
+    facade_text = facade.read_text(encoding="utf-8")
+    assert "from tal.utils.block_rows import" in facade_text
+    assert "from tal.utils.numba_bench import" in facade_text
+    assert "from tal.utils.numba_scan import" in facade_text
+    assert "from tal.utils.numba_stencil import" in facade_text
+    assert "from tal.utils.numba_support import" in facade_text
+    assert "benchmarks" not in facade_text
+
+    for path in [facade, stencil, bench]:
+        text = path.read_text(encoding="utf-8")
+        _assert_no_direct_numba_import(text)
+        assert "import xarray" not in text
+        assert "tal.core" not in text
+        assert "tal.spatial" not in text
+        assert "tal.linalg" not in text
+
+
+def test_numba_arch_021_public_numba_utility_surface_has_no_domain_policy() -> None:
+    """ID: NUMBA_ARCH_021_public_numba_utility_surface_has_no_domain_policy."""
+    stencil = Path("tal/utils/numba_stencil.py").read_text(encoding="utf-8")
+    facade = Path("tal/utils/numba/__init__.py").read_text(encoding="utf-8")
+    banned = [
+        "valid_mask",
+        "monotonic",
+        "gaussian",
+        "smooth",
+        "interp",
+        "quaternion",
+        "event",
+        "duplicate",
+        "ParamMap",
+        "ParamBoundsMap",
+        "KINEMATICS_",
+        "SPATIAL_",
+        "EVENT_",
+        "PARAM_",
+        "LSTSQ_",
+    ]
+    assert [token for token in banned if token in stencil] == []
+    assert "benchmarks" not in facade
+    assert "_numba_bench" not in facade
+
+
+def test_numba_arch_022_public_numba_benchmark_helpers_are_schema_free() -> None:
+    """ID: NUMBA_ARCH_022_public_numba_benchmark_helpers_are_schema_free."""
+    path = Path("tal/utils/numba_bench.py")
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imports.append(node.module)
+    assert imports == [
+        "__future__",
+        "math",
+        "numbers",
+        "os",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "statistics",
+        "time",
+        "typing",
+    ]
+    text = path.read_text(encoding="utf-8")
+    assert "NUMBA_CACHE_DIR" in text
+    assert "sys.executable" in text
+    assert "subprocess.run" in text
+    _assert_no_direct_numba_import(text)
+    assert "xarray" not in text
+    assert "tal.core" not in text
+    assert "tal.spatial" not in text
+    assert "tal.linalg" not in text
+
+
+def test_numba_arch_023_public_numba_window_topology_helpers_stay_policy_free() -> None:
+    """ID: NUMBA_ARCH_023_public_numba_window_topology_helpers_stay_policy_free."""
+    texts = [
+        Path("tal/utils/numba_stencil.py").read_text(encoding="utf-8"),
+        Path("tal/utils/numba_scan.py").read_text(encoding="utf-8"),
+        Path("tal/utils/numba/__init__.py").read_text(encoding="utf-8"),
+    ]
+    banned = [
+        "valid_mask",
+        "monotonic",
+        "gaussian",
+        "smooth",
+        "interp",
+        "quaternion",
+        "event",
+        "duplicate",
+        "ParamMap",
+        "ParamBoundsMap",
+        "KINEMATICS_",
+        "SPATIAL_",
+        "EVENT_",
+        "PARAM_",
+        "LSTSQ_",
+    ]
+    for text in texts:
+        assert [token for token in banned if token in text] == []
+    stencil = texts[0]
+    scan = texts[1]
+    assert "def prepare_window_rows(" in stencil
+    assert "def prepare_topology_rows(" in scan
+    assert 'ScanAxisSpec(axis_name, "topology")' in scan
+    assert "def scan(" not in scan
+    assert "Callable" not in scan
+
+
+def test_numba_arch_024_numba_sidecar_helper_signature_budget_closeout() -> None:
+    """ID: NUMBA_ARCH_024_numba_sidecar_helper_signature_budget_closeout."""
+    failures = []
+    for path in _NUMBA_IMPL_PATHS:
+        for name, count in function_parameter_counts(path).items():
+            if count > 10:
+                failures.append(f"{path.as_posix()}:{name} has {count} parameters")
+    assert failures == []
+
+
+def test_numba_arch_025_cleaned_numba_kernel_helpers_respect_nesting_budget() -> None:
+    """ID: NUMBA_ARCH_025_cleaned_numba_kernel_helpers_respect_nesting_budget."""
+    failures = []
+    for path_text, name in _NUMBA_CLEANED_NESTING_FUNCTIONS:
+        path = Path(path_text)
+        depth = function_control_depths(path)[name]
+        if depth > 2:
+            failures.append(f"{path.as_posix()}:{name} nesting={depth}")
+    assert failures == []
+
+
+def test_numba_opt_008_default_migration_preserves_no_numba_install() -> None:
+    """ID: NUMBA_OPT_008_default_migration_preserves_no_numba_install."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert all(not dep.startswith("numba") for dep in pyproject["project"]["dependencies"])
+    optional = pyproject["project"]["optional-dependencies"]
+    assert any(dep.startswith("numba") for dep in optional["numba"])
+
+
+def test_numba_opt_009_explicit_numba_failures_do_not_fallback_silently() -> None:
+    """ID: NUMBA_OPT_009_explicit_numba_failures_do_not_fallback_silently."""
+    helper = Path("tal/utils/numba_support.py").read_text(encoding="utf-8")
+    assert "def require_numba(" in helper
+    assert "raise ImportError" in helper
+    for path in (
+        Path("tal/core/param_engine/numba_backends.py"),
+        Path("tal/core/event_ops/numba_backends.py"),
+        Path("tal/linalg/ops/numba_backends.py"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "require_numba(" in text
+        assert "except ImportError" not in text
+        assert "fallback" not in text.lower()

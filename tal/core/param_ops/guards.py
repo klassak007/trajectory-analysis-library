@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 import numpy as np
 import xarray as xr
+
 from tal.utils.xarray_namespace import dataset_namespace_names, unique_temp_dim
 
 from ..schema_read import read_roles
@@ -73,16 +74,23 @@ def validate_query_dim_name(
 
 
 def mark_reserved_coord(da: xr.DataArray, *, name: str) -> xr.DataArray:
-    out = da.copy(deep=False)
-    attrs = dict(out.attrs)
-    attrs[_RESERVED_OWNER_KEY] = _RESERVED_OWNER_VALUE
-    attrs[_RESERVED_NAME_KEY] = str(name)
-    attrs[_RESERVED_TOKEN_KEY] = _RESERVED_TOKEN_VALUE
-    out.attrs = attrs
-    return out
+    return da.assign_attrs(
+        {
+            _RESERVED_OWNER_KEY: _RESERVED_OWNER_VALUE,
+            _RESERVED_NAME_KEY: str(name),
+            _RESERVED_TOKEN_KEY: _RESERVED_TOKEN_VALUE,
+        }
+    )
 
 
-def _reserved_coord_is_owned(ds: xr.Dataset, *, name: str) -> bool:
+def mark_generated_size_coord(ds: xr.Dataset, *, name: str | None) -> xr.Dataset:
+    """Mark parameter-generated size metadata without altering its values."""
+    if name is None or name not in ds.coords:
+        return ds
+    return ds.assign_coords({name: mark_reserved_coord(ds.coords[name], name=name)})
+
+
+def reserved_coord_is_owned(ds: xr.Dataset | xr.DataArray, *, name: str) -> bool:
     attrs = ds.coords[name].attrs
     return (
         attrs.get(_RESERVED_OWNER_KEY) == _RESERVED_OWNER_VALUE
@@ -126,7 +134,9 @@ def _is_compatible_valid_coord(
 
 def coerce_float_scalar(value: object, *, owner: str, field: str) -> float:
     if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"{owner}: {field} must be a numeric scalar.")
+        raise ValueError(  # noqa: TRY004 - policy rejects bool as a numeric value
+            f"{owner}: {field} must be a numeric scalar."
+        )
     try:
         arr = np.asarray(value)
     except (TypeError, ValueError) as exc:
@@ -151,10 +161,11 @@ def assert_reserved_metadata_safe(
     names = tuple(str(name) for name in reserved)
     collisions = [name for name in names if name in ds.dims]
     collisions.extend(name for name in names if name in ds.data_vars)
+    collisions.extend(name for name in names if name in ds.xindexes)
     for name in names:
         if name not in ds.coords:
             continue
-        if _reserved_coord_is_owned(ds, name=name):
+        if reserved_coord_is_owned(ds, name=name):
             continue
         if _is_compatible_valid_coord(ds, name=name):
             continue
@@ -171,12 +182,13 @@ def assert_reserved_metadata_safe(
 
 
 __all__ = [
-    "dataset_namespace_names",
-    "mark_reserved_coord",
     "assert_query_dim_safe",
-    "validate_query_dim_name",
     "assert_reserved_metadata_safe",
     "assert_unique_dim_labels",
     "coerce_float_scalar",
+    "dataset_namespace_names",
+    "mark_reserved_coord",
+    "reserved_coord_is_owned",
     "unique_temp_dim",
+    "validate_query_dim_name",
 ]

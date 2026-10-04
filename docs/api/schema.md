@@ -55,8 +55,9 @@ merge_schema(ds, patch, *, validate=True)
 validate_schema(ds)
 ```
 
-All writer APIs are atomic candidate-update operations. On failure they raise
-`SchemaError` and do not partially mutate the caller dataset.
+All writer APIs are atomic candidate-update operations and do not partially
+mutate the caller dataset. Boundary type violations raise `TypeError`; schema
+validation failures raise `SchemaError`.
 
 ## Role Semantics
 

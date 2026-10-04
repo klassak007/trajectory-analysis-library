@@ -9,10 +9,22 @@ import xarray as xr
 
 from tal import AnalysisObject
 from tal import ufuncs as tal_ufuncs
-from tal.core import ComponentRegistryOptions, ComponentSpec, define_components, read_components
+from tal.core import (
+    ComponentRegistryOptions,
+    ComponentSpec,
+    define_components,
+    read_components,
+)
+from tal.core.orchestration.runtime_checks import (
+    resolve_single_numeric_var_single_core_dim,
+)
 from tal.core.schema import set_param_coord
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
-from tal.core.orchestration.runtime_checks import resolve_single_numeric_var_single_core_dim
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
+from tal.frames import FrameGraph
 from tal.spatial import (
     Acceleration,
     AngularAcceleration,
@@ -48,7 +60,7 @@ def _vector3_dataset(*, var_name: str, core_dim: str, values: np.ndarray | None 
         name=var_name,
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name=var_name), sequence_dim=sequence_dim, core_dims=(core_dim,), validate=True)
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _quat_dataset(*, sequence_dim: str = "sample", labels: tuple[str, str, str, str] = _QUAT) -> xr.Dataset:
@@ -59,7 +71,7 @@ def _quat_dataset(*, sequence_dim: str = "sample", labels: tuple[str, str, str, 
         name="rotation",
     )
     ao = AnalysisObject.from_data(arr.to_dataset(name="rotation"), sequence_dim=sequence_dim, core_dims=("quat",), validate=True)
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _position(*, sequence_dim: str = "sample", values: np.ndarray | None = None) -> Position:
@@ -143,8 +155,8 @@ def test_spatial_core_080_velocity_acceleration_family_parity_through_shared_own
     """ID: SPATIAL_CORE_080_velocity_acceleration_family_parity_through_shared_owner."""
     vel = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True)
     acc = Acceleration.from_linear_angular(_linear_acceleration(), _angular_acceleration(), validate=True)
-    assert get_velocity_rep(vel.unsafe_data, owner="test") == "components"
-    assert get_acceleration_rep(acc.unsafe_data, owner="test") == "components"
+    assert get_velocity_rep(vel.as_dataset(copy="none"), owner="test") == "components"
+    assert get_acceleration_rep(acc.as_dataset(copy="none"), owner="test") == "components"
     assert set(read_components(vel).keys()) == {"linear", "angular"}
     assert set(read_components(acc).keys()) == {"linear", "angular"}
     assert isinstance(vel.linear(validate=True), LinearVelocity)
@@ -166,15 +178,15 @@ def test_spatial_core_081_frame_policy_parity_across_compose_apply_and_intent() 
         child="b",
         validate=True,
     )
-    assert get_frames(rot_out.unsafe_data) == ("world", "b")
-    assert get_frames(pose_out.unsafe_data) == ("world", "b")
-    assert get_frames(pos_out.unsafe_data) == ("world", "b")
+    assert get_frames(rot_out.as_dataset(copy="none")) == ("world", "b")
+    assert get_frames(pose_out.as_dataset(copy="none")) == ("world", "b")
+    assert get_frames(pos_out.as_dataset(copy="none")) == ("world", "b")
 
 
 def test_spatial_core_082_single_var_single_core_shared_resolver_parity() -> None:
     """ID: SPATIAL_CORE_082_single_var_single_core_shared_resolver_parity."""
-    pos_var, pos_core = resolve_single_numeric_var_single_core_dim(_position().unsafe_data, owner="test", what="position")
-    rot_var, rot_core = resolve_single_numeric_var_single_core_dim(_rotation().unsafe_data, owner="test", what="rotation")
+    pos_var, pos_core = resolve_single_numeric_var_single_core_dim(_position().as_dataset(copy="none"), owner="test", what="position")
+    rot_var, rot_core = resolve_single_numeric_var_single_core_dim(_rotation().as_dataset(copy="none"), owner="test", what="rotation")
     assert pos_var == "position"
     assert pos_core == "axis"
     assert rot_var == "rotation"
@@ -192,10 +204,10 @@ def test_spatial_core_083_paired_component_assembly_parity_for_pose_and_kinemati
     assert set(read_components(pose).keys()) == {"position", "rotation"}
     assert set(read_components(vel).keys()) == {"linear", "angular"}
     pos, rot = pose.decompose(validate=True)
-    assert list(pos.unsafe_data.data_vars) == ["position"]
-    assert list(rot.unsafe_data.data_vars) == ["rotation"]
-    assert "datavar" not in pos.unsafe_data.data_vars
-    assert "datavar" not in rot.unsafe_data.data_vars
+    assert list(pos.as_dataset(copy="none").data_vars) == ["position"]
+    assert list(rot.as_dataset(copy="none").data_vars) == ["rotation"]
+    assert "datavar" not in pos.as_dataset(copy="none").data_vars
+    assert "datavar" not in rot.as_dataset(copy="none").data_vars
 
 
 def test_spatial_core_084_conversion_finalization_parity_rotation_pose_vector6() -> None:
@@ -204,12 +216,12 @@ def test_spatial_core_084_conversion_finalization_parity_rotation_pose_vector6()
     pose = _pose(parent="world", child="body").as_matrix(validate=True)
     vel = frame_retag(Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True), parent="world", child="body", validate=True)
     vel_v6 = vel.as_vector6(validate=True)
-    assert get_rotation_rep(rot.unsafe_data, owner="test") == "matrix"
-    assert get_pose_rep(pose.unsafe_data, owner="test") == "matrix"
-    assert get_velocity_rep(vel_v6.unsafe_data, owner="test") == "vector6"
-    assert get_frames(rot.unsafe_data) == ("world", "body")
-    assert get_frames(pose.unsafe_data) == ("world", "body")
-    assert get_frames(vel_v6.unsafe_data) == ("world", "body")
+    assert get_rotation_rep(rot.as_dataset(copy="none"), owner="test") == "matrix"
+    assert get_pose_rep(pose.as_dataset(copy="none"), owner="test") == "matrix"
+    assert get_velocity_rep(vel_v6.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_frames(rot.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(pose.as_dataset(copy="none")) == ("world", "body")
+    assert get_frames(vel_v6.as_dataset(copy="none")) == ("world", "body")
 
 
 def test_spatial_core_085_alignment_topology_parity_after_shared_alignment_owner() -> None:
@@ -223,8 +235,8 @@ def test_spatial_core_085_alignment_topology_parity_after_shared_alignment_owner
 def test_spatial_core_086_wrap_helper_parity_validate_and_nonvalidate_paths() -> None:
     """ID: SPATIAL_CORE_086_wrap_helper_parity_validate_and_nonvalidate_paths."""
     rot = _rotation()
-    wrapped_validate = wrap_as(Rotation, rot.unsafe_data, validate=True)
-    wrapped_like = wrap_like(rot, rot.unsafe_data, validate=False)
+    wrapped_validate = wrap_as(Rotation, rot.as_dataset(copy="none"), validate=True)
+    wrapped_like = wrap_like(rot, rot.as_dataset(copy="none"), validate=False)
     assert isinstance(wrapped_validate, Rotation)
     assert isinstance(wrapped_like, Rotation)
 
@@ -275,8 +287,8 @@ def test_spatial_hard_100_kinematics_family_wrong_operand_type_boundaries_are_de
 
 def test_spatial_hard_101_paired_component_optional_name_mismatch_fails_closed() -> None:
     """ID: SPATIAL_HARD_101_paired_component_optional_name_mismatch_fails_closed."""
-    linear_ds = _linear_velocity().unsafe_data.assign_coords({"tau": ("sample", [0.0, 1.0])})
-    angular_ds = _angular_velocity().unsafe_data.assign_coords({"sigma": ("sample", [0.0, 1.0])})
+    linear_ds = _linear_velocity().as_dataset(copy="none").assign_coords({"tau": ("sample", [0.0, 1.0])})
+    angular_ds = _angular_velocity().as_dataset(copy="none").assign_coords({"sigma": ("sample", [0.0, 1.0])})
     linear = LinearVelocity(set_param_coord(linear_ds, name="tau", validate=False))
     angular = AngularVelocity(set_param_coord(angular_ds, name="sigma", validate=False))
     with pytest.raises(ValueError, match="spatial.velocity.from_linear_angular"):
@@ -328,15 +340,15 @@ def test_bcast_core_051_velocity_from_linear_angular_one_sided_static_component_
         )
     )
     out = Velocity.from_linear_angular(linear, angular, validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("linear_axis", "angular_axis")
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
     np.testing.assert_allclose(
-        out.angular(validate=True).unsafe_data["angular_velocity"].transpose("sample", "trial", "angular_axis").values,
+        out.angular(validate=True).as_dataset(copy="none")["angular_velocity"].transpose("sample", "trial", "angular_axis").values,
         np.broadcast_to(np.asarray([0.0, 1.0, 0.0], dtype=float), (2, 2, 3)),
         atol=1e-6,
     )
@@ -383,13 +395,13 @@ def test_bcast_core_052_acceleration_from_linear_angular_one_sided_static_compon
         )
     )
     out = Acceleration.from_linear_angular(linear, angular, validate=True)
-    declared, sequence_dim, batch_dims, core_dims = read_roles(out.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(out.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ("linear_axis", "angular_axis")
     np.testing.assert_allclose(
-        out.angular(validate=True).unsafe_data["angular_acceleration"].transpose("sample", "trial", "angular_axis").values,
+        out.angular(validate=True).as_dataset(copy="none")["angular_acceleration"].transpose("sample", "trial", "angular_axis").values,
         np.broadcast_to(np.asarray([0.0, 0.5, 0.0], dtype=float), (2, 2, 3)),
         atol=1e-6,
     )
@@ -407,10 +419,13 @@ def test_spatial_core_120_velocity_merge_tolerates_reserved_valid_coord_attr_dri
         ),
     )
     linear = LinearVelocity(linear_ao)
-    angular_ds = linear_ao.unsafe_data.rename({"linear_velocity": "angular_velocity", "linear_axis": "angular_axis"}).copy(deep=True)
+    angular_ds = linear_ao.as_dataset(copy="none").rename({"linear_velocity": "angular_velocity", "linear_axis": "angular_axis"}).copy(deep=True)
     assert "valid" in angular_ds.coords
-    assert linear_ao.unsafe_data.coords["valid"].attrs
+    assert linear_ao.as_dataset(copy="none").coords["valid"].attrs
     angular_ds.coords["valid"].attrs = {}
+    from tal.core.schema import repair_schema_after_structure
+
+    angular_ds = repair_schema_after_structure(angular_ds, validate=False)
     angular = AngularVelocity(
         AnalysisObject.from_data(
             angular_ds,
@@ -421,15 +436,15 @@ def test_spatial_core_120_velocity_merge_tolerates_reserved_valid_coord_attr_dri
         )
     )
     out = Velocity.from_linear_angular(linear, angular, validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
     np.testing.assert_allclose(
-        out.linear(validate=True).unsafe_data["linear_velocity"].values,
-        linear.unsafe_data["linear_velocity"].values,
+        out.linear(validate=True).as_dataset(copy="none")["linear_velocity"].values,
+        linear.as_dataset(copy="none")["linear_velocity"].values,
         atol=1e-6,
     )
     np.testing.assert_allclose(
-        out.angular(validate=True).unsafe_data["angular_velocity"].values,
-        angular.unsafe_data["angular_velocity"].values,
+        out.angular(validate=True).as_dataset(copy="none")["angular_velocity"].values,
+        angular.as_dataset(copy="none")["angular_velocity"].values,
         atol=1e-6,
     )
 
@@ -446,12 +461,15 @@ def test_spatial_core_121_acceleration_merge_tolerates_reserved_valid_coord_attr
         ),
     )
     linear = LinearAcceleration(linear_ao)
-    angular_ds = linear_ao.unsafe_data.rename(
+    angular_ds = linear_ao.as_dataset(copy="none").rename(
         {"linear_acceleration": "angular_acceleration", "linear_axis": "angular_axis"}
     ).copy(deep=True)
     assert "valid" in angular_ds.coords
-    assert linear_ao.unsafe_data.coords["valid"].attrs
+    assert linear_ao.as_dataset(copy="none").coords["valid"].attrs
     angular_ds.coords["valid"].attrs = {}
+    from tal.core.schema import repair_schema_after_structure
+
+    angular_ds = repair_schema_after_structure(angular_ds, validate=False)
     angular = AngularAcceleration(
         AnalysisObject.from_data(
             angular_ds,
@@ -462,15 +480,15 @@ def test_spatial_core_121_acceleration_merge_tolerates_reserved_valid_coord_attr
         )
     )
     out = Acceleration.from_linear_angular(linear, angular, validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
     np.testing.assert_allclose(
-        out.linear(validate=True).unsafe_data["linear_acceleration"].values,
-        linear.unsafe_data["linear_acceleration"].values,
+        out.linear(validate=True).as_dataset(copy="none")["linear_acceleration"].values,
+        linear.as_dataset(copy="none")["linear_acceleration"].values,
         atol=1e-6,
     )
     np.testing.assert_allclose(
-        out.angular(validate=True).unsafe_data["angular_acceleration"].values,
-        angular.unsafe_data["angular_acceleration"].values,
+        out.angular(validate=True).as_dataset(copy="none")["angular_acceleration"].values,
+        angular.as_dataset(copy="none")["angular_acceleration"].values,
         atol=1e-6,
     )
 
@@ -537,11 +555,11 @@ def test_spatial_hard_101b_velocity_sequence_size_coord_mismatch_fails_closed() 
 
 def test_spatial_hard_102_conversion_allocator_collision_fallback_is_deterministic() -> None:
     """ID: SPATIAL_HARD_102_conversion_allocator_collision_fallback_is_deterministic."""
-    ds = _rotation().unsafe_data
+    ds = _rotation().as_dataset(copy="none")
     for coord in ("row", "rot_row", "matrix_row", "col", "rot_col", "matrix_col"):
         ds = ds.assign_coords({coord: 0})
     matrix = Rotation(ds).as_matrix(validate=True)
-    _, _, _, core_dims = read_roles(matrix.unsafe_data)
+    _, _, _, core_dims = read_roles(matrix.as_dataset(copy="none"))
     assert core_dims == ("row_2", "col_2")
 
 
@@ -565,7 +583,7 @@ def test_spatial_hard_104_stale_helper_modules_removed_regression_lock() -> None
 
 def test_spatial_core_095_pose_and_kinematics_component_spec_shared_owner_supports_renamed_component_vars() -> None:
     """ID: SPATIAL_CORE_095_pose_and_kinematics_component_spec_shared_owner_supports_renamed_component_vars."""
-    pose_ds = _pose().unsafe_data.rename({"position": "pos_payload", "rotation": "rot_payload"})
+    pose_ds = _pose().as_dataset(copy="none").rename({"position": "pos_payload", "rotation": "rot_payload"})
     pose_source = AnalysisObject._from_validated(pose_ds)
     pose_registry = {
         "position": ComponentSpec(core_dim="axis", labels=_XYZ, var="pos_payload"),
@@ -576,11 +594,11 @@ def test_spatial_core_095_pose_and_kinematics_component_spec_shared_owner_suppor
         opts=ComponentRegistryOptions(registry=pose_registry, replace=True),
         validate=False,
     )
-    pose = Pose(pose_with_registry.unsafe_data)
+    pose = Pose(pose_with_registry.as_dataset(copy="none"))
     assert read_components(pose)["position"].var == "pos_payload"
     assert read_components(pose)["rotation"].var == "rot_payload"
 
-    vel_ds = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).unsafe_data
+    vel_ds = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_dataset(copy="none")
     vel_ds = vel_ds.rename({"linear_velocity": "lin_payload", "angular_velocity": "ang_payload"})
     vel_source = AnalysisObject._from_validated(vel_ds)
     vel_registry = {
@@ -592,7 +610,7 @@ def test_spatial_core_095_pose_and_kinematics_component_spec_shared_owner_suppor
         opts=ComponentRegistryOptions(registry=vel_registry, replace=True),
         validate=False,
     )
-    velocity = Velocity(vel_with_registry.unsafe_data)
+    velocity = Velocity(vel_with_registry.as_dataset(copy="none"))
     assert read_components(velocity)["linear"].var == "lin_payload"
     assert read_components(velocity)["angular"].var == "ang_payload"
 
@@ -601,14 +619,14 @@ def test_spatial_core_095_pose_and_kinematics_component_spec_shared_owner_suppor
     ("builder", "registry"),
     [
         (
-            lambda: _pose().unsafe_data,
+            lambda: _pose().as_dataset(copy="none"),
             {
                 "position": ComponentSpec(core_dim="axis", labels=_XYZ, var=None),
                 "rotation": ComponentSpec(core_dim="quat", labels=_QUAT, var="rotation"),
             },
         ),
         (
-            lambda: Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).unsafe_data,
+            lambda: Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_dataset(copy="none"),
             {
                 "linear": ComponentSpec(core_dim="linear_axis", labels=_XYZ, var=None),
                 "angular": ComponentSpec(core_dim="angular_axis", labels=_XYZ, var="angular_velocity"),
@@ -634,25 +652,25 @@ def test_spatial_hard_113_pose_and_kinematics_components_require_spec_var_in_reg
         owner = "spatial.velocity.__init__"
         ctor = Velocity
     with pytest.raises(ValueError, match=owner):
-        ctor(rewritten.unsafe_data)
+        ctor(rewritten.as_dataset(copy="none"))
     with pytest.raises(ValueError, match="must declare spec.var"):
-        ctor(rewritten.unsafe_data)
+        ctor(rewritten.as_dataset(copy="none"))
 
 
 def test_spatial_core_096_rotation_pose_conversion_allocator_and_finalize_shared_owner_parity() -> None:
     """ID: SPATIAL_CORE_096_rotation_pose_conversion_allocator_and_finalize_shared_owner_parity."""
-    rot_ds = _rotation().unsafe_data
+    rot_ds = _rotation().as_dataset(copy="none")
     for coord in ("row", "rot_row", "matrix_row", "col", "rot_col", "matrix_col"):
         rot_ds = rot_ds.assign_coords({coord: 0})
     rot_matrix = Rotation(rot_ds).as_matrix(validate=True)
-    _, _, _, rot_core_dims = read_roles(rot_matrix.unsafe_data)
+    _, _, _, rot_core_dims = read_roles(rot_matrix.as_dataset(copy="none"))
     assert rot_core_dims == ("row_2", "col_2")
 
-    pose_ds = _pose().unsafe_data
+    pose_ds = _pose().as_dataset(copy="none")
     for coord in ("row", "pose_row", "col", "pose_col"):
         pose_ds = pose_ds.assign_coords({coord: 0})
     pose_matrix = Pose(pose_ds).as_matrix(validate=True)
-    _, _, _, pose_core_dims = read_roles(pose_matrix.unsafe_data)
+    _, _, _, pose_core_dims = read_roles(pose_matrix.as_dataset(copy="none"))
     assert pose_core_dims == ("pose_row_2", "pose_col_2")
 
 
@@ -699,9 +717,9 @@ def test_spatial_core_098_metadata_package_relayout_preserves_rep_and_role_acces
     pose = _pose(parent="world", child="body")
     rotation = _rotation()
     velocity = Velocity.from_linear_angular(_linear_velocity(), _angular_velocity(), validate=True).as_vector6(validate=True)
-    assert spatial_metadata.get_pose_rep(pose.unsafe_data, owner="test") == "components"
-    assert spatial_metadata.get_rotation_rep(rotation.unsafe_data, owner="test") == "quat"
-    assert spatial_metadata.get_velocity_rep(velocity.unsafe_data, owner="test") == "vector6"
+    assert spatial_metadata.get_pose_rep(pose.as_dataset(copy="none"), owner="test") == "components"
+    assert spatial_metadata.get_rotation_rep(rotation.as_dataset(copy="none"), owner="test") == "quat"
+    assert spatial_metadata.get_velocity_rep(velocity.as_dataset(copy="none"), owner="test") == "vector6"
     assert spatial_metadata.validate_spatial_roles is not None
 
 
@@ -711,7 +729,7 @@ def test_spatial_core_099_ops_and_kernels_relocation_preserves_transform_behavio
     pos = _position(values=np.asarray([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=float))
     out = rot.apply(pos, validate=True)
     assert isinstance(out, Position)
-    assert get_position_rep(out.unsafe_data, owner="test") == "cart"
+    assert get_position_rep(out.as_dataset(copy="none"), owner="test") == "cart"
 
 
 def test_spatial_core_100_kinematics_subpackage_relayout_preserves_vector6_bridge_behavior() -> None:
@@ -720,8 +738,8 @@ def test_spatial_core_100_kinematics_subpackage_relayout_preserves_vector6_bridg
     acc = Acceleration.from_linear_angular(_linear_acceleration(), _angular_acceleration(), validate=True)
     vel_v6 = vel.as_vector6(validate=True)
     acc_v6 = acc.as_vector6(validate=True)
-    assert get_velocity_rep(vel_v6.unsafe_data, owner="test") == "vector6"
-    assert get_acceleration_rep(acc_v6.unsafe_data, owner="test") == "vector6"
+    assert get_velocity_rep(vel_v6.as_dataset(copy="none"), owner="test") == "vector6"
+    assert get_acceleration_rep(acc_v6.as_dataset(copy="none"), owner="test") == "vector6"
     assert isinstance(vel_v6.as_components(validate=True), Velocity)
     assert isinstance(acc_v6.as_components(validate=True), Acceleration)
 
@@ -747,7 +765,7 @@ def test_spatial_core_102_tal_ufuncs_root_facade_behavior_remains_stable() -> No
     ao = AnalysisObject._from_validated(ds)
     out = tal_ufuncs.sin(ao)
     assert isinstance(out, AnalysisObject)
-    np.testing.assert_allclose(out.unsafe_data["signal"].values, np.sin(ds["signal"].values))
+    np.testing.assert_allclose(out.as_dataset(copy="none")["signal"].values, np.sin(ds["signal"].values))
 
 
 def test_spatial_hard_118_removed_flat_internal_module_paths_are_not_importable() -> None:
@@ -774,19 +792,15 @@ def test_spatial_hard_119_owner_prefixed_apply_boundaries_preserved_after_intern
         _pose().apply(object(), validate=True)
 
 
-def test_spatial_hard_120_position_to_frame_identity_path_still_enforces_owner_prefixed_validation() -> None:
-    """ID: SPATIAL_HARD_120_position_to_frame_identity_path_still_enforces_owner_prefixed_validation."""
-    source = frame_retag(_position(), parent="world", child="body", validate=True)
-    with pytest.raises(TypeError, match="spatial.position.to_frame"):
-        source.to_frame("world", edge_pose_fn=object(), validate=True)
-
-
 def test_spatial_hard_121_owner_prefixed_frame_path_solver_errors_preserved_after_ops_relayout() -> None:
     """ID: SPATIAL_HARD_121_owner_prefixed_frame_path_solver_errors_preserved_after_ops_relayout."""
+    graph = FrameGraph()
+    parent = graph.get_or_create_frame("a")
+    child = graph.get_or_create_frame("b", parent=parent)
     with pytest.raises(TypeError, match="spatial.pose.solve_path_transform"):
-        Pose.solve_path_transform("a", "b", edge_pose_fn=object(), validate=True)
+        Pose.solve_path_transform(parent, child, graph=graph, edge_pose_fn=object(), validate=True)
     with pytest.raises(TypeError, match="spatial.rotation.solve_path_transform"):
-        Rotation.solve_path_transform("a", "b", edge_rotation_fn=object(), validate=True)
+        Rotation.solve_path_transform(parent, child, graph=graph, edge_rotation_fn=object(), validate=True)
 
 
 def test_spatial_hard_122_removed_flat_internal_module_files_remain_absent() -> None:

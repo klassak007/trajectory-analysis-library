@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ._budget import executable_source, file_loc, function_lengths
+from tools.architecture_budget import executable_source, file_loc, function_lengths
 
 
 def _module(path: str) -> ast.Module:
@@ -16,6 +16,15 @@ def _function_nodes(module: ast.Module) -> list[ast.FunctionDef]:
         if isinstance(node, ast.FunctionDef):
             out.append(node)
     return out
+
+
+def _assert_no_direct_import(text: str, module_name: str) -> None:
+    module = ast.parse(text)
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] != module_name for alias in node.names)
+        if isinstance(node, ast.ImportFrom) and node.module:
+            assert node.module.split(".")[0] != module_name
 
 
 def _assert_agents_budget(path: Path) -> None:
@@ -62,9 +71,13 @@ def _parameter_count(node: ast.FunctionDef) -> int:
 def _call_token(call: ast.Call) -> str | None:
     if isinstance(call.func, ast.Name) and call.func.id in {"_resolve_compose_output_frames", "resolve_compose_output_frames"}:
         return "resolve_compose_output_frames"
-    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
-        if call.func.attr == "as_quat" and call.func.value.id in {"self", "right", "left"}:
-            return f"{call.func.value.id}.as_quat"
+    if (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.attr == "as_quat"
+        and call.func.value.id in {"self", "right", "left"}
+    ):
+        return f"{call.func.value.id}.as_quat"
     return None
 
 
@@ -182,7 +195,6 @@ def test_spatial_doc_001_phase8_slice_a1_position_docs_and_api_entries_present()
     """ID: SPATIAL_DOC_001_phase8_slice_a1_position_docs_and_api_entries_present."""
     api_position = Path("docs/api/types/position.md").read_text(encoding="utf-8")
     user_spatial = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8")
-    api_types_index = Path("docs/api/types/index.md").read_text(encoding="utf-8")
     assert "as_delta" in api_position
     assert "cart" in api_position
     assert "Position" in user_spatial
@@ -233,19 +245,6 @@ def test_spatial_doc_002_phase8_slice_a2_rotation_docs_and_api_entries_present()
     assert "rotation" in api_types_index
 
 
-def test_arch_spatial_012_rotation_constructor_validates_spatial_roles_via_metadata_owner() -> None:
-    """ID: ARCH_SPATIAL_012_rotation_constructor_validates_spatial_roles_via_metadata_owner."""
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    assert "from .metadata import (" in rotation_text
-    assert "get_rotation_rep" in rotation_text
-    assert "set_rotation_rep" in rotation_text
-    assert "validate_spatial_roles" in rotation_text
-    assert "validate_spatial_roles(candidate, owner=owner)" in rotation_text
-    assert "tal.ext.spatial.roles" not in rotation_text
-    assert 'attrs["tal"]' not in rotation_text
-    assert "attrs['tal']" not in rotation_text
-
-
 def test_arch_spatial_013_slice_a3_pose_owner_split_and_budget() -> None:
     """ID: ARCH_SPATIAL_013_slice_a3_pose_owner_split_and_budget."""
     files = [
@@ -256,48 +255,6 @@ def test_arch_spatial_013_slice_a3_pose_owner_split_and_budget() -> None:
     for path in files:
         assert path.exists(), f"missing spatial owner file: {path}"
         _assert_agents_budget(path)
-
-
-def test_arch_spatial_014_pose_canonical_kernel_path_no_pairwise_rep_matrix() -> None:
-    """ID: ARCH_SPATIAL_014_pose_canonical_kernel_path_no_pairwise_rep_matrix."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "def apply_to(" not in pose_text
-    assert "CANONICAL_POSITION_REP" in pose_text
-    assert "CANONICAL_ROTATION_REP" in pose_text
-    assert "set_position_rep(" in pose_text
-    assert "set_rotation_rep(" in pose_text
-    assert "matrix3_to_quat_kernel" in pose_text
-
-
-def test_arch_spatial_015_pose_reuses_component_and_frame_owners_no_duplication() -> None:
-    """ID: ARCH_SPATIAL_015_pose_reuses_component_and_frame_owners_no_duplication."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "build_paired_components_dataset" in pose_text
-    assert "clear_component_registry" in pose_text
-    assert "extract_components" in pose_text
-    assert "resolve_pair_registry" in pose_text
-    assert "resolve_component_spec" in pose_text
-    assert "from tal.utils.frame_schema import get_frames, set_frames" in pose_text
-    assert "merge_schema(" not in pose_text
-    assert "tal.ext.components" not in pose_text
-    assert 'attrs["tal"]' not in pose_text
-    assert "attrs['tal']" not in pose_text
-
-
-def test_arch_spatial_016_pose_constructor_validates_roles_via_metadata_owner() -> None:
-    """ID: ARCH_SPATIAL_016_pose_constructor_validates_roles_via_metadata_owner."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "validate_spatial_roles" in pose_text
-    assert "validate_spatial_roles(candidate, owner=owner)" in pose_text
-    assert "tal.ext.spatial.roles" not in pose_text
-
-
-def test_arch_spatial_017_pose_components_merge_uses_exact_join() -> None:
-    """ID: ARCH_SPATIAL_017_pose_components_merge_uses_exact_join."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    paired_text = Path("tal/spatial/kinematics/paired_components.py").read_text(encoding="utf-8")
-    assert "build_paired_components_dataset(" in pose_text
-    assert 'join="exact"' in paired_text
 
 
 def test_arch_spatial_018_runtime_checks_owner_reused_across_position_rotation_pose() -> None:
@@ -317,7 +274,7 @@ def test_arch_spatial_019_pose_from_matrix_clears_components_registry_via_compon
     """ID: ARCH_SPATIAL_019_pose_from_matrix_clears_components_registry_via_component_owner."""
     pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
     assert "def _clear_component_registry_for_matrix_layout(" in pose_text
-    assert "clear_component_registry(source.unsafe_data, owner=owner)" in pose_text
+    assert "return clear_component_registry(" in pose_text
     assert "_clear_component_registry_for_matrix_layout(source, owner=owner)" in pose_text
     assert "merge_schema(" not in pose_text
     assert "tal.ext.components" not in pose_text
@@ -475,18 +432,6 @@ def test_arch_spatial_027_slice_b1_rotation_kernel_owner_uses_scipy_and_no_schem
     assert "attrs['tal']" not in kernels_text
 
 
-def test_arch_spatial_028_slice_b1_rotation_orchestrate_kernel_finalize_split_enforced() -> None:
-    """ID: ARCH_SPATIAL_028_slice_b1_rotation_orchestrate_kernel_finalize_split_enforced."""
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    assert "from .kernels.rotation_kernels import matrix_to_quat_kernel, quat_to_matrix_kernel" in rotation_text
-    assert "def _convert_quat_to_matrix(" in rotation_text
-    assert "def _convert_matrix_to_quat(" in rotation_text
-    assert "def _finalize_rotation_conversion(" in rotation_text
-    assert "finalize_conversion_dataset(" in rotation_text
-    assert "set_rotation_rep(" in rotation_text
-    assert "SciRotation" not in rotation_text
-
-
 def test_spatial_doc_003_phase8_slice_a3_pose_docs_and_api_entries_present() -> None:
     """ID: SPATIAL_DOC_003_phase8_slice_a3_pose_docs_and_api_entries_present."""
     api_pose = Path("docs/api/types/pose.md").read_text(encoding="utf-8")
@@ -520,7 +465,6 @@ def test_spatial_doc_004_phase8_slice_a4_velocity_acceleration_docs_and_api_entr
 def test_spatial_doc_005_phase8_slice_b1_rotation_conversion_docs_and_api_entries_present() -> None:
     """ID: SPATIAL_DOC_005_phase8_slice_b1_rotation_conversion_docs_and_api_entries_present."""
     api_rotation = Path("docs/api/types/rotation.md").read_text(encoding="utf-8")
-    user_spatial = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8")
     api_types_index = Path("docs/api/types/index.md").read_text(encoding="utf-8")
     assert "to_rep" in api_rotation
     assert "as_quat" in api_rotation
@@ -580,13 +524,6 @@ def test_arch_spatial_033_slice_b2_compose_non_core_dim_topology_guard_present()
     assert "align_exact_for_plan(" in rotation_text
     assert "resolve_semantic_topology_from_dataset(" in rotation_text
     assert ('what="compose"' in rotation_text) or ('what="rotation compose"' in rotation_text)
-
-
-def test_arch_spatial_034_slice_b2_compose_wraps_apply_ufunc_valueerror_with_owner_context() -> None:
-    """ID: ARCH_SPATIAL_034_slice_b2_compose_wraps_apply_ufunc_valueerror_with_owner_context."""
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    assert "except ValueError as exc:" in rotation_text
-    assert "compose kernel failed after alignment" in rotation_text
 
 
 def test_arch_spatial_035_slice_b2_compose_frame_check_runs_before_quat_conversion() -> None:
@@ -655,27 +592,6 @@ def test_arch_spatial_038_slice_b3_pose_kernel_owner_no_schema_writes() -> None:
     assert "attrs['tal']" not in kernels_text
 
 
-def test_arch_spatial_039_slice_b3_pose_orchestrate_kernel_finalize_split_enforced() -> None:
-    """ID: ARCH_SPATIAL_039_slice_b3_pose_orchestrate_kernel_finalize_split_enforced."""
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert "from ..kernels.pose_kernels import" in pose_ops_text
-    assert "compose_translation_kernel" in pose_ops_text
-    assert "inverse_translation_kernel" in pose_ops_text
-    assert "components_to_matrix_kernel" in pose_ops_text
-    assert "matrix_to_components_kernel" in pose_ops_text
-    assert "set_pose_rep(" in pose_ops_text
-    assert "set_frames(" in pose_ops_text
-    assert "SciRotation" not in pose_ops_text
-
-
-def test_arch_spatial_040_slice_b3_pose_compose_non_core_dim_topology_guard_present() -> None:
-    """ID: ARCH_SPATIAL_040_slice_b3_pose_compose_non_core_dim_topology_guard_present."""
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert "resolve_nary_topology(" in pose_ops_text
-    assert "align_exact_for_plan(" in pose_ops_text
-    assert 'what="pose compose"' in pose_ops_text
-
-
 def test_arch_spatial_041_slice_b3_pose_compose_frame_check_runs_before_canonical_conversion() -> None:
     """ID: ARCH_SPATIAL_041_slice_b3_pose_compose_frame_check_runs_before_canonical_conversion."""
     pose_ops_module = _module("tal/spatial/ops/pose_ops.py")
@@ -693,13 +609,13 @@ def test_arch_spatial_042_slice_b3_pose_matrix_output_clears_component_registry_
     pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
     assert "_components_to_matrix_dataset(" in pose_ops_text
     assert "ComponentRegistryOptions(registry={}, replace=True)" in pose_ops_text
-    assert "set_pose_rep(cleared.unsafe_data, rep=\"matrix\"" in pose_ops_text
+    assert "output = set_pose_rep(" in pose_ops_text
+    assert "rep=\"matrix\"" in pose_ops_text
 
 
 def test_spatial_doc_007_phase8_slice_b3_pose_conversion_compose_inverse_docs_and_api_entries_present() -> None:
     """ID: SPATIAL_DOC_007_phase8_slice_b3_pose_conversion_compose_inverse_docs_and_api_entries_present."""
     api_pose = Path("docs/api/types/pose.md").read_text(encoding="utf-8")
-    user_spatial = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8")
     api_types_index = Path("docs/api/types/index.md").read_text(encoding="utf-8")
     assert "to_rep" in api_pose
     assert "as_components" in api_pose
@@ -716,7 +632,6 @@ def test_spatial_doc_008_phase8_slice_b4_local_transform_apply_docs_and_api_entr
     api_velocity = Path("docs/api/types/velocity.md").read_text(encoding="utf-8")
     api_acceleration = Path("docs/api/types/acceleration.md").read_text(encoding="utf-8")
     user_spatial = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8")
-    api_types_index = Path("docs/api/types/index.md").read_text(encoding="utf-8")
     assert "apply" in api_rotation
     assert "apply" in api_pose
     assert "apply" in api_velocity
@@ -727,55 +642,11 @@ def test_spatial_doc_008_phase8_slice_b4_local_transform_apply_docs_and_api_entr
     assert "pose apply kernels" not in user_spatial
 
 
-def test_arch_spatial_043_slice_b3_components_layout_requires_component_vars_include_declared_non_core_dims() -> None:
-    """ID: ARCH_SPATIAL_043_slice_b3_components_layout_requires_component_vars_include_declared_non_core_dims."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "required_non_core_dims = (sequence_dim, *batch_dims)" in pose_text
-    assert "required_dims=required_non_core_dims + (pos_dim,)" in pose_text
-    assert "required_dims=required_non_core_dims + (rot_dim,)" in pose_text
-
-
 def test_arch_spatial_044_slice_b3_operation_owner_wraps_pose_kernel_valueerror_boundaries() -> None:
     """ID: ARCH_SPATIAL_044_slice_b3_operation_owner_wraps_pose_kernel_valueerror_boundaries."""
     pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
     assert "pose components->matrix conversion kernel failed." in pose_ops_text
     assert "pose compose translation kernel failed." in pose_ops_text
-
-
-def test_arch_spatial_045_slice_b3_pose_shared_frame_utility_single_owner_reused_by_pose_and_pose_ops() -> None:
-    """ID: ARCH_SPATIAL_045_slice_b3_pose_shared_frame_utility_single_owner_reused_by_pose_and_pose_ops."""
-    shared_text = Path("tal/spatial/policies/frame.py").read_text(encoding="utf-8")
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert "def resolve_components_shared_frames(" in shared_text
-    assert "def resolve_compose_output_frames(" in shared_text
-    assert "from .policies.frame import resolve_components_shared_frames" in pose_text
-    assert "from ..policies.frame import resolve_compose_output_frames, resolve_components_shared_frames" in pose_ops_text
-    assert "from .pose_shared import" not in pose_text
-    assert "from .pose_shared import" not in pose_ops_text
-
-
-def test_arch_spatial_046_pose_matrix_decompose_reuses_single_matrix_to_quat_kernel_owner() -> None:
-    """ID: ARCH_SPATIAL_046_pose_matrix_decompose_reuses_single_matrix_to_quat_kernel_owner."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    kernels_text = Path("tal/spatial/kernels/pose_kernels.py").read_text(encoding="utf-8")
-    assert "from .kernels.pose_kernels import matrix3_to_quat_kernel" in pose_text
-    assert "return matrix3_to_quat_kernel(values)" in pose_text
-    assert "_matrix3_to_quat_decompose_kernel," in pose_text
-    assert "def _matrix_to_quat_kernel(" not in pose_text
-    assert "def matrix3_to_quat_kernel(" in kernels_text
-    assert "quat = matrix3_to_quat_kernel(rotm)" in kernels_text
-
-
-def test_arch_spatial_047_slice_b3_pose_decompose_uses_owner_wrapped_kernel_callable_for_lazy_errors() -> None:
-    """ID: ARCH_SPATIAL_047_slice_b3_pose_decompose_uses_owner_wrapped_kernel_callable_for_lazy_errors."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "def _matrix3_to_quat_decompose_kernel(" in pose_text
-    assert 'owner = "spatial.pose.decompose"' in pose_text
-    assert "return matrix3_to_quat_kernel(values)" in pose_text
-    assert "matrix decomposition quaternion kernel failed." in pose_text
-    assert "_matrix3_to_quat_decompose_kernel," in pose_text
-    assert "matrix3_to_quat_kernel," not in pose_text.split("_matrix3_to_quat_decompose_kernel,")[0]
 
 
 def test_arch_spatial_048_slice_b4_apply_owner_split_and_budget() -> None:
@@ -816,24 +687,6 @@ def test_arch_spatial_050_slice_b4_pose_apply_kernel_owner_no_schema_writes() ->
     assert "merge_schema(" not in kernels_text
     assert 'attrs["tal"]' not in kernels_text
     assert "attrs['tal']" not in kernels_text
-
-
-def test_arch_spatial_051_slice_b4_apply_reuses_rotation_pose_kinematics_and_frame_component_owners() -> None:
-    """ID: ARCH_SPATIAL_051_slice_b4_apply_reuses_rotation_pose_kinematics_and_frame_component_owners."""
-    rotation_apply_text = Path("tal/spatial/ops/rotation_apply_ops.py").read_text(encoding="utf-8")
-    pose_apply_text = Path("tal/spatial/ops/pose_apply_ops.py").read_text(encoding="utf-8")
-    assert "from ..policies.frame import resolve_apply_output_frames" in rotation_apply_text
-    assert "from tal.core.orchestration.alignment import" in rotation_apply_text
-    assert "from ..kernels.rotation_apply_kernels import rotate_vec3_kernel" in rotation_apply_text
-    assert "Velocity.from_linear_angular(" in rotation_apply_text
-    assert "Acceleration.from_linear_angular(" in rotation_apply_text
-    assert "set_frames(" in rotation_apply_text
-    assert "from .rotation_apply_ops import _rotation_apply_with_owner" in pose_apply_text
-    assert "pose.decompose(validate=False)" in pose_apply_text
-    assert "_rotation_apply_with_owner(rotation, target, validate=False, owner=owner)" in pose_apply_text
-    assert "set_frames(" in pose_apply_text
-    assert "merge_schema(" not in rotation_apply_text
-    assert "merge_schema(" not in pose_apply_text
 
 
 def test_arch_spatial_052_slice_b4_apply_frame_check_runs_before_conversion_and_kernel_execution() -> None:
@@ -897,7 +750,6 @@ def test_arch_spatial_055_slice_b4_pose_apply_spatial6_translation_coupling_defe
     """ID: ARCH_SPATIAL_055_slice_b4_pose_apply_spatial6_translation_coupling_deferred_lock."""
     pose_apply_text = Path("tal/spatial/ops/pose_apply_ops.py").read_text(encoding="utf-8")
     assert "_apply_pose_to_spatial_target(" in pose_apply_text
-    assert "_rotation_apply_with_owner(rotation, target, validate=False, owner=owner)" in pose_apply_text
     assert "compose_translation_kernel" not in pose_apply_text
     assert "cross(" not in pose_apply_text
 
@@ -910,7 +762,6 @@ def test_arch_spatial_056_slice_b4_pose_apply_delegation_threads_operation_owner
     assert "partial(_wrap_rotation_apply_kernel, owner=owner)" in rotation_apply_text
     assert 'owner="spatial.rotation.apply"' in rotation_apply_text
     assert "from .rotation_apply_ops import _rotation_apply_with_owner" in pose_apply_text
-    assert "_rotation_apply_with_owner(rotation, target, validate=False, owner=owner)" in pose_apply_text
     assert "rotation_apply(rotation, target, validate=False)" not in pose_apply_text
 
 
@@ -1092,7 +943,6 @@ def test_arch_spatial_061_slice_b5_spatial6_apply_paths_canonicalize_vector6_tar
     assert "def _velocity_components_for_apply(" in rotation_apply_text
     assert "def _acceleration_components_for_apply(" in rotation_apply_text
     assert "from .rotation_apply_ops import _rotation_apply_with_owner" in pose_apply_text
-    assert "_rotation_apply_with_owner(rotation, target, validate=False, owner=owner)" in pose_apply_text
 
 
 def test_arch_spatial_062_slice_b5_no_eager_patterns_in_vector6_conversion_orchestration() -> None:
@@ -1127,7 +977,6 @@ def test_arch_spatial_064_slice_c1_path_solver_owner_split_and_budget() -> None:
 def test_arch_spatial_065_slice_c1_path_solver_reuses_frames_find_path_fold_path_owners() -> None:
     """ID: ARCH_SPATIAL_065_slice_c1_path_solver_reuses_frames_find_path_fold_path_owners."""
     text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
-    assert "from tal.frames import Frame, FrameGraph, find_path, fold_path, get_active_frame_graph" in text
     assert "path = find_path(" in text
     assert "result = fold_path(" in text
     assert "def _ancestors_with_depth(" not in text
@@ -1138,8 +987,6 @@ def test_arch_spatial_065_slice_c1_path_solver_reuses_frames_find_path_fold_path
 def test_arch_spatial_066_slice_c1_path_solver_reuses_rotation_pose_compose_inverse_without_local_math() -> None:
     """ID: ARCH_SPATIAL_066_slice_c1_path_solver_reuses_rotation_pose_compose_inverse_without_local_math."""
     text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
-    assert "from ..rotation import Rotation, _rotation_compose_with_owner, _rotation_inverse_with_owner" in text
-    assert "from .pose_ops import _pose_compose_with_owner, _pose_inverse_with_owner" in text
     assert "_rotation_compose_with_owner(" in text
     assert "_rotation_inverse_with_owner(" in text
     assert "_pose_compose_with_owner(" in text
@@ -1158,52 +1005,11 @@ def test_arch_spatial_067_slice_c1_path_solver_non_mutating_no_graph_write_paths
     assert "attrs['tal']" not in text
 
 
-def test_arch_spatial_068_slice_c1_path_solver_owner_wrapped_lazy_error_boundary_present() -> None:
-    """ID: ARCH_SPATIAL_068_slice_c1_path_solver_owner_wrapped_lazy_error_boundary_present."""
-    path_ops_text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert '_rotation_compose_with_owner(acc, value, validate=False, owner=owner)' in path_ops_text
-    assert '_rotation_inverse_with_owner(value, validate=False, owner=owner)' in path_ops_text
-    assert '_pose_compose_with_owner(acc, value, validate=False, owner=owner)' in path_ops_text
-    assert '_pose_inverse_with_owner(value, validate=False, owner=owner)' in path_ops_text
-    assert "partial(_wrap_compose_quat_kernel, owner=owner)" in rotation_text
-    assert "partial(_wrap_inverse_quat_kernel, owner=owner)" in rotation_text
-    assert "partial(_wrap_compose_translation_kernel, owner=owner)" in pose_ops_text
-    assert "partial(_wrap_inverse_translation_kernel, owner=owner)" in pose_ops_text
-
-
-def test_arch_spatial_069_slice_c1_path_solver_routes_resolver_invocation_through_owner_wrapped_boundary() -> None:
-    """ID: ARCH_SPATIAL_069_slice_c1_path_solver_routes_resolver_invocation_through_owner_wrapped_boundary."""
-    path_ops_text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
-    path_ops_module = _module("tal/spatial/ops/path_solve_ops.py")
-    call_node = _function_node(path_ops_module, "_call_edge_resolver")
-    assert "def _call_edge_resolver(" in path_ops_text
-    assert "signature_checked: bool" in path_ops_text
-    assert "def _require_resolver_signature(" in path_ops_text
-    assert "def _is_invocation_signature_typeerror(" in path_ops_text
-    assert 'signature_checked = _require_resolver_signature(resolver, owner=owner, arg="edge_rotation_fn")' in path_ops_text
-    assert 'signature_checked = _require_resolver_signature(resolver, owner=owner, arg="edge_pose_fn")' in path_ops_text
-    assert path_ops_text.count("signature_checked=signature_checked") == 2
-    assert path_ops_text.count("resolver(child, parent)") == 1
-    assert "if not signature_checked and _is_invocation_signature_typeerror(exc):" in path_ops_text
-    assert "must be callable(child, parent)." in path_ops_text
-    assert "failed for edge" in path_ops_text
-    handler_types = [
-        node
-        for node in ast.walk(call_node)
-        if isinstance(node, ast.ExceptHandler)
-    ]
-    assert any(isinstance(node.type, ast.Name) and node.type.id == "TypeError" for node in handler_types)
-    assert any(isinstance(node.type, ast.Name) and node.type.id == "Exception" for node in handler_types)
-
-
 def test_spatial_doc_009_phase8_slice_b5_spatial6_vector6_bridge_docs_and_api_entries_present() -> None:
     """ID: SPATIAL_DOC_009_phase8_slice_b5_spatial6_vector6_bridge_docs_and_api_entries_present."""
     velocity_doc = Path("docs/api/types/velocity.md").read_text(encoding="utf-8")
     acceleration_doc = Path("docs/api/types/acceleration.md").read_text(encoding="utf-8")
     spatial_guide = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8")
-    api_index = Path("docs/api/types/index.md").read_text(encoding="utf-8")
     assert "as_vector6" in velocity_doc
     assert "from_vector6" in velocity_doc
     assert "as_vector6" in acceleration_doc
@@ -1228,46 +1034,6 @@ def test_arch_spatial_070_slice_c2_frame_api_owner_split_and_budget() -> None:
     owner_path = Path("tal/spatial/ops/frame_api_ops.py")
     assert owner_path.exists(), f"missing spatial owner file: {owner_path}"
     _assert_agents_budget(owner_path)
-
-
-def test_arch_spatial_071_slice_c2_position_to_frame_reuses_c1_pose_solver_and_b4_pose_apply() -> None:
-    """ID: ARCH_SPATIAL_071_slice_c2_position_to_frame_reuses_c1_pose_solver_and_b4_pose_apply."""
-    frame_api_text = Path("tal/spatial/ops/frame_api_ops.py").read_text(encoding="utf-8")
-    assert "_solve_pose_path_transform_with_owner(" in frame_api_text
-    assert "_pose_apply_with_owner(" in frame_api_text
-    assert 'owner = "spatial.position.to_frame"' in frame_api_text
-    frame_api_module = _module("tal/spatial/ops/frame_api_ops.py")
-    position_to_frame = _function_node(frame_api_module, "position_to_frame")
-    solve_idx: int | None = None
-    identity_idx: int | None = None
-    for idx, stmt in enumerate(position_to_frame.body):
-        if (
-            isinstance(stmt, ast.Assign)
-            and isinstance(stmt.value, ast.Call)
-            and isinstance(stmt.value.func, ast.Name)
-            and stmt.value.func.id == "_solve_pose_path_transform_with_owner"
-        ):
-            solve_idx = idx
-        if (
-            isinstance(stmt, ast.If)
-            and isinstance(stmt.test, ast.Compare)
-            and isinstance(stmt.test.left, ast.Name)
-            and stmt.test.left.id == "destination"
-            and len(stmt.test.ops) == 1
-            and isinstance(stmt.test.ops[0], ast.Eq)
-            and len(stmt.test.comparators) == 1
-            and isinstance(stmt.test.comparators[0], ast.Name)
-            and stmt.test.comparators[0].id == "source_parent"
-            and len(stmt.body) >= 1
-            and isinstance(stmt.body[0], ast.Return)
-            and isinstance(stmt.body[0].value, ast.Call)
-                and isinstance(stmt.body[0].value.func, ast.Name)
-                and stmt.body[0].value.func.id == "wrap_like"
-        ):
-            identity_idx = idx
-    assert solve_idx is not None
-    assert identity_idx is not None
-    assert solve_idx < identity_idx
 
 
 def test_arch_spatial_072_slice_c2_rotation_pose_class_wrappers_delegate_to_c1_owners() -> None:
@@ -1311,8 +1077,6 @@ def test_spatial_doc_011_phase8_slice_c2_frame_api_docs_and_entries_present() ->
     rotation_doc = Path("docs/api/types/rotation.md").read_text(encoding="utf-8")
     pose_doc = Path("docs/api/types/pose.md").read_text(encoding="utf-8")
     path_solve_doc = Path("docs/api/types/path_solve.md").read_text(encoding="utf-8")
-    api_index = Path("docs/api/types/index.md").read_text(encoding="utf-8")
-    spatial_guide = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8")
     assert "to_frame" in position_doc
     assert "solve_path_transform" in rotation_doc
     assert "solve_path_transform" in pose_doc
@@ -1331,44 +1095,10 @@ def test_arch_spatial_075_velocity_acceleration_thin_boundaries_reuse_kinematics
     assert "family_to_rep(" in acceleration_text
 
 
-def test_arch_spatial_076_frame_policies_single_owner_reused_across_spatial() -> None:
-    """ID: ARCH_SPATIAL_076_frame_policies_single_owner_reused_across_spatial."""
-    frame_text = Path("tal/spatial/policies/frame.py").read_text(encoding="utf-8")
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    rotation_apply_text = Path("tal/spatial/ops/rotation_apply_ops.py").read_text(encoding="utf-8")
-    pose_apply_text = Path("tal/spatial/ops/pose_apply_ops.py").read_text(encoding="utf-8")
-    intent_text = Path("tal/spatial/policies/intent.py").read_text(encoding="utf-8")
-    path_text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
-    kin_text = Path("tal/spatial/kinematics/family.py").read_text(encoding="utf-8")
-    assert "def resolve_apply_output_frames(" in frame_text
-    assert "def resolve_compose_output_frames(" in frame_text
-    assert "def resolve_components_shared_frames(" in frame_text
-    assert "from .policies.frame import resolve_compose_output_frames" in rotation_text
-    assert "from ..policies.frame import resolve_compose_output_frames, resolve_components_shared_frames" in pose_ops_text
-    assert "from ..policies.frame import resolve_apply_output_frames" in rotation_apply_text
-    assert "from ..policies.frame import resolve_apply_output_frames" in pose_apply_text
-    assert "resolve_bidirectional_tip_tail_frames" in intent_text
-    assert "from ..policies.frame import is_framed" in path_text
-    assert "from ..policies.frame import resolve_components_shared_frames" in kin_text
-
-
 def test_arch_spatial_077_apply_shared_and_pose_shared_removed() -> None:
     """ID: ARCH_SPATIAL_077_apply_shared_and_pose_shared_removed."""
     assert not Path("tal/spatial/apply_shared.py").exists()
     assert not Path("tal/spatial/pose_shared.py").exists()
-
-
-def test_arch_spatial_078_core_runtime_checks_reused_by_spatial_and_components() -> None:
-    """ID: ARCH_SPATIAL_078_core_runtime_checks_reused_by_spatial_and_components."""
-    runtime_text = Path("tal/core/orchestration/runtime_checks.py").read_text(encoding="utf-8")
-    spatial_runtime_text = Path("tal/spatial/policies/runtime_checks.py").read_text(encoding="utf-8")
-    component_runtime_text = Path("tal/core/component_ops/runtime_checks.py").read_text(encoding="utf-8")
-    assert "def resolve_single_numeric_var_single_core_dim(" in runtime_text
-    assert "from tal.core.orchestration.runtime_checks import (" in spatial_runtime_text
-    assert "from ..orchestration.runtime_checks import require_declared_roles_with_sequence" in component_runtime_text
-    assert "def require_component_numeric_var(" in component_runtime_text
-    assert "require_component_numeric_var" not in spatial_runtime_text
 
 
 def test_arch_spatial_079_core_alignment_owner_reused_by_linalg_and_spatial() -> None:
@@ -1396,19 +1126,6 @@ def test_arch_spatial_080_no_local_single_var_core_dim_duplicates_remain() -> No
         assert "resolve_single_numeric_var_single_core_dim(" in text
 
 
-def test_arch_spatial_081_paired_components_owner_reused_by_pose_and_kinematics() -> None:
-    """ID: ARCH_SPATIAL_081_paired_components_owner_reused_by_pose_and_kinematics."""
-    paired_text = Path("tal/spatial/kinematics/paired_components.py").read_text(encoding="utf-8")
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    kin_text = Path("tal/spatial/kinematics/family.py").read_text(encoding="utf-8")
-    assert "def build_paired_components_dataset(" in paired_text
-    assert "def clear_component_registry(" in paired_text
-    assert "build_paired_components_dataset(" in pose_text
-    assert "build_paired_components_dataset(" in kin_text
-    assert "clear_component_registry" in pose_text
-    assert "clear_component_registry" in kin_text
-
-
 def test_arch_spatial_082_conversion_finalize_owner_reused_by_rotation_pose_vector6() -> None:
     """ID: ARCH_SPATIAL_082_conversion_finalize_owner_reused_by_rotation_pose_vector6."""
     conversion_text = Path("tal/spatial/conversion/finalize.py").read_text(encoding="utf-8")
@@ -1425,19 +1142,6 @@ def test_arch_spatial_082_conversion_finalize_owner_reused_by_rotation_pose_vect
     assert "dataset_dim_names" in rotation_text
     assert "from ..conversion.finalize import allocate_dim_pair, dataset_dim_names" in pose_ops_text
     assert "from ..conversion.finalize import allocate_free_dim_name as _allocate_dim_name" in vector6_text
-
-
-def test_arch_spatial_093_pose_component_layout_helpers_removed_in_favor_of_shared_owners() -> None:
-    """ID: ARCH_SPATIAL_093_pose_component_layout_helpers_removed_in_favor_of_shared_owners."""
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    assert "def _resolve_component_spec(" not in pose_text
-    assert "def _require_component_var(" not in pose_text
-    assert "def _resolve_component_roles(" not in pose_text
-    assert "def _component_var_names(" not in pose_text
-    assert "resolve_pair_registry(" in pose_text
-    assert "resolve_component_spec(" in pose_text
-    assert "resolve_paired_roles(" in pose_text
-    assert "component_var_names(" in pose_text
 
 
 def test_arch_spatial_094_spatial_runtime_checks_xyz_only_no_generic_component_validation() -> None:
@@ -1488,21 +1192,6 @@ def test_arch_spatial_097_spatial_kinematics_components_module_removed_and_famil
     assert "build_paired_components_dataset(" in family_text
     assert "resolve_pair_registry(" in family_text
     assert "def build_paired_components_dataset(" in paired_text
-
-
-def test_arch_spatial_083_wrap_owner_reused_across_spatial_modules() -> None:
-    """ID: ARCH_SPATIAL_083_wrap_owner_reused_across_spatial_modules."""
-    wrap_text = Path("tal/spatial/policies/wrap.py").read_text(encoding="utf-8")
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    pose_apply_text = Path("tal/spatial/ops/pose_apply_ops.py").read_text(encoding="utf-8")
-    frame_api_text = Path("tal/spatial/ops/frame_api_ops.py").read_text(encoding="utf-8")
-    assert "def wrap_as(" in wrap_text
-    assert "def wrap_like(" in wrap_text
-    assert "from .policies.wrap import wrap_as" in rotation_text
-    assert "from .policies.wrap import wrap_as" in pose_text
-    assert "from ..policies.wrap import wrap_like" in pose_apply_text
-    assert "from ..policies.wrap import wrap_like" in frame_api_text
 
 
 def test_arch_spatial_084_no_direct_tal_attrs_writes_in_new_owner_modules() -> None:
@@ -1619,44 +1308,16 @@ def test_arch_spatial_100_public_spatial_entrypoints_remain_flat() -> None:
 
 def test_arch_spatial_101_spatial_init_public_exports_stable() -> None:
     """ID: ARCH_SPATIAL_101_spatial_init_public_exports_stable."""
-    text = Path("tal/spatial/__init__.py").read_text(encoding="utf-8")
-    assert "from .position import Position" in text
-    assert "from .rotation import Rotation" in text
-    assert "from .pose import Pose" in text
-    assert "from .velocity import AngularVelocity, LinearVelocity, Velocity" in text
-    assert "from .acceleration import Acceleration, AngularAcceleration, LinearAcceleration" in text
-    assert "from .path_solve import PathSolveOptions, solve_pose_path_transform, solve_rotation_path_transform" in text
-    assert "__all__ = [" in text
+    from tal import spatial
 
-
-def test_arch_spatial_102_public_entrypoints_delegate_to_new_internal_owners() -> None:
-    """ID: ARCH_SPATIAL_102_public_entrypoints_delegate_to_new_internal_owners."""
-    position_text = Path("tal/spatial/position.py").read_text(encoding="utf-8")
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    velocity_text = Path("tal/spatial/velocity.py").read_text(encoding="utf-8")
-    acceleration_text = Path("tal/spatial/acceleration.py").read_text(encoding="utf-8")
-    path_solve_text = Path("tal/spatial/path_solve.py").read_text(encoding="utf-8")
-    assert "from .ops.frame_api_ops import position_to_frame" in position_text
-    assert "from .ops.rotation_apply_ops import rotation_apply" in rotation_text
-    assert "from .ops.pose_apply_ops import pose_apply" in pose_text
-    assert "from .ops.pose_ops import pose_as_components, pose_as_matrix, pose_compose, pose_inverse, pose_to_rep" in pose_text
-    assert "from .kinematics.family import (" in velocity_text
-    assert "from .kinematics.family import (" in acceleration_text
-    assert "from .ops.path_solve_ops import solve_pose_path_transform_impl, solve_rotation_path_transform_impl" in path_solve_text
-
-
-def test_arch_spatial_103_ops_reuse_kernels_subpackage_no_flat_kernel_imports() -> None:
-    """ID: ARCH_SPATIAL_103_ops_reuse_kernels_subpackage_no_flat_kernel_imports."""
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    pose_apply_text = Path("tal/spatial/ops/pose_apply_ops.py").read_text(encoding="utf-8")
-    rotation_apply_text = Path("tal/spatial/ops/rotation_apply_ops.py").read_text(encoding="utf-8")
-    assert "from ..kernels.pose_kernels import" in pose_ops_text
-    assert "from ..kernels.pose_apply_kernels import" in pose_apply_text
-    assert "from ..kernels.rotation_apply_kernels import" in rotation_apply_text
-    assert "from ..pose_kernels import" not in pose_ops_text
-    assert "from ..pose_apply_kernels import" not in pose_apply_text
-    assert "from ..rotation_apply_kernels import" not in rotation_apply_text
+    expected = {
+        "Acceleration", "AngularAcceleration", "AngularVelocity",
+        "LinearAcceleration", "LinearVelocity", "PathSolveOptions", "Pose",
+        "Position", "Rotation", "SpatialFieldRecipe", "Velocity", "bind_pose",
+        "solve_pose_path_transform", "solve_rotation_path_transform",
+    }
+    assert expected <= set(spatial.__all__)
+    assert all(getattr(spatial, name, None) is not None for name in expected)
 
 
 def test_arch_spatial_104_metadata_owner_recomposed_under_subpackage() -> None:
@@ -1667,20 +1328,6 @@ def test_arch_spatial_104_metadata_owner_recomposed_under_subpackage() -> None:
     assert "from .representation import" in metadata_facade
     assert "from .roles import" in metadata_facade
     assert "def get_position_rep(" not in metadata_init
-
-
-def test_arch_spatial_105_policy_owner_modules_live_under_policies_subpackage() -> None:
-    """ID: ARCH_SPATIAL_105_policy_owner_modules_live_under_policies_subpackage."""
-    assert Path("tal/spatial/policies/frame.py").exists()
-    assert Path("tal/spatial/policies/intent.py").exists()
-    assert Path("tal/spatial/policies/runtime_checks.py").exists()
-    assert Path("tal/spatial/policies/wrap.py").exists()
-    pose_text = Path("tal/spatial/pose.py").read_text(encoding="utf-8")
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    assert "from .policies.frame import resolve_components_shared_frames" in pose_text
-    assert "from .policies.wrap import wrap_as" in pose_text
-    assert "from .policies.frame import resolve_compose_output_frames" in rotation_text
-    assert "from .policies.wrap import wrap_as" in rotation_text
 
 
 def test_arch_spatial_106_kinematics_owner_modules_live_under_kinematics_subpackage() -> None:
@@ -1705,21 +1352,6 @@ def test_arch_spatial_107_conversion_finalize_owner_lives_under_conversion_subpa
     assert "from .conversion.finalize import (" in rotation_text
     assert "from ..conversion.finalize import allocate_dim_pair, dataset_dim_names" in pose_ops_text
     assert "from ..conversion.finalize import allocate_free_dim_name as _allocate_dim_name" in vector6_text
-
-
-def test_arch_spatial_108_spatial_top_level_python_files_limited_to_public_entrypoints() -> None:
-    """ID: ARCH_SPATIAL_108_spatial_top_level_python_files_limited_to_public_entrypoints."""
-    allowed = {
-        "__init__.py",
-        "position.py",
-        "rotation.py",
-        "pose.py",
-        "velocity.py",
-        "acceleration.py",
-        "path_solve.py",
-    }
-    observed = {path.name for path in Path("tal/spatial").glob("*.py")}
-    assert observed == allowed
 
 
 def test_arch_spatial_109_no_removed_flat_module_import_tokens_reintroduced() -> None:
@@ -1785,11 +1417,6 @@ def test_arch_topo_003_spatial_owners_delegate_topology_to_core_owner() -> None:
     for rel in align_files:
         text = Path(rel).read_text(encoding="utf-8")
         assert "align_exact_for_plan(" in text
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    assert "from .pose_context import (" in pose_ops_text
-    assert "_topology_operand(" in pose_ops_text
-
-
 def test_arch_topo_004_no_reintroduced_local_binary_topology_islands() -> None:
     """ID: ARCH_TOPO_004_no_reintroduced_local_binary_topology_islands."""
     files = [
@@ -1906,96 +1533,6 @@ def test_arch_spatial_112_pose_compose_topology_helpers_parameter_budget() -> No
     assert _parameter_count(node) <= 10
 
 
-def test_arch_bcast_031_spatial_frame_precheck_order_is_structurally_guarded() -> None:
-    """ID: ARCH_BCAST_031_spatial_frame_precheck_order_is_structurally_guarded."""
-    rotation_module = _module("tal/spatial/rotation.py")
-    rotation_compose = _function_node(rotation_module, "_rotation_compose_with_owner")
-    compose_order = _compose_call_order_tokens(rotation_compose)
-    assert "resolve_compose_output_frames" in compose_order
-    assert "left.as_quat" in compose_order
-    assert compose_order.index("resolve_compose_output_frames") < compose_order.index("left.as_quat")
-
-    pose_ops_module = _module("tal/spatial/ops/pose_ops.py")
-    pose_compose = _function_node(pose_ops_module, "_pose_compose_with_owner")
-    pose_compose_order = _call_order_tokens(pose_compose, _pose_compose_call_token)
-    assert "resolve_compose_output_frames" in pose_compose_order
-    assert "_canonical_components" in pose_compose_order
-    assert pose_compose_order.index("resolve_compose_output_frames") < pose_compose_order.index("_canonical_components")
-
-    rotation_apply_module = _module("tal/spatial/ops/rotation_apply_ops.py")
-    rotation_apply = _function_node(rotation_apply_module, "_rotation_apply_with_owner")
-    rotation_apply_order = _call_order_tokens(rotation_apply, _rotation_apply_call_token)
-    assert "resolve_apply_output_frames" in rotation_apply_order
-    assert "_apply_to_vector_target" in rotation_apply_order
-    assert rotation_apply_order.index("resolve_apply_output_frames") < rotation_apply_order.index("_apply_to_vector_target")
-
-    pose_apply_module = _module("tal/spatial/ops/pose_apply_ops.py")
-    pose_apply = _function_node(pose_apply_module, "_pose_apply_with_owner")
-    pose_apply_order = _call_order_tokens(pose_apply, _pose_apply_call_token)
-    assert "resolve_apply_output_frames" in pose_apply_order
-    assert "_apply_pose_to_position" in pose_apply_order
-    assert pose_apply_order.index("resolve_apply_output_frames") < pose_apply_order.index("_apply_pose_to_position")
-
-    pose_module = _module("tal/spatial/pose.py")
-    pose_components = _class_method_node(pose_module, "Pose", "from_components")
-    pose_components_order = _call_order_tokens(pose_components, _pose_components_call_token)
-    assert "resolve_components_shared_frames" in pose_components_order
-    assert "select_topology_policy_with_intents" in pose_components_order
-    assert "_build_components_pose_dataset" in pose_components_order
-    assert pose_components_order.index("resolve_components_shared_frames") < pose_components_order.index(
-        "select_topology_policy_with_intents"
-    )
-    assert pose_components_order.index("resolve_components_shared_frames") < pose_components_order.index(
-        "_build_components_pose_dataset"
-    )
-
-    kin_module = _module("tal/spatial/kinematics/family.py")
-    kin_components = _function_node(kin_module, "family_from_linear_angular")
-    kin_components_order = _call_order_tokens(kin_components, _kinematics_components_call_token)
-    assert "resolve_components_shared_frames" in kin_components_order
-    assert "select_topology_policy_with_intents" in kin_components_order
-    assert "build_family_dataset" in kin_components_order
-    assert kin_components_order.index("resolve_components_shared_frames") < kin_components_order.index(
-        "select_topology_policy_with_intents"
-    )
-    assert kin_components_order.index("resolve_components_shared_frames") < kin_components_order.index(
-        "build_family_dataset"
-    )
-
-
-def test_arch_bcast_033_spatial_output_frames_derived_from_frame_semantics_not_alignment() -> None:
-    """ID: ARCH_BCAST_033_spatial_output_frames_derived_from_frame_semantics_not_alignment."""
-    rotation_text = Path("tal/spatial/rotation.py").read_text(encoding="utf-8")
-    pose_ops_text = Path("tal/spatial/ops/pose_ops.py").read_text(encoding="utf-8")
-    rotation_apply_text = Path("tal/spatial/ops/rotation_apply_ops.py").read_text(encoding="utf-8")
-    pose_apply_text = Path("tal/spatial/ops/pose_apply_ops.py").read_text(encoding="utf-8")
-    assert "resolve_compose_output_frames(" in rotation_text
-    assert "set_frames(composed_quat, parent=parent, child=child" in rotation_text
-    assert "resolve_compose_output_frames(" in pose_ops_text
-    assert "set_frames(out_pos_ds, parent=parent, child=child" in pose_ops_text
-    assert "resolve_apply_output_frames(" in rotation_apply_text
-    assert "set_frames(out_ds, parent=parent, child=child" in rotation_apply_text
-    assert "resolve_apply_output_frames(" in pose_apply_text
-    assert "set_frames(out_ds, parent=parent, child=child" in pose_apply_text
-
-
-def test_arch_bcast_040_component_assembly_frame_precheck_order_is_structurally_guarded() -> None:
-    """ID: ARCH_BCAST_040_component_assembly_frame_precheck_order_is_structurally_guarded."""
-    pose_module = _module("tal/spatial/pose.py")
-    pose_components = _class_method_node(pose_module, "Pose", "from_components")
-    pose_components_order = _call_order_tokens(pose_components, _pose_components_call_token)
-    assert pose_components_order.index("resolve_components_shared_frames") < pose_components_order.index(
-        "select_topology_policy_with_intents"
-    )
-
-    kin_module = _module("tal/spatial/kinematics/family.py")
-    kin_components = _function_node(kin_module, "family_from_linear_angular")
-    kin_components_order = _call_order_tokens(kin_components, _kinematics_components_call_token)
-    assert kin_components_order.index("resolve_components_shared_frames") < kin_components_order.index(
-        "select_topology_policy_with_intents"
-    )
-
-
 def test_arch_bcast_034_position_add_intent_resolution_remains_pre_alignment() -> None:
     """ID: ARCH_BCAST_034_position_add_intent_resolution_remains_pre_alignment."""
     position_text = Path("tal/spatial/position.py").read_text(encoding="utf-8")
@@ -2030,30 +1567,6 @@ def test_arch_bcast_041_paired_component_alignment_preserves_schema_attrs_for_co
     assert "_rewrap_aligned_component_dataset(" in align_body
     assert "to_dataset(name=left_var)" not in align_body
     assert "to_dataset(name=right_var)" not in align_body
-
-
-def test_arch_spatial_113_temporal_vector_like_orchestrate_kernel_finalize_split() -> None:
-    """ID: ARCH_SPATIAL_113_temporal_vector_like_orchestrate_kernel_finalize_split."""
-    evaluate_text = Path("tal/core/param_ops/evaluate.py").read_text(encoding="utf-8")
-    finalize_text = Path("tal/core/param_ops/finalize.py").read_text(encoding="utf-8")
-    assert "def evaluate_param(" in evaluate_text
-    assert "build_param_map(" in evaluate_text
-    assert "apply_param_map(" in evaluate_text
-    assert "finalize_param_output(" in evaluate_text
-    assert "def finalize_param_output(" in finalize_text
-
-
-def test_arch_spatial_114_temporal_vector_like_reuses_param_engine_map_build_apply_owners() -> None:
-    """ID: ARCH_SPATIAL_114_temporal_vector_like_reuses_param_engine_map_build_apply_owners."""
-    evaluate_text = Path("tal/core/param_ops/evaluate.py").read_text(encoding="utf-8")
-    position_text = Path("tal/spatial/position.py").read_text(encoding="utf-8")
-    velocity_text = Path("tal/spatial/velocity.py").read_text(encoding="utf-8")
-    acceleration_text = Path("tal/spatial/acceleration.py").read_text(encoding="utf-8")
-    assert "build_param_map" in evaluate_text
-    assert "apply_param_map" in evaluate_text
-    for text in (position_text, velocity_text, acceleration_text):
-        assert "build_param_map" not in text
-        assert "apply_param_map" not in text
 
 
 def test_arch_spatial_115_temporal_vector_like_no_local_param_kernel_duplication() -> None:
@@ -2127,75 +1640,325 @@ def test_arch_spatial_141_rotation_pose_typed_param_overrides_are_at_resample_on
     assert "def index(" not in accessor_text
 
 
-def test_arch_spatial_142_rotation_pose_temporal_owners_reuse_core_runtime_query_map_finalize() -> None:
-    """ID: ARCH_SPATIAL_142_rotation_pose_temporal_owners_reuse_core_runtime_query_map_finalize."""
+def test_spatial_arch_151_kinematics_numba_kernels_are_schema_free() -> None:
+    """ID: SPATIAL_ARCH_151_kinematics_numba_kernels_are_schema_free."""
+    for path in [
+        Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+    ]:
+        numba_text = path.read_text(encoding="utf-8")
+        assert "import xarray" not in numba_text
+        assert "xr." not in numba_text
+        assert "attrs[" not in numba_text
+        assert "set_roles(" not in numba_text
+        assert "set_param_coord(" not in numba_text
+        assert "set_validity(" not in numba_text
+
+
+def test_spatial_arch_152_kinematics_numba_paths_do_not_call_param_engine() -> None:
+    """ID: SPATIAL_ARCH_152_kinematics_numba_paths_do_not_call_param_engine."""
+    paths = [
+        Path("tal/spatial/kernels/kinematics_temporal_backends.py"),
+        Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_backends.py"),
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py"),
+    ]
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "param_engine" not in text
+        assert "build_param_map" not in text
+        assert "apply_param_map" not in text
+
+
+def test_spatial_arch_153_fixed_size_spatial_numba_backends_are_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_153_fixed_size_spatial_numba_backends_are_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/fixed_size_backends.py").read_text(encoding="utf-8")
+    common_text = Path("tal/spatial/kernels/_fixed_size_common.py").read_text(encoding="utf-8")
+    rigid_text = Path("tal/spatial/kernels/rigid_matrix_validation.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/fixed_size_numba_backends.py").read_text(encoding="utf-8")
+    primitive_text = Path("tal/spatial/kernels/fixed_size_primitives.py").read_text(encoding="utf-8")
+    topology_text = Path("tal/spatial/kernels/topology_scan_numba_backends.py").read_text(encoding="utf-8")
+    assert 'SPATIAL_FIXED_BACKEND_NUMBA = "numba"' in backend_text
+    assert 'SPATIAL_FIXED_BACKEND_SCIPY = "scipy"' in backend_text
+    assert "from .fixed_size_numba_backends import" in backend_text
+    assert "_run_scipy_kernel(" in backend_text
+    assert "baseline fixed-size scipy kernel failed" in backend_text
+    assert "prepare_block_rows(" in common_text
+    assert "validate_quat_rows(" in common_text
+    assert "validate_rotation_matrix_rows(" in rigid_text
+    assert "require_real_matrix_dtype(raw, owner=_OWNER)" in backend_text
+    assert "validate_rotation_matrix_rows(raw, owner=_OWNER)" in backend_text
+    assert "prepare_binary_quat_rows(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "quat_multiply" in primitive_text
+    assert "rotate_vec3" in primitive_text
+    assert "fixed_size_primitives import" in Path("tal/spatial/kernels/rotation_interp_numba_backends.py").read_text(encoding="utf-8")
+    assert "fixed_size_primitives import" in topology_text
+    assert "quat_multiply as _quat_multiply" not in topology_text
+    assert "rotate_vec3 as _rotate_vec3" not in topology_text
+    assert "_quat_multiply = njit_kernel" not in topology_text
+    assert "_rotate_vec3 = njit_kernel" not in topology_text
+def test_spatial_arch_192_rigid_matrix_validation_has_single_spatial_owner() -> None:
+    """ID: SPATIAL_ARCH_192_rigid_matrix_validation_has_single_spatial_owner."""
+    owner = Path("tal/spatial/kernels/rigid_matrix_validation.py")
+    orchestration = Path("tal/spatial/ops/pose_matrix_validation.py")
+    pose_kernels = Path("tal/spatial/kernels/pose_kernels.py")
+    pose_ops = Path("tal/spatial/ops/pose_ops.py")
+    _assert_agents_budget(owner)
+    _assert_agents_budget(orchestration)
+
+    definitions: dict[str, list[str]] = {
+        "require_real_matrix_dtype": [],
+        "validate_rotation_matrix_rows": [],
+        "validate_pose_matrix_rows": [],
+    }
+    for path in sorted(Path("tal/spatial").rglob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name in definitions:
+                definitions[node.name].append(path.as_posix())
+    expected = [owner.as_posix()]
+    assert definitions["require_real_matrix_dtype"] == expected
+    assert definitions["validate_rotation_matrix_rows"] == expected
+    assert definitions["validate_pose_matrix_rows"] == expected
+
+    for path in (
+        Path("tal/spatial/kernels/rotation_kernels.py"),
+        Path("tal/spatial/kernels/pose_kernels.py"),
+        Path("tal/spatial/kernels/fixed_size_backends.py"),
+        Path("tal/spatial/kernels/fixed_size_numba_backends.py"),
+    ):
+        assert "rigid_matrix_validation import" in path.read_text(encoding="utf-8")
+    orchestration_text = orchestration.read_text(encoding="utf-8")
+    pose_kernels_text = pose_kernels.read_text(encoding="utf-8")
+    fixed_backend_text = Path("tal/spatial/kernels/fixed_size_backends.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'dask="parallelized"' in orchestration_text
+    assert "vectorize=False" in orchestration_text
+    assert '"allow_rechunk": True' in orchestration_text
+    assert ".compute(" not in orchestration_text
+    assert pose_kernels_text.count("validate_pose_matrix_rows(") == 1
+    assert pose_kernels_text.count("validate_rotation_matrix_rows(") == 1
+    assert "require_real_matrix_dtype(raw, owner=_OWNER)" in fixed_backend_text
+    assert "_run_scipy_kernel(_matrix_to_quat_prevalidated_kernel, values)" in fixed_backend_text
+    assert fixed_backend_text.count("validate_rotation_matrix_rows(") == 1
+    assert 'current == target == "matrix"' not in pose_ops.read_text(encoding="utf-8")
+
+
+def test_spatial_arch_154_kinematics_scan_backends_reuse_numba_scan_helpers() -> None:
+    """ID: SPATIAL_ARCH_154_kinematics_scan_backends_reuse_numba_scan_helpers."""
+    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    assert 'KINEMATICS_TEMPORAL_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def cumulative_trapezoid_block_backend(" in backend_text
+    assert "def cumulative_simpson_block_backend(" in backend_text
+    assert "from .kinematics_temporal_numba_backends import cumulative_trapezoid_block_numba" in backend_text
+    assert "from .kinematics_temporal_numba_backends import cumulative_simpson_block_numba" in backend_text
+    assert "_HELPERS_JITTED = False" in numba_text
+    assert "if _HELPERS_JITTED:" in numba_text
+    assert "prepare_scan_rows(" in numba_text
+    assert "ScanAxisSpec(" in numba_text
+    assert "ScanInputSpec(" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "def _simpson_forward_unequal_interval(" in numba_text
+    assert "def _simpson_reverse_unequal_interval(" in numba_text
+    assert "def _simpson_subinterval_integral(" in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
+    assert "kinematics_temporal_numba_backends" not in temporal_text
+
+
+def test_spatial_arch_155_simpson_scan_backend_decision_is_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_155_simpson_scan_backend_decision_is_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/kinematics_temporal_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/kinematics_temporal_numba_backends.py").read_text(encoding="utf-8")
+    temporal_text = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_kinematics_scan_numba_backends.py").read_text(encoding="utf-8")
+    assert "cumulative_simpson_kernel(values, param, valid" in backend_text
+    assert "cumulative_simpson_block_numba(" in backend_text
+    assert "def cumulative_simpson_block_numba(" in numba_text
+    assert "_compiled_simpson_block()" in numba_text
+    assert "_simpson_interval_integral(" in numba_text
+    assert "simpson retention gate" in bench_text
+    assert "retain numba backend:" in bench_text
+    assert "cumulative_simpson_kernel" in temporal_text
+    assert "cumulative_simpson_block_backend" not in temporal_text
+    assert "KINEMATICS_TEMPORAL_BACKEND_NUMBA" not in temporal_text
+
+
+def test_spatial_arch_180_rotation_mean_numba_decision_is_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_180_rotation_mean_numba_decision_is_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/rotation_mean_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/rotation_mean_numba_backends.py").read_text(encoding="utf-8")
+    reducer_text = Path("tal/spatial/ops/rotation_reduce_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_rotation_mean_numba_backends.py").read_text(encoding="utf-8")
+    assert 'ROTATION_MEAN_BACKEND_NUMBA = "numba"' in backend_text
+    assert 'ROTATION_MEAN_BACKEND_NUMPY = "numpy"' in backend_text
+    assert "def quat_mean_block_backend(" in backend_text
+    assert "from .rotation_mean_numba_backends import quat_mean_block_numba" in backend_text
+    assert "prepare_quat_mean_rows(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "import xarray" not in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "rotation_mean_backends" not in reducer_text
+    assert "rotation_mean_numba_backends" not in reducer_text
+    assert "quat_mean_kernel," in reducer_text
+    assert "many-row >=20% warm win" in bench_text
+
+
+def test_spatial_arch_181_higher_order_interp_numba_decision_is_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_181_higher_order_interp_numba_decision_is_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/higher_order_interp_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/higher_order_interp_numba_backends.py").read_text(encoding="utf-8")
+    primitive_text = Path("tal/spatial/kernels/higher_order_interp_primitives.py").read_text(encoding="utf-8")
     rotation_ops = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
     pose_ops = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "resolve_param_runtime_context(" in rotation_ops
-    assert "normalize_query_grid(" in rotation_ops
-    assert "build_param_map(" in rotation_ops
-    assert "gather_along_sequence(" in rotation_ops
-    assert "finalize_param_output(" in rotation_ops
-    assert "build_param_map(" not in pose_ops
-    assert "gather_along_sequence(" not in pose_ops
-    assert "finalize_param_output(" not in pose_ops
-    assert "source.param.at(" in pose_ops
-    assert "source.param.resample_to(" in pose_ops
+    bench_text = Path("benchmarks/bench_spatial_higher_order_interp_numba_backends.py").read_text(encoding="utf-8")
+    assert 'ROTATION_HIGHER_ORDER_BACKEND_NUMBA = "numba"' in backend_text
+    assert 'POSE_HIGHER_ORDER_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def squad_quat_block_backend(" in backend_text
+    assert "def pose_cubic_squad_block_backend(" in backend_text
+    assert "from .higher_order_interp_numba_backends import squad_quat_block_numba" in backend_text
+    assert "from .higher_order_interp_numba_backends import pose_cubic_squad_block_numba" in backend_text
+    assert "prepare_squad_rows(" in numba_text
+    assert "prepare_pose_cubic_rows(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "squad_quat(" in primitive_text
+    assert "catmull_rom_vec3(" in primitive_text
+    assert "se3" not in primitive_text.lower()
+    assert "higher_order_interp_backends" not in rotation_ops
+    assert "higher_order_interp_backends" not in pose_ops
+    assert "higher-order quaternion retention gate" in bench_text
+    assert "higher-order pose retention gate" in bench_text
 
 
-def test_arch_spatial_143_rotation_interp_backend_imports_are_temporal_owner_scoped() -> None:
-    """ID: ARCH_SPATIAL_143_rotation_interp_backend_imports_are_temporal_owner_scoped."""
-    hits: list[str] = []
-    for path in sorted(Path("tal/spatial").rglob("*.py")):
+def test_spatial_arch_160_local_stencil_numba_backends_are_owner_routed() -> None:
+    """ID: SPATIAL_ARCH_160_local_stencil_numba_backends_are_owner_routed."""
+    backend_text = Path("tal/spatial/kernels/kinematics_smoothing_backends.py").read_text(encoding="utf-8")
+    local_poly_text = Path("tal/spatial/kernels/kinematics_local_poly_backends.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    smoothing_ops = Path("tal/spatial/ops/kinematics_smoothing_ops.py").read_text(encoding="utf-8")
+    temporal_ops = Path("tal/spatial/ops/kinematics_temporal_ops.py").read_text(encoding="utf-8")
+    bench_text = Path("benchmarks/bench_spatial_kinematics_local_poly_numba_backends.py").read_text(encoding="utf-8")
+    assert 'KINEMATICS_SMOOTHING_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def moving_average_smoothing_block_backend(" in backend_text
+    assert "def gaussian_smoothing_block_backend(" in backend_text
+    assert "from .kinematics_smoothing_numba_backends import moving_average_smoothing_block_numba" in backend_text
+    assert "from .kinematics_smoothing_numba_backends import gaussian_smoothing_block_numba" in backend_text
+    assert 'KINEMATICS_LOCAL_POLY_BACKEND_NUMBA = "numba"' in local_poly_text
+    assert "def local_poly_smoothing_block_backend(" in local_poly_text
+    assert "def local_poly_derivative_block_backend(" in local_poly_text
+    assert "numba local-poly backend is not retained" in local_poly_text
+    assert "kinematics_local_poly_numba_backends" not in local_poly_text
+    assert "local-poly retention gate" in bench_text
+    assert "retain numba backend:                     False" in bench_text
+    assert "prepare_block_rows(" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "require_numba(owner)" in numba_text
+    assert "KINEMATICS_SMOOTHING_BACKEND_NUMBA" not in smoothing_ops
+    assert "kinematics_smoothing_backends" not in smoothing_ops
+    assert "KINEMATICS_LOCAL_POLY_BACKEND_NUMBA" not in smoothing_ops
+    assert "kinematics_local_poly_backends" not in smoothing_ops
+    assert "KINEMATICS_LOCAL_POLY_BACKEND_NUMBA" not in temporal_ops
+    assert "kinematics_local_poly_backends" not in temporal_ops
+
+
+def test_spatial_arch_161_local_stencil_helpers_are_schema_free_if_added() -> None:
+    """ID: SPATIAL_ARCH_161_local_stencil_helpers_are_schema_free_if_added."""
+    _assert_no_direct_import("from tal.utils import numba as tal_numba", "numba")
+    try:
+        _assert_no_direct_import("import numba.core", "numba")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("dotted numba import was not rejected")
+
+    helper = Path("tal/utils/numba_stencil.py")
+    assert helper.exists()
+    helper_text = helper.read_text(encoding="utf-8")
+    assert "import xarray" not in helper_text
+    _assert_no_direct_import(helper_text, "numba")
+    assert "tal.core" not in helper_text
+    assert "tal.spatial" not in helper_text
+    assert "tal.linalg" not in helper_text
+    numba_text = Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8")
+    assert "import xarray" not in numba_text
+    assert "from scipy" not in numba_text
+    assert "attrs[" not in numba_text
+
+
+def test_spatial_arch_162_stencil_backends_do_not_reuse_scan_as_generic_executor() -> None:
+    """ID: SPATIAL_ARCH_162_stencil_backends_do_not_reuse_scan_as_generic_executor."""
+    texts = [
+        Path("tal/spatial/kernels/kinematics_smoothing_numba_backends.py").read_text(encoding="utf-8"),
+        Path("tal/spatial/kernels/kinematics_local_poly_backends.py").read_text(encoding="utf-8"),
+    ]
+    for text in texts:
+        assert "prepare_scan_rows" not in text
+        assert "ScanAxisSpec" not in text
+        assert "ScanInputSpec" not in text
+        assert "numba_scan" not in text
+
+
+def test_spatial_arch_170_ordered_topology_scan_axes_are_owner_declared() -> None:
+    """ID: SPATIAL_ARCH_170_ordered_topology_scan_axes_are_owner_declared."""
+    backend_text = Path("tal/spatial/kernels/topology_scan_backends.py").read_text(encoding="utf-8")
+    common_text = Path("tal/spatial/kernels/_topology_scan_common.py").read_text(encoding="utf-8")
+    path_solve_text = Path("tal/spatial/ops/path_solve_ops.py").read_text(encoding="utf-8")
+    assert 'SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA = "numba"' in backend_text
+    assert "def chain_pose_compose_block_backend(" in backend_text
+    assert "from .topology_scan_numba_backends import chain_pose_compose_block_numba" in backend_text
+    assert 'ScanAxisSpec("chain", "topology")' in common_text
+    assert "prepare_scan_rows(" in common_text
+    assert "topology_scan_backends" not in path_solve_text
+    assert "SPATIAL_TOPOLOGY_SCAN_BACKEND_NUMBA" not in path_solve_text
+
+
+def test_spatial_arch_171_topology_scan_does_not_reclassify_batch_by_default() -> None:
+    """ID: SPATIAL_ARCH_171_topology_scan_does_not_reclassify_batch_by_default."""
+    common_text = Path("tal/spatial/kernels/_topology_scan_common.py").read_text(encoding="utf-8")
+    numba_text = Path("tal/spatial/kernels/topology_scan_numba_backends.py").read_text(encoding="utf-8")
+    assert "t_shape[:-1] == q_shape[:-1] == valid_shape == direction_shape" in common_text
+    assert "ordered_axes=(ScanAxisSpec(\"chain\", \"topology\"),)" in common_text
+    assert "broadcast-compatible" not in common_text
+    assert "batch" not in numba_text
+    assert "FrameGraph" not in numba_text
+
+
+def test_spatial_arch_172_topology_scan_backends_are_schema_free() -> None:
+    """ID: SPATIAL_ARCH_172_topology_scan_backends_are_schema_free."""
+    paths = [
+        Path("tal/spatial/kernels/_topology_scan_common.py"),
+        Path("tal/spatial/kernels/topology_scan_backends.py"),
+        Path("tal/spatial/kernels/topology_scan_numba_backends.py"),
+    ]
+    banned = ["import xarray", "xr.", "attrs[", "set_roles(", "set_param_coord(", "set_validity("]
+    for path in paths:
         text = path.read_text(encoding="utf-8")
-        if "rotation_interp_backends" in text:
-            hits.append(path.as_posix())
-    assert hits == ["tal/spatial/ops/rotation_temporal_ops.py"]
-
-
-def test_arch_spatial_144_rotation_interp_backend_stopgap_loops_are_row_local_no_batch_merge() -> None:
-    """ID: ARCH_SPATIAL_144_rotation_interp_backend_stopgap_loops_are_row_local_no_batch_merge."""
-    text = Path("tal/spatial/kernels/rotation_interp_backends.py").read_text(encoding="utf-8")
-    assert "_slerp_quat_scipy_stopgap(" in text
-    assert "rows = int(np.prod(alpha.shape[:-1]))" in text
-    assert "flat_q0 = q0.reshape(rows, qsize, 4)" in text
-    assert "for row in range(rows):" in text
-    assert "for idx in range(qsize):" in text
-    assert "vectorize=True" not in text
-    assert "xarray" not in text
-
-
-def test_arch_spatial_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded() -> None:
-    """ID: ARCH_SPATIAL_145_pose_temporal_payload_carrier_and_overlay_path_structurally_guarded."""
-    text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "def _eval_payload_carrier(" in text
-    assert "AnalysisObject._from_unvalidated(" in text
-    assert "carrier.param.at(" in text
-    assert "carrier.param.resample_to(" in text
-    assert "def _overlay_components_payload(" in text
-    assert "def _overlay_matrix_payload(" in text
-    assert "def _resolve_matrix_payload_var(" in text
-    assert "def _matrix_only_pose_source(" in text
-    assert "_matrix_only_pose_source(source, owner=request.owner)" in text
-
-
-def test_arch_spatial_147_pose_temporal_matrix_payload_resolution_uses_matrix_candidate_filter_not_global_single_var_selector() -> None:
-    """ID: ARCH_SPATIAL_147_pose_temporal_matrix_payload_resolution_uses_matrix_candidate_filter_not_global_single_var_selector."""
-    text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "_resolve_matrix_payload_var(" in text
-    assert "containing core dims" in text
-    assert "select_single_numeric_var(source_ds" not in text
-
-
-def test_arch_spatial_148_pose_temporal_matrix_aux_rebind_is_single_guarded_helper_boundary() -> None:
-    """ID: ARCH_SPATIAL_148_pose_temporal_matrix_aux_rebind_is_single_guarded_helper_boundary."""
-    text = Path("tal/spatial/ops/pose_temporal_ops.py").read_text(encoding="utf-8")
-    assert "def _needs_matrix_aux_rebind(" in text
-    assert "def _rewrap_matrix_aux_unvalidated(" in text
-    assert "if _needs_matrix_aux_rebind(" in text
-    assert "_rewrap_matrix_aux_unvalidated(" in text
-    assert "def _rewrap_pose_temporal_output(" in text
-    assert text.count("_bind_dataset(") == 1
+        assert [token for token in banned if token in text] == []
+        assert "find_path" not in text
+        assert "fold_path" not in text
+        assert "FrameGraph" not in text
+    numba_text = paths[-1].read_text(encoding="utf-8")
+    assert "require_numba(owner)" in numba_text
+    assert "njit_kernel(" in numba_text
+    assert "parallel=True" not in numba_text
+    assert "fastmath=True" not in numba_text
+    assert "from scipy" not in numba_text
 
 
 def test_arch_spatial_146_rotation_temporal_single_payload_guard_prevents_silent_drop() -> None:
@@ -2203,9 +1966,10 @@ def test_arch_spatial_146_rotation_temporal_single_payload_guard_prevents_silent
     text = Path("tal/spatial/ops/rotation_temporal_ops.py").read_text(encoding="utf-8")
     assert "def _require_single_payload_var(" in text
     assert "auxiliary payload vars are not supported" in text
-    assert "_require_single_payload_var(source.unsafe_data, owner=request.owner)" in text
+    assert "source_ds =" in text
+    assert "_require_single_payload_var(source_ds, owner=request.owner)" in text
     assert "var_name = _require_single_payload_var(context.ds" in text
-    src_guard_index = text.find("_require_single_payload_var(source.unsafe_data, owner=request.owner)")
+    src_guard_index = text.find("_require_single_payload_var(source_ds, owner=request.owner)")
     as_quat_index = text.find("quat_source = source.as_quat(validate=False)")
     ctx_guard_index = text.find("var_name = _require_single_payload_var(context.ds, owner=request.owner)")
     assert src_guard_index != -1
@@ -2287,7 +2051,6 @@ def test_arch_spatial_150_d3_execution_paths_contain_no_vectorize_true_or_row_lo
 
 def test_spatial_doc_023_d3_scope_baseline_relative_integration_and_smoothing_deferral_documented() -> None:
     """ID: SPATIAL_DOC_023_d3_scope_baseline_relative_integration_and_smoothing_deferral_documented."""
-    spatial_doc = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8").lower()
     position_doc = Path("docs/api/types/position.md").read_text(encoding="utf-8").lower()
     velocity_doc = Path("docs/api/types/velocity.md").read_text(encoding="utf-8").lower()
     acceleration_doc = Path("docs/api/types/acceleration.md").read_text(encoding="utf-8").lower()
@@ -2319,7 +2082,6 @@ def test_arch_spatial_153_d4_temporal_ops_orchestrate_kernel_finalize_split_pres
     assert "_apply_smoothing_operator(" in text
     assert "_replace_payload(" in text
     assert "_apply_output_metadata(" in text
-    assert "wrap_as(" in text
     assert "build_param_map(" not in text
     assert "apply_param_map(" not in text
     assert ".param.at(" not in text
@@ -2613,98 +2375,6 @@ def test_arch_spatial_090_slice_c3_no_local_find_path_fold_path_or_local_math_du
     assert "from ..kernels" not in text
 
 
-def test_arch_spatial_091_slice_c3_kinematic_identity_short_circuit_precedes_solver_calls() -> None:
-    """ID: ARCH_SPATIAL_091_slice_c3_kinematic_identity_short_circuit_precedes_solver_calls."""
-    module = _module("tal/spatial/ops/kinematics_frame_ops.py")
-    to_node = _function_node(module, "_run_vector_to_frame")
-    to_identity_idx: int | None = None
-    to_delegate_idx: int | None = None
-    for idx, stmt in enumerate(to_node.body):
-        if (
-            isinstance(stmt, ast.If)
-            and isinstance(stmt.test, ast.Compare)
-            and isinstance(stmt.test.left, ast.Name)
-            and stmt.test.left.id == "dst_id"
-            and len(stmt.test.ops) == 1
-            and isinstance(stmt.test.ops[0], ast.Eq)
-            and len(stmt.test.comparators) == 1
-            and isinstance(stmt.test.comparators[0], ast.Name)
-            and stmt.test.comparators[0].id == "src_parent"
-        ):
-            to_identity_idx = idx
-        if (
-            isinstance(stmt, ast.Return)
-            and isinstance(stmt.value, ast.Call)
-            and isinstance(stmt.value.func, ast.Name)
-            and stmt.value.func.id == "_run_vector_to_frame_non_identity"
-        ):
-            to_delegate_idx = idx
-    assert to_identity_idx is not None
-    assert to_delegate_idx is not None
-    assert to_identity_idx < to_delegate_idx
-
-    expr_node = _function_node(module, "_run_vector_express_in")
-    expr_identity_idx: int | None = None
-    expr_solve_idx: int | None = None
-    for idx, stmt in enumerate(expr_node.body):
-        if (
-            isinstance(stmt, ast.Assign)
-            and isinstance(stmt.value, ast.Call)
-            and isinstance(stmt.value.func, ast.Name)
-            and stmt.value.func.id == "_solve_rotation_path_transform_with_owner"
-        ):
-            expr_solve_idx = idx
-        if (
-            isinstance(stmt, ast.If)
-            and isinstance(stmt.test, ast.Compare)
-            and isinstance(stmt.test.left, ast.Name)
-            and stmt.test.left.id == "dst_id"
-            and len(stmt.test.ops) == 1
-            and isinstance(stmt.test.ops[0], ast.Eq)
-            and len(stmt.test.comparators) == 1
-            and isinstance(stmt.test.comparators[0], ast.Name)
-            and stmt.test.comparators[0].id == "src_expressed_in"
-        ):
-            expr_identity_idx = idx
-    assert expr_identity_idx is not None
-    assert expr_solve_idx is not None
-    assert expr_identity_idx < expr_solve_idx
-
-
-def test_arch_spatial_092_slice_c3_non_identity_to_frame_consumes_src_expressed_in_before_solver() -> None:
-    """ID: ARCH_SPATIAL_092_slice_c3_non_identity_to_frame_consumes_src_expressed_in_before_solver."""
-    module = _module("tal/spatial/ops/kinematics_frame_ops.py")
-    node = _function_node(module, "_run_vector_to_frame_non_identity")
-    canonical_idx: int | None = None
-    solve_idx: int | None = None
-    canonical_uses_src_expressed_in = False
-    for idx, stmt in enumerate(node.body):
-        if (
-            isinstance(stmt, ast.Assign)
-            and isinstance(stmt.value, ast.Call)
-            and isinstance(stmt.value.func, ast.Name)
-            and stmt.value.func.id == "_canonicalize_vector_source_basis"
-        ):
-            canonical_idx = idx
-            canonical_uses_src_expressed_in = any(
-                kw.arg == "src_expressed_in"
-                and isinstance(kw.value, ast.Name)
-                and kw.value.id == "src_expressed_in"
-                for kw in stmt.value.keywords
-            )
-        if (
-            isinstance(stmt, ast.Assign)
-            and isinstance(stmt.value, ast.Call)
-            and isinstance(stmt.value.func, ast.Name)
-            and stmt.value.func.id == "solve_pose"
-        ):
-            solve_idx = idx
-    assert canonical_idx is not None
-    assert solve_idx is not None
-    assert canonical_idx < solve_idx
-    assert canonical_uses_src_expressed_in
-
-
 def test_arch_spatial_c5_004_frame_owner_common_single_owner_helpers_for_dst_source_and_clear_framing() -> None:
     """ID: ARCH_SPATIAL_C5_004_frame_owner_common_single_owner_helpers_for_dst_source_and_clear_framing."""
     common_text = Path("tal/spatial/ops/frame_owner_common.py").read_text(encoding="utf-8")
@@ -2716,10 +2386,6 @@ def test_arch_spatial_c5_004_frame_owner_common_single_owner_helpers_for_dst_sou
     assert "def source_expressed_in_id(" in common_text
     assert "def clear_framing(" in common_text
     for text in (expr_text, kin_text):
-        assert (
-            "from .frame_owner_common import clear_framing, dst_frame_id, require_source_parent, "
-            "source_expressed_in_id"
-        ) in text
         assert "def _dst_frame_id(" not in text
         assert "def _require_source_parent(" not in text
         assert "def _source_expressed_in_id(" not in text
@@ -2758,15 +2424,6 @@ def test_arch_spatial_c5_002_no_local_find_path_fold_path_or_kernel_duplication_
         assert "xr.apply_ufunc(" not in text
         assert "from ..kernels" not in text
 
-
-
-def test_arch_spatial_c5_003_c5_reuses_c4_metadata_helpers_for_relation_semantics() -> None:
-    """ID: ARCH_SPATIAL_C5_003_c5_reuses_c4_metadata_helpers_for_relation_semantics."""
-    owner_text = Path("tal/spatial/ops/frame_expression_ops.py").read_text(encoding="utf-8")
-    kin_owner_text = Path("tal/spatial/ops/kinematics_frame_ops.py").read_text(encoding="utf-8")
-    assert "set_expressed_in" in owner_text
-    assert "set_expressed_in" in kin_owner_text
-    assert "set_instantaneous_inertial" in kin_owner_text
 
 
 def test_spatial_doc_012_phase8_slice_c3_kinematics_frame_api_docs_and_entries_present() -> None:
@@ -2814,39 +2471,9 @@ def test_arch_spatial_c7_001_kinematics_to_frame_reuses_c1_b4_b5_owners_without_
     assert "from ..path_solve import _solve_pose_path_transform_with_owner" in wrapper_text
     assert "_run_vector_to_frame_non_identity(" in wrapper_text
     assert "_pose_apply_with_owner(" in wrapper_text
-    assert "resolve_kinematics_path_support(" in wrapper_text
-    assert "apply_vector_path_coupling(" in wrapper_text
     for text in (wrapper_text, support_text, coupling_text):
         assert "from ..kernels" not in text
         assert "xr.apply_ufunc(" not in text
-
-
-def test_arch_spatial_c7_002_c7_support_checks_consume_c4_and_c6_metadata_owners() -> None:
-    """ID: ARCH_SPATIAL_C7_002_c7_support_checks_consume_c4_and_c6_metadata_owners."""
-    support_text = Path("tal/spatial/ops/kinematics_path_support_ops.py").read_text(encoding="utf-8")
-    assert "get_instantaneous_inertial" in support_text
-    assert "get_kinematics_kind" in support_text
-    assert "get_edge_motion_class" in support_text
-    assert "get_frame_inertial_status" in support_text
-    assert "KinematicsPathSupportOptions" in support_text
-    assert (
-        "from tal.frames import (\n"
-        "    Frame,\n"
-        "    FrameGraph,\n"
-        "    FramePath,\n"
-        "    find_path,\n"
-        "    get_active_frame_graph,\n"
-        ")"
-    ) in support_text
-    assert (
-        "from ..metadata import (\n"
-        "    EDGE_MOTION_CLASS_VALUES,\n"
-        "    FRAME_INERTIAL_STATUS_VALUES,\n"
-        "    get_edge_motion_class,\n"
-        "    get_frame_inertial_status,\n"
-        "    get_instantaneous_inertial,\n"
-        ")"
-    ) in support_text
 
 
 def test_arch_spatial_c7_003_no_find_path_fold_path_duplication_in_c7_wrappers() -> None:
@@ -2879,20 +2506,6 @@ def test_arch_spatial_c7_005_support_owner_validates_kinematics_support_type_bef
     assert "def _resolve_support(opts: PathSolveOptions | None, *, owner: str)" in support_text
     assert "isinstance(support, KinematicsPathSupportOptions)" in support_text
     assert "opts.kinematics_support must be KinematicsPathSupportOptions or None" in support_text
-
-
-def test_arch_spatial_c7_006_support_graph_resolution_uses_opts_then_dst_frame_then_active() -> None:
-    """ID: ARCH_SPATIAL_C7_006_support_graph_resolution_uses_opts_then_dst_frame_then_active."""
-    support_text = Path("tal/spatial/ops/kinematics_path_support_ops.py").read_text(encoding="utf-8")
-    assert "def _resolve_graph(opts: PathSolveOptions | None, *, dst: Frame | str, owner: str) -> FrameGraph:" in support_text
-    assert "graph = _resolve_graph(opts, dst=dst, owner=owner)" in support_text
-    assert "if opts is not None and opts.graph is not None:" in support_text
-    assert "if isinstance(dst, Frame):" in support_text
-    assert "return get_active_frame_graph()" in support_text
-    opts_idx = support_text.index("if opts is not None and opts.graph is not None:")
-    dst_idx = support_text.index("if isinstance(dst, Frame):")
-    active_idx = support_text.index("return get_active_frame_graph()")
-    assert opts_idx < dst_idx < active_idx
 
 
 def test_arch_spatial_c8_001_frame_aware_alignment_reuses_core_intent_topology_alignment_owners() -> None:

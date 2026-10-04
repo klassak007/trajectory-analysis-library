@@ -8,6 +8,7 @@ from .concat_finalize import finalize_concat_sequence_contexts, postprocess_conc
 from .concat_overlap import validate_concat_overlap
 from .concat_pack import build_packed_concat_dataset
 from .concat_plan import ConcatSequencePlan, build_concat_sequence_plan
+from .finalize import prepare_combine_finalization
 from .types import CombineContext, SequenceConcatOptions
 
 
@@ -47,6 +48,10 @@ def concat_sequence_contexts(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner="concat_sequence",
+    )
     plan = build_concat_sequence_plan(
         contexts,
         opts=opts,
@@ -63,4 +68,5 @@ def concat_sequence_contexts(
         param_name=param_name,
         size_name=size_name,
         validate=validate,
+        finalization=finalization,
     )

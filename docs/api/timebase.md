@@ -7,6 +7,7 @@
 TAL parameter operations evaluate, select, resample, and synchronize AOs on a
 semantic coordinate. The coordinate is often time, but the API is intentionally
 generic: any declared ordered coordinate can be used as the operation domain.
+Declared parameter coordinates may be numeric or `datetime64`.
 
 ```{contents}
 :local:
@@ -25,6 +26,10 @@ ao.param.interp_like(other, *, on=None, batch_join="exact", validate=True, ...)
 
 `on` selects the coordinate used as the parameter domain. If `on` is omitted,
 TAL uses the AO's declared `param_coord`.
+
+Datetime64 parameter coordinates accept datetime-like scalar, NumPy, pandas, and
+xarray query values for `index(...)`, `sel(...)`, `at(...)`, `resample_to(...)`,
+and `interp_like(...)`. Selection and indexing remain tolerance-free.
 
 ## Selection vs Evaluation
 
@@ -60,6 +65,9 @@ Common `ParamSyncOptions` choices:
 - `join="domain"` builds a shared domain grid.
 - `how="interp"` interpolates onto the resolved grid.
 - `batch_join` controls how batch labels are joined.
+- `tol` is numeric for numeric parameter coordinates and timedelta-like for
+  datetime64 parameter coordinates. Nonzero numeric tolerances are rejected for
+  datetime64 synchronization.
 
 ## Invariants
 
@@ -67,7 +75,7 @@ Common `ParamSyncOptions` choices:
 - Interpolation requires monotonic parameter values on each active batch row.
 - Ragged validity metadata limits the active domain.
 - Batch labels must satisfy the requested join policy.
-- Ambiguous or missing parameter coordinates fail before numeric work starts.
+- Ambiguous or missing parameter coordinates fail before query/map work starts.
 
 ## Typed Spatial Behavior
 
@@ -92,6 +100,7 @@ policies.
    tal.core.ParamSelectOptions
    tal.core.ParamEvalOptions
    tal.core.ParamSyncOptions
+   tal.core.ParamSyncTolerance
 ```
 
 ## See Also

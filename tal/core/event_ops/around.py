@@ -7,9 +7,26 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
-from tal.utils.xarray_namespace import dataarray_namespace_names, dataset_namespace_names, unique_temp_dim
+from tal.utils.xarray_namespace import (
+    dataarray_namespace_names,
+    dataset_namespace_names,
+    unique_temp_dim,
+)
 
+from ..dataset_ownership import analysis_object_dataset
+from ..orchestration.finalize import transfer_dataset_attrs
+from ..orchestration.indexing import (
+    dimension_coordinates,
+    lane_index_groups,
+    require_exact_lane_indexes,
+    without_index_topology,
+)
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
+from ..param_engine.query_topology import (
+    generated_query_coordinate_names,
+    preflight_query_output_namespace,
+)
+from ..param_ops.query_metadata import without_inherited_query_metadata
 from ..param_ops.types import ParamEvalOptions
 from .boundary import EventBoundaryPayload, extract_event_boundaries
 from .boundary_select import select_event_boundaries
@@ -17,9 +34,10 @@ from .evaluate import evaluate_mask
 from .event_primitives import EDGE_INVALID, EDGE_TRIGGER, SAMPLE_SENTINEL
 from .finalize import finalize_event_output
 from .options import coerce_around_grid
-from .pack import pack_event_table
+from .pack import _assert_event_var_namespace_safe, pack_event_table
 from .resolve import EventEvalContext, resolve_event_eval_context
 from .types import AroundOptions, Condition, EventExtractOptions
+from .window_stack import mask_aligned_samples
 
 if TYPE_CHECKING:
     from ..analysis_object import AnalysisObject
@@ -59,6 +77,7 @@ def _condition_anchor_table(
     opts: AroundOptions,
     owner: str,
 ) -> xr.Dataset:
+    _assert_event_var_namespace_safe(context, owner=owner)
     effective = evaluate_mask(condition, context=context, owner=owner)
     fail_if_chunked_boundary(
         _chunked_condition_source(context, effective=effective),
@@ -96,8 +115,14 @@ def _source_time_dataarray(
         data = source["time"]
     else:
         data = source
+    projected = without_inherited_query_metadata(data)
+    if data.name in projected.coords and data.name not in projected.xindexes and (
+        projected.coords[data.name].dims == data.dims
+    ):
+        # Explicit anchor data owns the clock; its unindexed self-coordinate is consumed.
+        projected = projected.drop_vars(data.name)
     try:
-        out = data.astype("float64")
+        out = projected.astype("float64")
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{owner}: explicit event times must be numeric (coercible to float64).") from exc
     return out
@@ -123,6 +148,8 @@ def _validate_explicit_batch_labels(
     for dim in context.runtime.batch_dims:
         if dim not in source.dims:
             continue
+        if lane_index_groups(source, lane_dim=dim):
+            require_exact_lane_indexes(source, context.clock, lane_dim=dim, owner=owner, what="explicit event times")
         if source.get_index(dim).equals(context.clock.get_index(dim)):
             continue
         raise ValueError(f"{owner}: explicit event times labels for batch dim {dim!r} must match context labels.")
@@ -150,7 +177,8 @@ def _with_missing_batch_dims(
     for dim in context.runtime.batch_dims:
         if dim in out.dims:
             continue
-        out = out.expand_dims({dim: context.clock.coords[dim]})
+        out = out.expand_dims({dim: context.runtime.ds.sizes[dim]})
+        out = out.assign_coords(dimension_coordinates(context.runtime.ds, dims=(dim,)))
     return out
 
 
@@ -161,6 +189,16 @@ def _align_explicit_times(
     owner: str,
 ) -> tuple[xr.DataArray, str]:
     source = _source_time_dataarray(times, owner=owner)
+    _assert_event_var_namespace_safe(context, owner=owner, incoming=source)
+    preflight_query_output_namespace(
+        context.runtime.ds, source, sequence_dim=context.runtime.sequence_dim,
+        batch_dims=context.runtime.batch_dims, owner=owner,
+        generated_names=generated_query_coordinate_names(
+            operation="evaluate", param_name=context.runtime.spec.name,
+            size_name=context.runtime.sequence_size_coord, trajectory=False, mapped_dataset=True,
+        ),
+        retain_sequence_coords=True, param_name=context.runtime.spec.name,
+    )
     if context.runtime.sequence_dim in source.dims:
         raise ValueError(
             f"{owner}: explicit event times must not use sequence dim {context.runtime.sequence_dim!r}."
@@ -184,6 +222,7 @@ def _explicit_anchor_payload(
     if isinstance(source, xr.Dataset) and "time" not in source.data_vars:
         raise ValueError(f"{owner}: explicit dataset source must contain data variable 'time'.")
     base = source if isinstance(source, xr.DataArray) else source["time"]
+    _assert_event_var_namespace_safe(context, owner=owner)
     times, event_dim = _align_explicit_times(base, context=context, owner=owner)
     finite = xr.apply_ufunc(np.isfinite, times.astype("float64"), dask="allowed").astype(bool)
     edge = xr.where(finite, int(EDGE_TRIGGER), int(EDGE_INVALID)).astype("int8")
@@ -284,25 +323,6 @@ def _evaluate_window_dataset(
     validate: bool,
 ) -> tuple[xr.Dataset, xr.DataArray]:
     valid_event = (table["edge_code"] != int(EDGE_INVALID)).astype(bool)
-    if table.sizes.get(event_dim, 0) == 0 or any(context.clock.sizes.get(dim, 0) == 0 for dim in context.runtime.batch_dims):
-        query_dim = _query_dim_name(context=context, table=table, tau_dim=tau_dim)
-        out = context.ao.param.at(
-            tau.astype("float64").rename(context.runtime.spec.name),
-            on=opts.eval.coord_name,
-            opts=_param_eval_options(query_dim=query_dim, opts=opts),
-            validate=validate,
-            sequence_dim=context.runtime.sequence_dim,
-            batch_dims=context.runtime.batch_dims,
-            sequence_size_coord=context.runtime.sequence_size_coord,
-        )
-        if context.runtime.sequence_dim in out.unsafe_data.dims and context.runtime.sequence_dim != tau_dim:
-            out = out.rename({context.runtime.sequence_dim: tau_dim}, validate=False)
-        out = out.set_param_coord(name=tau_dim, validate=False)
-        empty = out.unsafe_data.expand_dims(
-            {event_dim: table.coords[event_dim].values},
-            axis=len(context.runtime.batch_dims),
-        )
-        return empty, valid_event
     query = _query_times(table["time"], tau, context=context, event_dim=event_dim, tau_dim=tau_dim)
     query_dim = _query_dim_name(context=context, table=table, tau_dim=tau_dim)
     out = context.ao.param.at(
@@ -314,7 +334,8 @@ def _evaluate_window_dataset(
         batch_dims=context.runtime.batch_dims,
         sequence_size_coord=context.runtime.sequence_size_coord,
     )
-    masked = _mask_invalid_event_rows(out.unsafe_data, valid_event=valid_event, sequence_dim=tau_dim)
+    out_ds = analysis_object_dataset(out)
+    masked = _mask_invalid_event_rows(out_ds, valid_event=valid_event, sequence_dim=tau_dim)
     return masked, valid_event
 
 
@@ -324,18 +345,9 @@ def _mask_invalid_event_rows(
     valid_event: xr.DataArray,
     sequence_dim: str,
 ) -> xr.Dataset:
-    var_updates = {
-        name: var.where(valid_event)
-        for name, var in ds.data_vars.items()
-        if sequence_dim in var.dims
-    }
-    coord_updates = {
-        name: coord.where(valid_event)
-        for name, coord in ds.coords.items()
-        if name != sequence_dim and sequence_dim in coord.dims
-    }
-    out = ds.assign(var_updates) if var_updates else ds
-    return out.assign_coords(coord_updates) if coord_updates else out
+    if isinstance(valid_event.data, np.ndarray) and bool(np.all(valid_event.data)):
+        return ds
+    return mask_aligned_samples(ds, valid_event, sequence_dim=sequence_dim)
 
 
 def _metadata_namespace_safe(ds: xr.Dataset, *, owner: str) -> None:
@@ -363,23 +375,21 @@ def _attach_metadata_and_size(
 ) -> xr.Dataset:
     _metadata_namespace_safe(ds, owner=owner)
     size = xr.where(valid_event, int(tau.size), 0).astype("int64")
-    return ds.assign_coords(
-        {
-            tau.dims[0]: tau,
-            "event_time": table["time"].astype("float64"),
-            "event_edge_code": table["edge_code"].astype("int8"),
-            "event_sample_index_before": table["sample_index_before"].astype("int64"),
-            "event_sample_index_after": table["sample_index_after"].astype("int64"),
-            event_dim: table.coords[event_dim],
-            size_name: size,
-        }
-    )
+    projected = without_index_topology(ds, dims=(event_dim,))
+    projected = projected.assign_coords(dimension_coordinates(table, dims=(event_dim,)))
+    generated = {
+        tau.dims[0]: tau.variable,
+        "event_time": table["time"].astype("float64").variable,
+        "event_edge_code": table["edge_code"].astype("int8").variable,
+        "event_sample_index_before": table["sample_index_before"].astype("int64").variable,
+        "event_sample_index_after": table["sample_index_after"].astype("int64").variable,
+        size_name: size.variable,
+    }
+    return projected.assign_coords(xr.Coordinates(generated, indexes={}))
 
 
-def _with_source_schema_attrs(ds: xr.Dataset, *, source: "AnalysisObject") -> xr.Dataset:
-    out = ds.copy(deep=False)
-    out.attrs = dict(source.unsafe_data.attrs)
-    return out
+def _with_source_schema_attrs(ds: xr.Dataset, *, source: AnalysisObject) -> xr.Dataset:
+    return transfer_dataset_attrs(analysis_object_dataset(source), ds, validate=False)
 
 
 def _anchor_table(
@@ -397,13 +407,13 @@ def _anchor_table(
 
 
 def evaluate_around_segments_windows(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     events_or_condition: Condition | xr.DataArray | xr.Dataset,
     *,
     opts: AroundOptions,
     validate: bool = True,
     owner: str = "events.around",
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Evaluate event-locked windows using event-major segments layout.
 
     Parameters
@@ -465,13 +475,13 @@ def evaluate_around_segments_windows(
 
 
 def evaluate_around_windows(
-    ao: "AnalysisObject",
+    ao: AnalysisObject,
     events_or_condition: Condition | xr.DataArray | xr.Dataset,
     *,
     opts: AroundOptions,
     validate: bool = True,
     owner: str = "events.around",
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Evaluate around windows using the selected around layout policy.
 
     Parameters

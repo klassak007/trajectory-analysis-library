@@ -19,12 +19,28 @@ parameter evaluation.
 ```python
 Pose.from_components(rotation, position, ...)
 Pose.from_matrix(matrix, ...)
+Pose.from_fields(source, position=..., rotation=...)
 pose.decompose()
 ```
 
 Component layout stores rotation and position payloads. Matrix layout stores a
 matrix-style pose payload. Decomposition returns typed `Position` and
 `Rotation` outputs.
+
+Constructors accept `parent=`, `child=`, `expressed_in=`, and `graph=`.
+Association is passive and does not register the pose. Inspect `pose.graph` or
+return a distinct associated alias with `pose.with_graph(...)`.
+
+`Pose.fields(position=..., rotation=...)` declares a reusable immutable
+component-Pose recipe. Field construction prepares the selected source union
+once and gives the generated `position` and `rotation` variables empty ordinary
+attributes and encodings.
+
+Use `pose.register()` after associating a canonical parent/child Pose with a
+graph. It accepts static and parameterized native-rate providers, returns the
+same Pose by identity, and never implicitly reparents an existing frame.
+`tal.spatial.bind_pose(...)` remains the advanced graph-first API for callable
+or exact unparameterized providers.
 
 ## Representation
 
@@ -46,24 +62,34 @@ pose.apply(target)
 ```
 
 Compose and inverse execute through canonical split form: cartesian position
-plus quaternion rotation. `apply(...)` supports compatible positions and
-kinematic payloads.
+plus quaternion rotation. Framed inverse is graph-free and requires the value
+to be expressed in its parent basis; use
+`pose.express_in(parent).inverse()` for a third-frame value. A value without a
+parent is unframed only when its child and expression basis are also absent;
+otherwise complete or clear its framing before inversion. `apply(...)` supports
+compatible positions and kinematic payloads.
 
 ## Frames and Basis
 
 ```python
-pose.express_in(dst, *, edge_pose_fn, opts=None, validate=True)
-Pose.solve_path_transform(src, dst, *, edge_pose_fn, opts=None, validate=True)
+pose.express_in(dst, *, edge_pose_fn=None, graph=None, opts=None, validate=True)
+Pose.solve_path_transform(src, dst, *, edge_pose_fn=None, graph=None, query=None, opts=None, validate=True)
 ```
 
 `express_in(...)` changes basis only. Path solving changes relation by
 composing edge poses along a frame graph path.
+Direct class solves accept `query=` for dynamic providers. Object
+`express_in(...)` uses the pose's own parameter grid when a required provider
+is dynamic.
 
 ## Parameter Evaluation
 
 `pose.param.at(...)` and `pose.param.resample_to(...)` use split typed
 interpolation: position is numeric, rotation is rotation-aware. `on=...`
 selects the parameter coordinate used for interpolation.
+Labeled multidimensional queries flatten query-only dimensions to a
+positional sequence while retaining their labels as sequence-dependent
+coordinates; shared source batch dimensions remain intact.
 
 ## Autosummary
 
@@ -73,6 +99,11 @@ selects the parameter coordinate used for interpolation.
    :nosignatures:
 
    tal.spatial.Pose
+   tal.spatial.Pose.fields
+   tal.spatial.Pose.from_fields
+   tal.spatial.Pose.graph
+   tal.spatial.Pose.with_graph
+   tal.spatial.Pose.register
    tal.spatial.Pose.from_components
    tal.spatial.Pose.from_matrix
    tal.spatial.Pose.decompose

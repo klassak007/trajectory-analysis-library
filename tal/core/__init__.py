@@ -32,15 +32,38 @@ from .component_ops import (
     patch_components,
     read_components,
 )
-from .group_ops import GroupByOptions, GroupMaterializeOptions, GroupingBinSpec
-from .param_ops import ParamEvalOptions, ParamSelectOptions, ParamSyncOptions, synchronize, synchronize_param
-from .schema import merge_schema, set_param_coord, set_roles, set_validity, validate_schema
+from .group_ops import (
+    BatchGroupedView,
+    BatchGroupReduceOptions,
+    GroupByOptions,
+    GroupingBinSpec,
+    GroupMaterializeOptions,
+)
+from .layout import AnalysisLayoutSpec
+from .param_ops import (
+    ParamEvalOptions,
+    ParamSelectOptions,
+    ParamSyncOptions,
+    ParamSyncTolerance,
+    synchronize,
+    synchronize_param,
+)
+from .schema import (
+    merge_schema,
+    set_param_coord,
+    set_roles,
+    set_validity,
+    validate_schema,
+)
 from .schema_errors import SchemaError
 
 __all__ = [
-    "AnalysisObject",
     "AlignOptions",
+    "AnalysisLayoutSpec",
+    "AnalysisObject",
     "BatchConcatOptions",
+    "BatchGroupReduceOptions",
+    "BatchGroupedView",
     "ComponentComposeOptions",
     "ComponentExtractOptions",
     "ComponentPatchOptions",
@@ -53,33 +76,34 @@ __all__ = [
     "GroupMaterializeOptions",
     "GroupingBinSpec",
     "MergeOptions",
-    "ParamPrealignOptions",
-    "SequenceConcatOptions",
-    "ParamSelectOptions",
     "ParamEvalOptions",
+    "ParamPrealignOptions",
+    "ParamSelectOptions",
     "ParamSyncOptions",
+    "ParamSyncTolerance",
     "SchemaError",
+    "SequenceConcatOptions",
     "align_many",
     "align_pair",
     "assemble_core",
     "block_core",
+    "compose_components",
     "concat_batch",
     "concat_core",
     "concat_sequence",
-    "compose_components",
     "decompose_core",
     "define_components",
     "extract_components",
     "merge",
+    "merge_schema",
     "overlay_core",
     "patch_components",
     "read_components",
+    "set_param_coord",
+    "set_roles",
+    "set_validity",
     "stack_core",
     "synchronize",
     "synchronize_param",
-    "set_roles",
-    "set_param_coord",
-    "set_validity",
-    "merge_schema",
     "validate_schema",
 ]

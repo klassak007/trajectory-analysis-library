@@ -1,25 +1,57 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import xarray as xr
 
 from tal import ufuncs
-from tal.core import AnalysisObject, ParamEvalOptions, ParamSyncOptions, synchronize
+from tal.core import (
+    AnalysisLayoutSpec,
+    AnalysisObject,
+    ParamEvalOptions,
+    ParamSyncOptions,
+    synchronize,
+)
 from tal.core.event_ops import (
-    AroundOptions,
     AtBoundariesOptions,
     Condition,
-    ConditionEvalOptions,
-    EventExtractOptions,
-    IntervalExtractOptions,
     WhenOptions,
 )
-from tal.core.schema_read import read_param_coord_name, read_roles, read_sequence_size_coord_name
-from tal.frames import FrameGraph, find_path, fold_path, render_snapshot_ascii, snapshot_from_seeds
-from tal.linalg import Matrix, Vector, Vector3, add, dot, inv, matmul, norm, pinv, solve, sub
+from tal.core.schema_read import (
+    read_param_coord_name,
+    read_roles,
+    read_sequence_size_coord_name,
+)
+from tal.frames import (
+    FrameGraph,
+    find_path,
+    fold_path,
+    render_snapshot_ascii,
+    snapshot_from_seeds,
+)
+from tal.io import CsvIngestOptions, RosIngestOptions, read_csv_logs, read_ros_logs
+from tal.io import ros_logs as ros_logs_module
+from tal.io import ros_payload as ros_payload_module
+from tal.io import ros_reader as ros_reader_module
+from tal.linalg import (
+    Matrix,
+    Vector,
+    Vector3,
+    add,
+    dot,
+    inv,
+    matmul,
+    norm,
+    pinv,
+    solve,
+    sub,
+)
 from tal.spatial import Pose, Position, Rotation
+from tests.docs_examples._illustrated_example import example_guide_illustrated_workflow
 
 
 def _scalar_signal_ao() -> AnalysisObject:
@@ -54,14 +86,14 @@ def _event_ao() -> AnalysisObject:
             coords={
                 "trial": ["flight_0"],
                 "sample": sample,
-                "time_s": (("trial", "sample"), time_s[None, :]),
+                "time": (("trial", "sample"), time_s[None, :]),
                 "group_size": ("trial", np.array([sample.size], dtype=np.int64)),
             },
         ),
         sequence_dim="sample",
         batch_dims=("trial",),
         core_dims=(),
-        param_coord="time_s",
+        param_coord="time",
         sequence_size_coord="group_size",
         validate=True,
     )
@@ -129,8 +161,8 @@ def example_guide_overview_basic_workflow() -> None:
     )
     resampled = ao.param.at([0.5, 1.5, 2.5], on="time")
     mean_position = ao.mean(dim="sample")
-    assert resampled.unsafe_data.sizes["sample"] == 3
-    assert mean_position.unsafe_data["position"].dims == ("run", "axis")
+    assert resampled.as_dataset(copy="none").sizes["sample"] == 3
+    assert mean_position.as_dataset(copy="none")["position"].dims == ("run", "axis")
 
 
 def example_guide_core_concepts_roles() -> None:
@@ -153,13 +185,13 @@ def example_guide_core_concepts_roles() -> None:
         sequence_size_coord="group_size",
         validate=True,
     )
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.unsafe_data)
+    declared, sequence_dim, batch_dims, core_dims = read_roles(ao.as_dataset(copy="none"))
     assert declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
     assert core_dims == ()
-    assert read_param_coord_name(ao.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(ao.unsafe_data) == "group_size"
+    assert read_param_coord_name(ao.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(ao.as_dataset(copy="none")) == "group_size"
 
 
 def example_guide_creating_sequence_ao() -> None:
@@ -216,11 +248,11 @@ def example_guide_creating_sequence_ao() -> None:
     updated = updated.set_roles(sequence_dim="sample", batch_dims=("trial",), core_dims=("axis",), validate=True)
     updated = updated.set_param_coord(name="time_s", validate=True)
     updated = updated.set_validity(sequence_size_coord="group_size", validate=True)
-    assert core_only.unsafe_data["value"].dims == ("axis",)
-    assert batch_core.unsafe_data["value"].dims == ("trial", "axis")
-    assert full.unsafe_data["position"].dims == ("trial", "sample", "axis")
-    assert read_param_coord_name(updated.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(updated.unsafe_data) == "group_size"
+    assert core_only.as_dataset(copy="none")["value"].dims == ("axis",)
+    assert batch_core.as_dataset(copy="none")["value"].dims == ("trial", "axis")
+    assert full.as_dataset(copy="none")["position"].dims == ("trial", "sample", "axis")
+    assert read_param_coord_name(updated.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(updated.as_dataset(copy="none")) == "group_size"
     assert full.to_dataarray(name="position").name == "position"
 
 
@@ -228,16 +260,16 @@ def example_guide_indexing_param_query() -> None:
     ao = _scalar_signal_ao()
     head = ao.isel(sample=slice(0, 3))
     trial_t0 = ao.sel(trial="t0")
-    positive = ao.where(ao.unsafe_data["signal"] > 0.0)
+    positive = ao.where(ao.as_dataset(copy="none")["signal"] > 0.0)
     index = ao.param.index([0.18, 0.52], on="time_s")
     nearest = ao.param.sel([0.18, 0.52], on="time_s")
     interp = ao.param.at([0.18, 0.52], on="time_s", opts=ParamEvalOptions(method="linear"))
-    assert head.unsafe_data.sizes["sample"] == 3
-    assert trial_t0.unsafe_data.sizes["sample"] == 6
-    assert positive.unsafe_data["signal"].isnull().any()
+    assert head.as_dataset(copy="none").sizes["sample"] == 3
+    assert trial_t0.as_dataset(copy="none").sizes["sample"] == 6
+    assert positive.as_dataset(copy="none")["signal"].isnull().any()
     assert index.sizes["query"] == 2
-    assert nearest.unsafe_data.sizes["sample"] == 2
-    assert interp.unsafe_data.sizes["sample"] == 2
+    assert nearest.as_dataset(copy="none").sizes["sample"] == 2
+    assert interp.as_dataset(copy="none").sizes["sample"] == 2
 
 
 def example_guide_time_synchronize() -> None:
@@ -253,10 +285,10 @@ def example_guide_time_synchronize() -> None:
         on="time_s",
         opts=ParamSyncOptions(join="domain", how="interp", batch_join="inner", query_dim="query"),
     )
-    assert imu_at.unsafe_data.sizes["sample"] == 3
-    assert imu_rs.unsafe_data.sizes["sample"] == 6
-    assert gps_on_imu.unsafe_data.sizes["sample"] == imu.unsafe_data.sizes["sample"]
-    np.testing.assert_allclose(synced_imu.unsafe_data.coords["time_s"], synced_gps.unsafe_data.coords["time_s"])
+    assert imu_at.as_dataset(copy="none").sizes["sample"] == 3
+    assert imu_rs.as_dataset(copy="none").sizes["sample"] == 6
+    assert gps_on_imu.as_dataset(copy="none").sizes["sample"] == imu.as_dataset(copy="none").sizes["sample"]
+    np.testing.assert_allclose(synced_imu.as_dataset(copy="none").coords["time_s"], synced_gps.as_dataset(copy="none").coords["time_s"])
 
 
 def _time_source(var_name: str, values: np.ndarray, time_s: np.ndarray) -> AnalysisObject:
@@ -281,27 +313,30 @@ def _time_source(var_name: str, values: np.ndarray, time_s: np.ndarray) -> Analy
 
 def example_guide_events_windows() -> None:
     ao = _event_ao()
-    fast = Condition.compare(Condition.var("speed_mps"), "gt", 5.0)
-    eval_opts = ConditionEvalOptions(coord_name="time_s")
-    mask = ao.events.mask(fast, opts=eval_opts)
-    events = ao.events.events(fast, opts=EventExtractOptions(eval=eval_opts))
-    intervals = ao.events.intervals(fast, opts=IntervalExtractOptions(eval=eval_opts))
-    boundaries = ao.events.at_boundaries(fast, opts=AtBoundariesOptions(eval=eval_opts, edges="enter"))
-    masked = ao.events.when(fast, opts=WhenOptions(eval=eval_opts, layout="mask"))
-    stream = ao.events.when(fast, opts=WhenOptions(eval=eval_opts, layout="stream"))
-    around = ao.events.around(fast, opts=AroundOptions(eval=eval_opts, edge="enter", pre=0.1, post=0.2, dt=0.1))
+    fast = ao > 5.0
+    mask = ao.events.mask(fast)
+    events = ao.events.events(fast)
+    intervals = ao.events.intervals(fast)
+    boundaries = ao.events.at_boundaries(fast, opts=AtBoundariesOptions(edges="enter"))
+    masked = ao.events.when(fast)
+    stream = ao.events.when(fast, opts=WhenOptions(layout="stream"))
+    around = ao.events.around(fast, edge="enter", pre=0.1, post=0.2, dt=0.1)
     around_stacked = ao.events.around(
         fast,
-        opts=AroundOptions(layout="stacked", eval=eval_opts, edge="enter", pre=0.1, post=0.2, dt=0.1),
+        layout="stacked",
+        edge="enter",
+        pre=0.1,
+        post=0.2,
+        dt=0.1,
     )
     assert mask.dtype == bool
     assert "event" in events.dims
     assert "segment" in intervals.dims
-    assert "event_edge_code" in boundaries.unsafe_data.coords
-    assert masked.unsafe_data["speed_mps"].dims == ao.unsafe_data["speed_mps"].dims
-    assert stream.unsafe_data.sizes["stream_sample"] >= 1
-    assert around.unsafe_data.sizes["tau"] >= 1
-    assert "window_event_index" in around_stacked.unsafe_data.coords
+    assert "event_edge_code" in boundaries.as_dataset(copy="none").coords
+    assert masked.as_dataset(copy="none")["speed_mps"].dims == ao.as_dataset(copy="none")["speed_mps"].dims
+    assert stream.as_dataset(copy="none").sizes["stream_sample"] >= 1
+    assert around.as_dataset(copy="none").sizes["tau"] >= 1
+    assert "window_event_index" in around_stacked.as_dataset(copy="none").coords
 
 
 def example_guide_linalg_basic() -> None:
@@ -328,20 +363,20 @@ def example_guide_linalg_basic() -> None:
     Apinv = pinv(A)
     Apinv2 = A.pinv()
     vec3 = Vector3.from_xyz(x_component, 0.0, 1.0, axis="axis", output_var="vec3")
-    np.testing.assert_allclose(Av.unsafe_data["datavar"], Av2.unsafe_data["datavar"])
-    np.testing.assert_allclose(energy.unsafe_data["datavar"], energy2.unsafe_data["datavar"])
-    np.testing.assert_allclose(mag.unsafe_data["datavar"], mag2.unsafe_data["datavar"])
-    assert energy.unsafe_data["datavar"].dims == ("sample",)
-    assert mag.unsafe_data["datavar"].dims == ("sample",)
-    assert x.unsafe_data["datavar"].dims == ("sample", "col")
-    assert x2.unsafe_data["datavar"].dims == ("sample", "col")
-    assert sum_v.unsafe_data["datavar"].dims == ("sample", "col")
-    assert diff_v.unsafe_data["datavar"].dims == ("sample", "col")
-    assert Ainv.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert Ainv2.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert Apinv.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert Apinv2.unsafe_data["datavar"].shape[-2:] == (2, 2)
-    assert tuple(vec3.unsafe_data.coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
+    np.testing.assert_allclose(Av.as_dataset(copy="none")["datavar"], Av2.as_dataset(copy="none")["datavar"])
+    np.testing.assert_allclose(energy.as_dataset(copy="none")["datavar"], energy2.as_dataset(copy="none")["datavar"])
+    np.testing.assert_allclose(mag.as_dataset(copy="none")["datavar"], mag2.as_dataset(copy="none")["datavar"])
+    assert energy.as_dataset(copy="none")["datavar"].dims == ("sample",)
+    assert mag.as_dataset(copy="none")["datavar"].dims == ("sample",)
+    assert x.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert x2.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert sum_v.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert diff_v.as_dataset(copy="none")["datavar"].dims == ("sample", "col")
+    assert Ainv.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert Ainv2.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert Apinv.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert Apinv2.as_dataset(copy="none")["datavar"].shape[-2:] == (2, 2)
+    assert tuple(vec3.as_dataset(copy="none").coords["axis"].to_numpy().tolist()) == ("x", "y", "z")
 
 
 def _matrix_vector_pair() -> tuple[Matrix, Vector]:
@@ -392,13 +427,13 @@ def example_guide_numpy_ufuncs() -> None:
     aligned_xy = x.a(on="sequence", sequence_join="inner") + y
     broadcast_bias = x + bias.b()
     condition = ufuncs.greater(x, 1.0)
-    np.testing.assert_allclose(sin_x.unsafe_data["value"], np.sin(x.unsafe_data["value"]))
-    np.testing.assert_allclose(exp_x.unsafe_data["value"], np.exp(x.unsafe_data["value"]))
-    np.testing.assert_allclose(sum_xy.unsafe_data["value"], x.unsafe_data["value"] + y.unsafe_data["value"])
-    np.testing.assert_allclose(aligned_xy.unsafe_data["value"], x.unsafe_data["value"] + y.unsafe_data["value"])
+    np.testing.assert_allclose(sin_x.as_dataset(copy="none")["value"], np.sin(x.as_dataset(copy="none")["value"]))
+    np.testing.assert_allclose(exp_x.as_dataset(copy="none")["value"], np.exp(x.as_dataset(copy="none")["value"]))
+    np.testing.assert_allclose(sum_xy.as_dataset(copy="none")["value"], x.as_dataset(copy="none")["value"] + y.as_dataset(copy="none")["value"])
+    np.testing.assert_allclose(aligned_xy.as_dataset(copy="none")["value"], x.as_dataset(copy="none")["value"] + y.as_dataset(copy="none")["value"])
     np.testing.assert_allclose(
-        broadcast_bias.unsafe_data["value"],
-        x.unsafe_data["value"] + np.asarray([10.0, 20.0]),
+        broadcast_bias.as_dataset(copy="none")["value"],
+        x.as_dataset(copy="none")["value"] + np.asarray([10.0, 20.0]),
     )
     assert isinstance(condition, Condition)
 
@@ -417,7 +452,19 @@ def _numeric_ao(values: list[list[float]]) -> AnalysisObject:
 
 def example_guide_spatial_pose() -> None:
     pos, rot = _make_position_rotation()
-    pose = Pose.from_components(rot, pos)
+    graph = FrameGraph()
+    pose = Pose.from_components(
+        rot,
+        pos,
+        parent="world",
+        child="body",
+        graph=graph,
+    )
+    pose.register()
+    body_samples = Position(pos, parent="body", child="probe", graph=graph)
+    world_samples = body_samples.to_frame("world")
+    associated_pos = pos.with_graph(graph)
+    detached = pose.with_graph(None)
     out_pos, out_rot = pose.decompose()
     identity_like = pose.compose(pose.inverse())
     rotated = rot.apply(pos)
@@ -427,15 +474,47 @@ def example_guide_spatial_pose() -> None:
     pose_m = pose.as_matrix()
     rot_at = rot.param.at([0.25], on="time_s")
     pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
+    labeled_query = xr.DataArray(
+        [[0.25, 0.75], [0.5, 0.9]],
+        dims=("row_query", "when"),
+        coords={"row_query": ["a", "b"], "when": ["early", "late"]},
+    )
+    pose_labeled = pose.param.at(labeled_query, on="time_s")
+    rot_labeled = rot.param.at(labeled_query, on="time_s")
     assert isinstance(out_pos, Position)
+    assert associated_pos.graph is graph
+    assert pos.graph is None
     assert isinstance(out_rot, Rotation)
     assert isinstance(identity_like, Pose)
     assert isinstance(rotated, Position)
     assert isinstance(transformed, Position)
     assert isinstance(rot_q, Rotation)
-    assert pose_m.unsafe_data["pose_matrix"].shape[-2:] == (4, 4)
-    assert rot_at.unsafe_data.sizes["sample"] == 1
-    assert pose_rs.unsafe_data.sizes["sample"] == 5
+    assert pose_m.as_dataset(copy="none")["pose_matrix"].shape[-2:] == (4, 4)
+    assert rot_at.as_dataset(copy="none").sizes["sample"] == 1
+    assert pose_rs.as_dataset(copy="none").sizes["sample"] == 5
+    assert pose_labeled.as_dataset(copy="none").sizes["sample"] == 4
+    assert rot_labeled.as_dataset(copy="none").sizes["sample"] == 4
+    np.testing.assert_array_equal(pose_labeled.as_dataset(copy="none").coords["row_query"], ["a", "a", "b", "b"])
+    assert pose.graph is graph
+    assert detached.graph is None
+    assert world_samples.graph is graph
+    assert read_param_coord_name(world_samples.as_dataset(copy="none")) == "time_s"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def example_guide_frames_basic() -> None:
@@ -449,7 +528,7 @@ def example_guide_frames_basic() -> None:
         edge_value_fn=lambda child, parent: [(child.id, parent.id)],
         compose=lambda acc, value: acc + value,
         inverse=lambda value: [(value[0][1], value[0][0])],
-        identity=lambda: [],
+        identity=list,
     )
     snapshot = snapshot_from_seeds(("drone",), graph=graph)
     ascii_tree = render_snapshot_ascii(snapshot)
@@ -461,14 +540,15 @@ def example_guide_frames_basic() -> None:
     )
     retagged = ao.frames.retag(parent="ship", child="drone")
     parent, child = retagged.frames.ids()
-    bound_parent, bound_child = retagged.frames.bind(graph=graph, create_missing=True)
+    resolved_parent, resolved_child = retagged.frames.resolve(graph)
     assert [node.id for node in path.nodes] == ["drone", "ship", "world"]
     assert steps == [("drone", "ship"), ("ship", "world")]
     assert "drone" in ascii_tree
     assert (parent, child) == ("ship", "drone")
-    assert bound_parent is ship
-    assert bound_child.id == "drone"
-    renamed = retagged.frames.rename_frame("drone", "drone_0", graph=graph)
+    assert resolved_parent is ship
+    assert resolved_child is drone
+    drone.rename("drone_0")
+    renamed = retagged.frames.remap_ids({"drone": "drone_0"})
     assert renamed.frames.ids() == ("ship", "drone_0")
 
 
@@ -485,12 +565,20 @@ def example_guide_viewing_schema() -> None:
         validate=True,
     )
     out = ao.param.at([0.05, 0.15], on="time_s")
-    safe_snapshot = ao.data
-    backing_store = ao.unsafe_data
+    print(ao)
+    print(out)
+    with xr.set_options(display_width=90, display_max_rows=8):
+        preview = repr(out)
+    assert "tal.AnalysisObject" in preview and "Parameter" in preview
+    coordinates = preview.split("Coordinates:", 1)[1].split("Data variables:", 1)[0]
+    assert "Role" in coordinates and "sequence" in coordinates and "parameter" in coordinates
+    assert "TAL schema" in out._repr_html_()
+    safe_snapshot = ao.as_dataset()
+    backing_store = ao.as_dataset(copy="none")
     roles = read_roles(backing_store)
     param_name = read_param_coord_name(backing_store)
-    before_schema = ao.unsafe_data.attrs["tal"]
-    after_schema = out.unsafe_data.attrs["tal"]
+    before_schema = ao.as_dataset(copy="none").attrs["tal"]
+    after_schema = out.as_dataset(copy="none").attrs["tal"]
     assert safe_snapshot is not backing_store
     assert roles[1] == "sample"
     assert param_name == "time_s"
@@ -498,16 +586,126 @@ def example_guide_viewing_schema() -> None:
     assert after_schema["core"]["param_coord"]["name"] == "time_s"
 
 
-USER_GUIDE_EXECUTABLE_EXAMPLES: dict[str, Callable[[], None]] = {
-    "UG-OVERVIEW-BASIC-WORKFLOW": example_guide_overview_basic_workflow,
-    "UG-CORE-CONCEPTS-ROLES": example_guide_core_concepts_roles,
-    "UG-CREATING-SEQUENCE-AO": example_guide_creating_sequence_ao,
-    "UG-INDEXING-PARAM-QUERY": example_guide_indexing_param_query,
-    "UG-TIME-SYNCHRONIZE": example_guide_time_synchronize,
-    "UG-EVENTS-WINDOWS": example_guide_events_windows,
-    "UG-LINALG-BASIC": example_guide_linalg_basic,
-    "UG-NUMPY-UFUNCS": example_guide_numpy_ufuncs,
-    "UG-SPATIAL-POSE": example_guide_spatial_pose,
-    "UG-FRAMES-BASIC": example_guide_frames_basic,
-    "UG-VIEWING-SCHEMA": example_guide_viewing_schema,
-}
+def example_guide_creating_spatial_fields() -> None:
+    source = xr.Dataset(
+        {
+            "camera.position.x": ("sample", [1.0]),
+            "camera.position.y": ("sample", [2.0]),
+            "camera.position.z": ("sample", [3.0]),
+            "camera.rotation.x": ("sample", [0.0]),
+            "camera.rotation.y": ("sample", [0.0]),
+            "camera.rotation.z": ("sample", [0.0]),
+            "camera.rotation.w": ("sample", [1.0]),
+        },
+        coords={"sample": [0]},
+    )
+    layout = AnalysisLayoutSpec(sequence_dim="sample")
+    declared = layout.wrap(source)
+    camera = Pose.from_fields(
+        declared,
+        position="camera.position.{x,y,z}",
+        rotation="camera.rotation.{x,y,z,w}",
+    )
+    recipe = Pose.fields(
+        position="position.{x,y,z}",
+        rotation="rotation.{x,y,z,w}",
+    )
+    camera_again = recipe.build(declared, prefix="camera.")
+    camera_from_raw = recipe.build(
+        source,
+        prefix="camera.",
+        source_layout=layout,
+    )
+    expected_position = np.asarray([[1.0, 2.0, 3.0]])
+    for pose in (camera, camera_again, camera_from_raw):
+        position, rotation = pose.decompose()
+        np.testing.assert_array_equal(
+            position.as_dataset(copy="none")["position"], expected_position
+        )
+        np.testing.assert_array_equal(
+            rotation.as_dataset(copy="none")["rotation"],
+            [[0.0, 0.0, 0.0, 1.0]],
+        )
+        assert position.as_dataset(copy="none")["position"].attrs == {}
+
+
+def example_guide_creating_spatial_fields_from_readers() -> None:
+    csv_text = (
+        "time,camera.position.x,camera.position.y,camera.position.z,"
+        "camera.rotation.x,camera.rotation.y,camera.rotation.z,camera.rotation.w\n"
+        "0.0,1.0,2.0,3.0,0.0,0.0,0.0,1.0\n"
+    )
+    msgtype = "geometry_msgs/msg/PoseStamped"
+    message = ros_reader_module.RosMessage(
+        topic="/camera/pose",
+        msgtype=msgtype,
+        family=ros_payload_module.require_message_family(msgtype, owner="example"),
+        msg=SimpleNamespace(
+            header=SimpleNamespace(
+                stamp=SimpleNamespace(sec=1, nanosec=0),
+                frame_id="map",
+            ),
+            pose=SimpleNamespace(
+                position=SimpleNamespace(x=1.0, y=2.0, z=3.0),
+                orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+            ),
+        ),
+        receive_ns=1_000_000_000,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        csv_path = Path(directory) / "camera.csv"
+        ros_path = Path(directory) / "camera.mcap"
+        csv_path.write_text(csv_text, encoding="utf-8")
+        ros_path.write_text("fixture", encoding="utf-8")
+        csv_source = read_csv_logs(
+            str(csv_path),
+            opts=CsvIngestOptions(time_col="time"),
+        )
+        csv_pose = Pose.from_fields(
+            csv_source,
+            position="camera.position.{x,y,z}",
+            rotation="camera.rotation.{x,y,z,w}",
+        )
+        with patch.object(
+            ros_logs_module,
+            "_iter_ros_messages",
+            return_value=iter((message,)),
+        ):
+            ros_source = read_ros_logs(
+                str(ros_path),
+                opts=RosIngestOptions(topic="/camera/pose"),
+            )
+        ros_pose = Pose.from_fields(
+            ros_source,
+            position="translation_{x,y,z}",
+            rotation="quaternion_{x,y,z,w}",
+        )
+    for pose in (csv_pose, ros_pose):
+        position, rotation = pose.decompose()
+        np.testing.assert_array_equal(
+            position.as_dataset(copy="none")["position"],
+            [[[1.0, 2.0, 3.0]]],
+        )
+        np.testing.assert_array_equal(
+            rotation.as_dataset(copy="none")["rotation"],
+            [[[0.0, 0.0, 0.0, 1.0]]],
+        )
+
+
+def example_guide_creating_reusable_layout() -> None:
+    layout = AnalysisLayoutSpec(sequence_dim="sample", core_dims=("axis",))
+    dataset = xr.Dataset(
+        {
+            "position": (("sample", "axis"), [[1.0, 2.0, 3.0]]),
+            "quality": ("sample", [1]),
+        },
+        coords={"sample": [0], "axis": ["x", "y", "z"]},
+    )
+    selected = layout.wrap(dataset, data_vars="position")
+    position = Position(selected)
+    ordered = layout.wrap(dataset).select_vars(("quality", "position"))
+    assert list(ordered.as_dataset().data_vars) == ["quality", "position"]
+    assert list(position.as_dataset().data_vars) == ["position"]
+
+
+USER_GUIDE_EXECUTABLE_EXAMPLES = {'UG-OVERVIEW-BASIC-WORKFLOW': example_guide_overview_basic_workflow, 'UG-ILLUSTRATED-WORKFLOW': example_guide_illustrated_workflow, 'UG-CORE-CONCEPTS-ROLES': example_guide_core_concepts_roles, 'UG-CREATING-SEQUENCE-AO': example_guide_creating_sequence_ao, 'UG-CREATING-SPATIAL-FIELDS': example_guide_creating_spatial_fields, 'UG-CREATING-SPATIAL-FIELDS-FROM-READERS': example_guide_creating_spatial_fields_from_readers, 'UG-CREATING-REUSABLE-LAYOUT': example_guide_creating_reusable_layout, 'UG-INDEXING-PARAM-QUERY': example_guide_indexing_param_query, 'UG-TIME-SYNCHRONIZE': example_guide_time_synchronize, 'UG-EVENTS-WINDOWS': example_guide_events_windows, 'UG-LINALG-BASIC': example_guide_linalg_basic, 'UG-NUMPY-UFUNCS': example_guide_numpy_ufuncs, 'UG-SPATIAL-POSE': example_guide_spatial_pose, 'UG-FRAMES-BASIC': example_guide_frames_basic, 'UG-VIEWING-SCHEMA': example_guide_viewing_schema}

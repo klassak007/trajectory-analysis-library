@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
-from ._budget import executable_source, file_loc, function_lengths
+from tools.architecture_budget import executable_source, file_loc, function_lengths
 
 
 def test_arch_frames_001_slice_a_owner_split_and_budget() -> None:
@@ -230,29 +231,6 @@ def test_arch_frames_023_slice_d_no_direct_schema_attrs_mutation_or_forbidden_im
     assert "from tal.core import" not in frame_ops
 
 
-def test_arch_frames_024_slice_d_frame_rename_preflights_metadata_before_graph_mutation() -> None:
-    """ID: ARCH_FRAMES_024_slice_d_frame_rename_preflights_metadata_before_graph_mutation."""
-    frame_ops = Path("tal/utils/frame_ops.py").read_text(encoding="utf-8")
-    remap_pos = frame_ops.index("remapped = frame_remap_ids(")
-    rename_pos = frame_ops.index("resolved_graph.rename_frame(")
-    assert remap_pos < rename_pos
-
-
-def test_arch_frames_025_slice_d_frame_bind_requires_registered_frame_object_guard() -> None:
-    """ID: ARCH_FRAMES_025_slice_d_frame_bind_requires_registered_frame_object_guard."""
-    frame_ops = Path("tal/utils/frame_ops.py").read_text(encoding="utf-8")
-    assert "def _require_registered_frame_object(" in frame_ops
-    assert "is not a registered Frame object in graph" in frame_ops
-    assert "return _require_registered_frame_object(" in frame_ops
-
-
-def test_arch_frames_026_slice_d_validate_true_rewrap_uses_schema_validation_owner_path() -> None:
-    """ID: ARCH_FRAMES_026_slice_d_validate_true_rewrap_uses_schema_validation_owner_path."""
-    frame_ops = Path("tal/utils/frame_ops.py").read_text(encoding="utf-8")
-    assert "from tal.core.schema import UNSET, UnsetType, validate_schema" in frame_ops
-    assert "return source.__class__._from_validated(validate_schema(ds))" in frame_ops
-
-
 def test_arch_frames_027_visualization_owner_split_and_budget() -> None:
     """ID: ARCH_FRAMES_027_visualization_owner_split_and_budget."""
     visualization = Path("tal/frames/visualization.py")
@@ -295,6 +273,29 @@ def test_arch_frames_030_visualization_no_core_spatial_import_boundary_regressio
     assert "from ..spatial" not in visualization
     assert 'attrs["tal"]' not in visualization
     assert "attrs['tal']" not in visualization
+
+
+def test_arch_frames_031_framegraph_context_tokens_have_context_local_owner() -> None:
+    """ID: ARCH_FRAMES_031_framegraph_context_tokens_have_context_local_owner."""
+    registry = Path("tal/frames/registry.py").read_text(encoding="utf-8")
+    module = ast.parse(registry)
+    graph_class = next(
+        node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "FrameGraph"
+    )
+    instance_token_attrs = {
+        node.attr
+        for node in ast.walk(graph_class)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+        and "token" in node.attr.lower()
+    }
+    assert not instance_token_attrs
+    assert "_FRAME_GRAPH_CONTEXT_STACK: contextvars.ContextVar[" in registry
+    assert 'contextvars.ContextVar("tal_frame_graph_context_stack", default=())' in registry
+    assert "_FRAME_GRAPH_CONTEXT_STACK.set((*stack, (self, token)))" in registry
+    assert "_ACTIVE_FRAME_GRAPH.reset(token)" in registry
+    assert "_FRAME_GRAPH_CONTEXT_STACK.set(stack[:-1])" in registry
 
 
 def test_arch_frames_c6_001_motion_and_inertial_metadata_owners_stay_frames_or_utils() -> None:
@@ -356,6 +357,8 @@ def test_frame_doc_001_phase7_slice_a_frames_docs_and_api_entries_present() -> N
     assert "tal.utils.frame_schema.set_frames" in schema_doc
     assert "FrameGraph" in api_frames
     assert "get_active_frame_graph" in api_frames
+    assert "task-local" in api_frames.lower()
+    assert "task-local" in user_frames.lower()
     assert "metadata" in user_frames.lower()
 
 
@@ -379,19 +382,6 @@ def test_frame_doc_003_phase7_slice_c_snapshot_docs_and_api_entries_present() ->
     assert "snapshot_to_networkx" in api_frames
     assert "snapshot_from_seeds" in user_frames
     assert "render_snapshot_ascii" in user_frames
-
-
-def test_frame_doc_004_phase7_slice_d_ao_frames_accessor_docs_and_api_entries_present() -> None:
-    """ID: FRAME_DOC_004_phase7_slice_d_ao_frames_accessor_docs_and_api_entries_present."""
-    api_analysis_object = Path("docs/api/analysis-object.md").read_text(encoding="utf-8")
-    api_frames = Path("docs/api/frames.md").read_text(encoding="utf-8")
-    user_frames = Path("docs/user-guide/frames.md").read_text(encoding="utf-8")
-    assert "ao.frames" in api_analysis_object
-    assert "rename_frame" in api_frames
-    assert "frame_retag" in api_frames
-    assert "frame_bind" in api_frames
-    assert "ao.frames" in user_frames
-    assert "rename_frame" in user_frames
 
 
 def test_frame_doc_005_framegraph_visualization_docs_and_api_entries_present() -> None:

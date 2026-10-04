@@ -134,9 +134,9 @@ def test_ao_ufunc_core_002_unary_ao_value_parity_and_schema_truthful() -> None:
     """ID: AO_UFUNC_CORE_002_unary_ao_value_parity_and_schema_truthful."""
     ao = _ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     out = tal_ufuncs.sin(ao)
-    expected = xr.ufuncs.sin(ao.unsafe_data)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected["x"])
-    assert _roles(out.unsafe_data)[3] == ("axis",)
+    expected = xr.ufuncs.sin(ao.as_dataset(copy="none"))
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected["x"])
+    assert _roles(out.as_dataset(copy="none"))[3] == ("axis",)
 
 
 def test_ao_ufunc_core_003_binary_ao_value_parity_and_schema_truthful() -> None:
@@ -144,9 +144,9 @@ def test_ao_ufunc_core_003_binary_ao_value_parity_and_schema_truthful() -> None:
     left = _ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     right = _ao((np.arange(12, dtype=float).reshape(2, 2, 3) + 1.0) / 5.0)
     out = tal_ufuncs.multiply(left, right)
-    expected = xr.ufuncs.multiply(left.unsafe_data, right.unsafe_data)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected["x"])
-    assert _roles(out.unsafe_data)[3] == ("axis",)
+    expected = xr.ufuncs.multiply(left.as_dataset(copy="none"), right.as_dataset(copy="none"))
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected["x"])
+    assert _roles(out.as_dataset(copy="none"))[3] == ("axis",)
 
 
 def test_ao_ufunc_core_004_non_ao_passthrough_remains_xarray() -> None:
@@ -178,25 +178,25 @@ def test_ao_ufunc_core_006_comparison_ao_inputs_return_condition() -> None:
 def test_ao_ufunc_core_007_finalize_dataarray_preserves_single_source_carrier_name() -> None:
     """ID: AO_UFUNC_CORE_007_finalize_dataarray_preserves_single_source_carrier_name."""
     source = _ao(np.arange(12, dtype=float).reshape(2, 2, 3), name="carrier")
-    carrier = source.unsafe_data["carrier"]
+    carrier = source.as_dataset(copy="none")["carrier"]
     result = xr.DataArray(np.sin(carrier.values), dims=carrier.dims, coords=carrier.coords)
     out = finalize_unary_ao_result(source, result, owner="test", validate=True)
-    assert list(out.unsafe_data.data_vars) == ["carrier"]
+    assert list(out.as_dataset(copy="none").data_vars) == ["carrier"]
 
 
 def test_ao_ufunc_core_008_finalize_dataarray_ambiguous_source_falls_back_to_datavar() -> None:
     """ID: AO_UFUNC_CORE_008_finalize_dataarray_ambiguous_source_falls_back_to_datavar."""
     source = _multivar_ao(np.arange(12, dtype=float).reshape(2, 2, 3))
-    left = source.unsafe_data["x"]
+    left = source.as_dataset(copy="none")["x"]
     result = xr.DataArray(np.cos(left.values), dims=left.dims, coords=left.coords)
     out = finalize_unary_ao_result(source, result, owner="test", validate=True)
-    assert list(out.unsafe_data.data_vars) == ["datavar"]
+    assert list(out.as_dataset(copy="none").data_vars) == ["datavar"]
 
 
 def test_ao_ufunc_core_009_finalize_dataarray_preserves_explicit_kernel_name() -> None:
     """ID: AO_UFUNC_CORE_009_finalize_dataarray_preserves_explicit_kernel_name."""
     source = _multivar_ao(np.arange(12, dtype=float).reshape(2, 2, 3))
-    left = source.unsafe_data["x"]
+    left = source.as_dataset(copy="none")["x"]
     result = xr.DataArray(
         np.cos(left.values),
         dims=left.dims,
@@ -204,7 +204,7 @@ def test_ao_ufunc_core_009_finalize_dataarray_preserves_explicit_kernel_name() -
         name="kernel_name",
     )
     out = finalize_unary_ao_result(source, result, owner="test", validate=True)
-    assert list(out.unsafe_data.data_vars) == ["kernel_name"]
+    assert list(out.as_dataset(copy="none").data_vars) == ["kernel_name"]
 
 
 def test_ao_ufunc_hard_001_unknown_name_fail_closed() -> None:
@@ -220,12 +220,12 @@ def test_ao_ufunc_hard_002_binary_ao_subclass_left_wins() -> None:
     class MyAO(AnalysisObject):
         pass
 
-    left = MyAO(_ao(np.arange(12, dtype=float).reshape(2, 2, 3)).unsafe_data)
+    left = MyAO(_ao(np.arange(12, dtype=float).reshape(2, 2, 3)).as_dataset(copy="none"))
     right = _ao((np.arange(12, dtype=float).reshape(2, 2, 3) + 2.0) / 7.0)
     out = tal_ufuncs.add(left, right)
-    expected = xr.ufuncs.add(left.unsafe_data, right.unsafe_data)
+    expected = xr.ufuncs.add(left.as_dataset(copy="none"), right.as_dataset(copy="none"))
     assert isinstance(out, MyAO)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected["x"])
 
 
 def test_ao_ufunc_hard_003_chunked_ao_preserves_laziness() -> None:
@@ -233,14 +233,14 @@ def test_ao_ufunc_hard_003_chunked_ao_preserves_laziness() -> None:
     pytest.importorskip("dask.array")
     ao = _ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     chunked = AnalysisObject.from_data(
-        ao.unsafe_data.chunk({"sample": 1}),
+        ao.as_dataset(copy="none").chunk({"sample": 1}),
         sequence_dim="sample",
         batch_dims=("trial",),
         core_dims=("axis",),
         validate=True,
     )
     out = tal_ufuncs.cos(chunked)
-    assert out.unsafe_data["x"].chunks is not None
+    assert out.as_dataset(copy="none")["x"].chunks is not None
 
 
 def test_bcast_core_025_ufunc_arithmetic_accepts_broadcast_intent_semantic_path() -> None:
@@ -248,13 +248,13 @@ def test_bcast_core_025_ufunc_arithmetic_accepts_broadcast_intent_semantic_path(
     left = _ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     right = _ao_missing_sequence_declared((np.arange(6, dtype=float).reshape(2, 3) + 1.0) / 5.0)
     out = tal_ufuncs.add(left.b(), right)
-    expected_right = right.unsafe_data["x"].expand_dims(sample=left.unsafe_data.coords["sample"]).transpose(
+    expected_right = right.as_dataset(copy="none")["x"].expand_dims(sample=left.as_dataset(copy="none").coords["sample"]).transpose(
         "sample",
         "trial",
         "axis",
     )
-    expected = xr.ufuncs.add(left.unsafe_data["x"], expected_right)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = xr.ufuncs.add(left.as_dataset(copy="none")["x"], expected_right)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_bcast_core_029_semantic_default_enabled_for_ao_ufunc_arithmetic_paths() -> None:
@@ -262,13 +262,13 @@ def test_bcast_core_029_semantic_default_enabled_for_ao_ufunc_arithmetic_paths()
     left = _ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     right = _ao_missing_sequence_declared((np.arange(6, dtype=float).reshape(2, 3) + 2.0) / 9.0)
     out = tal_ufuncs.add(left, right)
-    expected_right = right.unsafe_data["x"].expand_dims(sample=left.unsafe_data.coords["sample"]).transpose(
+    expected_right = right.as_dataset(copy="none")["x"].expand_dims(sample=left.as_dataset(copy="none").coords["sample"]).transpose(
         "sample",
         "trial",
         "axis",
     )
-    expected = xr.ufuncs.add(left.unsafe_data["x"], expected_right)
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
+    expected = xr.ufuncs.add(left.as_dataset(copy="none")["x"], expected_right)
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
 
 
 def test_bcast_core_027_comparison_and_logical_families_accept_broadcast_intent() -> None:
@@ -293,9 +293,9 @@ def test_ao_ufunc_core_011_undeclared_binary_defaults_to_core_only_semantics() -
     left = _undeclared_ao(np.arange(12, dtype=float).reshape(2, 2, 3))
     right = _undeclared_ao((np.arange(12, dtype=float).reshape(2, 2, 3) + 1.0) / 7.0)
     out = tal_ufuncs.add(left, right)
-    expected = xr.ufuncs.add(left.unsafe_data["x"], right.unsafe_data["x"])
-    xr.testing.assert_allclose(out.unsafe_data["x"], expected)
-    roles_declared, sequence_dim, batch_dims, core_dims = _roles(out.unsafe_data)
+    expected = xr.ufuncs.add(left.as_dataset(copy="none")["x"], right.as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["x"], expected)
+    roles_declared, sequence_dim, batch_dims, core_dims = _roles(out.as_dataset(copy="none"))
     assert roles_declared is True
     assert sequence_dim is None
     assert batch_dims == ()
@@ -344,7 +344,7 @@ def test_ufunc_alignment_intent_param_primary_path_supported() -> None:
         param_values=np.asarray([0.0, 0.5, 1.0], dtype=float),
     )
     out = tal_ufuncs.add(left.a(on="param", sequence_join=None), right)
-    np.testing.assert_array_equal(out.unsafe_data.coords["sample"].values, np.asarray([0, 1, 2], dtype=np.int64))
+    np.testing.assert_array_equal(out.as_dataset(copy="none").coords["sample"].values, np.asarray([0, 1, 2], dtype=np.int64))
 
 
 def test_ufunc_alignment_intent_conflict_fail_closed() -> None:

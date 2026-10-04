@@ -87,3 +87,7 @@ ao.components.compose(components, opts=..., validate=True)
 
 - {doc}`analysis-object`
 - User guide: {doc}`../user-guide/core_concepts`
+
+Generic component extraction returns base `AnalysisObject` instances, including
+for composite source types. Use domain methods such as `Pose.decompose()` when
+you need typed components. Component plotting uses the generic extraction owner.

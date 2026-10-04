@@ -9,7 +9,7 @@ import xarray as xr
 from .concat_pack import apply_concat_overlap_sort, apply_concat_valid_mask
 from .concat_plan import ConcatSequencePlan
 from .concat_topology import restore_batch as _restore_batch
-from .finalize import finalize_combine_output
+from .finalize import CombineFinalizationPlan, finalize_combine_output
 from .metadata import canonicalize_optional_names, resolve_core_dims
 from .types import CombineContext, SequenceConcatOptions
 
@@ -83,6 +83,7 @@ def finalize_concat_sequence_contexts(
     param_name: str | None,
     size_name: str | None,
     validate: bool,
+    finalization: CombineFinalizationPlan,
 ) -> "AnalysisObject":
     """Finalize concat-sequence output using shared combine finalize boundary.
 
@@ -118,7 +119,7 @@ def finalize_concat_sequence_contexts(
         owner="concat_sequence",
     )
     return finalize_combine_output(
-        contexts[0],
+        finalization,
         ds,
         sequence_dim=plan.sequence_dim,
         batch_dims=plan.batch_dims,

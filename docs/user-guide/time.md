@@ -67,6 +67,11 @@ synced_imu, synced_gps = synchronize(
 The example keeps the fast IMU stream and slower GPS stream in their original
 sample layouts until a query asks for a common parameter grid.
 
+The {doc}`illustrated_example` shows a two-dimensional `time(trial, sample)`
+coordinate with different timestamps and valid lengths per trial. A shared time
+query evaluates each row independently; it does not assume that matching sample
+indexes represent simultaneous observations.
+
 ## Parameter Operations
 
 | Operation | Use When |
@@ -78,7 +83,10 @@ sample layouts until a query asks for a common parameter grid.
 
 Parameter semantics are explicit rather than guessed. The same public surface
 works for clocks, distances, phases, or experiment indices as long as the
-chosen domain is ordered and declared.
+chosen domain is ordered and declared. Numeric and `datetime64` parameter
+coordinates are supported. Datetime64 queries can use NumPy datetime64 values,
+pandas timestamps, Python datetimes, or labeled xarray arrays; synchronization
+tolerance for datetime64 params must be timedelta-like.
 
 ## What Usually Goes Wrong
 
@@ -91,10 +99,10 @@ chosen domain is ordered and declared.
 
 ## Quick Checks
 
-- Inspect `imu_at.unsafe_data.coords["time_s"]`.
-- Inspect `imu_rs.unsafe_data.sizes`.
-- Compare `synced_imu.unsafe_data.coords["time_s"]` and
-  `synced_gps.unsafe_data.coords["time_s"]`.
+- Inspect `imu_at.as_dataset().coords["time_s"]`.
+- Inspect `imu_rs.as_dataset().sizes`.
+- Compare `synced_imu.as_dataset().coords["time_s"]` and
+  `synced_gps.as_dataset().coords["time_s"]`.
 
 ## See Also
 

@@ -68,7 +68,7 @@ def _vector3_leaf() -> AnalysisObject:
 
 
 def _core_dims(ao: AnalysisObject) -> tuple[str, ...]:
-    return read_roles(validate_schema_if_needed(ao.unsafe_data))[3]
+    return read_roles(validate_schema_if_needed(ao.as_dataset(copy="none")))[3]
 
 
 def _assembled_grid() -> AnalysisObject:
@@ -89,7 +89,7 @@ def _assert_mapping_identical(
     for key in left:
         assert type(left[key]) is Array
         assert type(right[key]) is Array
-        xr.testing.assert_identical(left[key].unsafe_data, right[key].unsafe_data)
+        xr.testing.assert_identical(left[key].as_dataset(copy="none"), right[key].as_dataset(copy="none"))
 
 
 def test_linalg_core_026_decompose_core_functional_and_method_parity() -> None:

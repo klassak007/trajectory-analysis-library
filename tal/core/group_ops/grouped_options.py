@@ -1,10 +1,36 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import xarray as xr
 
-from .grouped_types import GroupByOptions, GroupMaterializeOptions, GroupedLayout
+from .grouped_types import (
+    BatchGroupReduceOptions,
+    GroupByOptions,
+    GroupedLayout,
+    GroupMaterializeOptions,
+)
 
 _GROUP_LAYOUTS = frozenset({"padded", "stacked"})
+
+
+class _GroupByUnsetType:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+_GROUPBY_UNSET = _GroupByUnsetType()
+
+
+@dataclass(frozen=True)
+class ResolvedGroupedReducerOptions:
+    """Topology-neutral grouped reducer options."""
+
+    group_dim: str
+    include_empty_groups: bool
+    sequence_options: GroupMaterializeOptions | None
 
 
 def _require_nonempty_name(value: object, *, owner: str, field: str) -> str:
@@ -13,9 +39,9 @@ def _require_nonempty_name(value: object, *, owner: str, field: str) -> str:
     raise ValueError(f"{owner}: {field} must be a non-empty string.")
 
 
-def _validate_groupby_options(opts: GroupByOptions, *, owner: str) -> None:
+def _validate_groupby_option_fields(opts: GroupByOptions, *, owner: str) -> None:
     if not isinstance(opts.preserve_batch, bool):
-        raise ValueError(f"{owner}: opts.preserve_batch must be bool.")
+        raise ValueError(f"{owner}: opts.preserve_batch must be bool.")  # noqa: TRY004
     _require_nonempty_name(opts.group_dim, owner=owner, field="opts.group_dim")
     _require_nonempty_name(opts.member_dim, owner=owner, field="opts.member_dim")
     _require_nonempty_name(
@@ -23,6 +49,10 @@ def _validate_groupby_options(opts: GroupByOptions, *, owner: str) -> None:
         owner=owner,
         field="opts.sequence_index_coord",
     )
+
+
+def validate_sequence_groupby_options(opts: GroupByOptions, *, owner: str) -> None:
+    """Validate naming relationships used only by sequence materialization."""
     if len({opts.group_dim, opts.member_dim, opts.sequence_index_coord}) != 3:
         raise ValueError(
             f"{owner}: opts.group_dim, opts.member_dim, and opts.sequence_index_coord "
@@ -37,8 +67,38 @@ def coerce_groupby_options(opts: object | None, *, owner: str) -> GroupByOptions
         out = opts
     else:
         raise TypeError(f"{owner}: opts must be GroupByOptions or None.")
-    _validate_groupby_options(out, owner=owner)
+    _validate_groupby_option_fields(out, owner=owner)
     return out
+
+
+def coerce_groupby_call_options(
+    opts: object | None,
+    *,
+    preserve_batch: bool | _GroupByUnsetType,
+    owner: str,
+) -> GroupByOptions:
+    if opts is not None and preserve_batch is not _GROUPBY_UNSET:
+        raise TypeError(f"{owner}: opts cannot be combined with preserve_batch.")
+    if preserve_batch is _GROUPBY_UNSET:
+        return coerce_groupby_options(opts, owner=owner)
+    if not isinstance(preserve_batch, bool):
+        raise TypeError(f"{owner}: preserve_batch must be bool when supplied.")
+    return coerce_groupby_options(
+        GroupByOptions(preserve_batch=preserve_batch),
+        owner=owner,
+    )
+
+
+def validate_batch_groupby_options(opts: GroupByOptions, *, owner: str) -> None:
+    if opts.preserve_batch:
+        raise ValueError(f"{owner}: preserve_batch=True is not supported for batch-only grouping.")
+    defaults = GroupByOptions()
+    if opts.member_dim != defaults.member_dim:
+        raise ValueError(f"{owner}: opts.member_dim applies only to sequence grouping.")
+    if opts.sequence_index_coord != defaults.sequence_index_coord:
+        raise ValueError(
+            f"{owner}: opts.sequence_index_coord applies only to sequence grouping."
+        )
 
 
 def coerce_group_materialize_options(
@@ -56,11 +116,29 @@ def coerce_group_materialize_options(
     if layout not in _GROUP_LAYOUTS:
         raise ValueError(f"{owner}: opts.layout must be one of {tuple(sorted(_GROUP_LAYOUTS))!r}.")
     if not isinstance(out.include_empty_groups, bool):
-        raise ValueError(f"{owner}: opts.include_empty_groups must be bool.")
+        raise ValueError(f"{owner}: opts.include_empty_groups must be bool.")  # noqa: TRY004
     for field in ("group_dim", "member_dim", "sequence_index_coord"):
         value = getattr(out, field)
         if value is not None:
             _require_nonempty_name(value, owner=owner, field=f"opts.{field}")
+    return out
+
+
+def _coerce_batch_group_reduce_options(
+    opts: object | None,
+    *,
+    owner: str,
+) -> BatchGroupReduceOptions:
+    if opts is None:
+        out = BatchGroupReduceOptions()
+    elif isinstance(opts, BatchGroupReduceOptions):
+        out = opts
+    else:
+        raise TypeError(f"{owner}: opts must be BatchGroupReduceOptions or None for batch grouping.")
+    if not isinstance(out.include_empty_groups, bool):
+        raise TypeError(f"{owner}: opts.include_empty_groups must be bool.")
+    if out.group_dim is not None:
+        _require_nonempty_name(out.group_dim, owner=owner, field="opts.group_dim")
     return out
 
 
@@ -99,16 +177,29 @@ def _source_namespace_hits(name: str, *, ds: xr.Dataset) -> tuple[str, ...]:
     return tuple(hits)
 
 
-def validate_layout_name_collisions(
+def validate_group_name_collision(
     *,
     ds: xr.Dataset,
     group_dim: str,
+    owner: str,
+) -> None:
+    hits = _source_namespace_hits(group_dim, ds=ds)
+    if not hits:
+        return
+    raise ValueError(
+        f"{owner}: opts.group_dim={group_dim!r} collides with source namespace "
+        f"({', '.join(hits)})."
+    )
+
+
+def _validate_sequence_layout_name_collisions(
+    *,
+    ds: xr.Dataset,
     member_dim: str,
     sequence_index_coord: str,
     owner: str,
 ) -> None:
     checks = (
-        ("group_dim", group_dim),
         ("member_dim", member_dim),
         ("sequence_index_coord", sequence_index_coord),
     )
@@ -122,9 +213,108 @@ def validate_layout_name_collisions(
         )
 
 
+def _resolved_grouped_reducer_options(
+    *,
+    ds: xr.Dataset,
+    group_dim: str,
+    include_empty_groups: bool,
+    sequence_options: GroupMaterializeOptions | None,
+    owner: str,
+) -> ResolvedGroupedReducerOptions:
+    validate_group_name_collision(ds=ds, group_dim=group_dim, owner=owner)
+    return ResolvedGroupedReducerOptions(
+        group_dim=group_dim,
+        include_empty_groups=include_empty_groups,
+        sequence_options=sequence_options,
+    )
+
+
+def resolve_batch_group_reduce_options(
+    opts: object | None,
+    *,
+    defaults: GroupByOptions,
+    ds: xr.Dataset,
+    owner: str,
+) -> ResolvedGroupedReducerOptions:
+    out = _coerce_batch_group_reduce_options(opts, owner=owner)
+    group_dim = defaults.group_dim if out.group_dim is None else out.group_dim
+    return _resolved_grouped_reducer_options(
+        ds=ds,
+        group_dim=group_dim,
+        include_empty_groups=out.include_empty_groups,
+        sequence_options=None,
+        owner=owner,
+    )
+
+
+def resolve_sequence_group_reduce_options(
+    opts: object | None,
+    *,
+    defaults: GroupByOptions,
+    ds: xr.Dataset,
+    owner: str,
+) -> ResolvedGroupedReducerOptions:
+    materialize = (
+        GroupMaterializeOptions(layout="padded", include_empty_groups=False)
+        if opts is None
+        else coerce_group_materialize_options(opts, owner=owner)
+    )
+    group_dim, member_dim, sequence_index = resolve_layout_names(
+        group_dim=defaults.group_dim,
+        member_dim=defaults.member_dim,
+        sequence_index_coord=defaults.sequence_index_coord,
+        opts=materialize,
+        owner=owner,
+    )
+    _validate_sequence_layout_name_collisions(
+        ds=ds,
+        member_dim=member_dim,
+        sequence_index_coord=sequence_index,
+        owner=owner,
+    )
+    resolved = GroupMaterializeOptions(
+        layout=materialize.layout,
+        group_dim=group_dim,
+        member_dim=member_dim,
+        sequence_index_coord=sequence_index,
+        include_empty_groups=materialize.include_empty_groups,
+    )
+    return _resolved_grouped_reducer_options(
+        ds=ds,
+        group_dim=group_dim,
+        include_empty_groups=materialize.include_empty_groups,
+        sequence_options=resolved,
+        owner=owner,
+    )
+
+
+def validate_layout_name_collisions(
+    *,
+    ds: xr.Dataset,
+    group_dim: str,
+    member_dim: str,
+    sequence_index_coord: str,
+    owner: str,
+) -> None:
+    validate_group_name_collision(ds=ds, group_dim=group_dim, owner=owner)
+    _validate_sequence_layout_name_collisions(
+        ds=ds,
+        member_dim=member_dim,
+        sequence_index_coord=sequence_index_coord,
+        owner=owner,
+    )
+
+
 __all__ = [
+    "ResolvedGroupedReducerOptions",
     "coerce_group_materialize_options",
+    "coerce_groupby_call_options",
     "coerce_groupby_options",
+    "resolve_batch_group_reduce_options",
     "resolve_layout_names",
+    "resolve_sequence_group_reduce_options",
+    "validate_batch_groupby_options",
+    "validate_group_name_collision",
     "validate_layout_name_collisions",
+    "validate_sequence_groupby_options",
 ]

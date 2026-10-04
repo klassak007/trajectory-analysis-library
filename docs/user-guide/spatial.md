@@ -9,6 +9,11 @@ arrays cannot express safely.
 Use spatial types when the payload is not just "three numbers," but a vector,
 rotation, transform, or kinematic quantity with a coordinate-frame contract.
 
+The {doc}`illustrated_example` shows how a Pose stores position and rotation as
+separate variables with `axis` and `quat` core dimensions, sharing trial, sample,
+time, and validity information. Its `decompose()` example extracts those two
+typed components.
+
 ## Minimal Example
 
 <!-- example-id: UG-SPATIAL-POSE -->
@@ -16,6 +21,7 @@ rotation, transform, or kinematic quantity with a coordinate-frame contract.
 import numpy as np
 import xarray as xr
 from tal.core import AnalysisObject
+from tal.frames import FrameGraph
 from tal.spatial import Pose, Position, Rotation
 
 sample = np.arange(3)
@@ -48,7 +54,18 @@ rot = Rotation(AnalysisObject.from_data(
     validate=True,
 ))
 
-pose = Pose.from_components(rot, pos)
+graph = FrameGraph()
+pose = Pose.from_components(
+    rot,
+    pos,
+    parent="world",
+    child="body",
+    graph=graph,
+)
+pose.register()
+body_samples = Position(pos, parent="body", child="probe", graph=graph)
+world_samples = body_samples.to_frame("world")
+detached = pose.with_graph(None)
 out_pos, out_rot = pose.decompose()
 identity_like = pose.compose(pose.inverse())
 rotated = rot.apply(pos)
@@ -58,11 +75,27 @@ rot_q = rot_m.as_quat()
 pose_m = pose.as_matrix()
 rot_at = rot.param.at([0.25], on="time_s")
 pose_rs = pose.param.resample_to(np.linspace(0.0, 1.0, 5), on="time_s")
+labeled_query = xr.DataArray(
+    [[0.25, 0.75], [0.5, 0.9]],
+    dims=("row_query", "when"),
+    coords={"row_query": ["a", "b"], "when": ["early", "late"]},
+)
+pose_labeled = pose.param.at(labeled_query, on="time_s")
+rot_labeled = rot.param.at(labeled_query, on="time_s")
 ```
 
 This example builds position and rotation trajectories, composes them into a
 pose, applies transforms, converts representations, and evaluates typed
-rotations/poses on a parameter grid.
+rotations/poses on a parameter grid. Registration retains the Pose's native
+sampling; `to_frame` evaluates that provider on `body_samples`' parameter grid
+without repeating `graph=`.
+
+Frame declarations are schema metadata. The optional `graph` is a passive,
+wrapper-local association: construction and `with_graph(...)` never create
+frames or register providers. Spatial results retain a shared association;
+Dataset/DataArray conversion and deliberate demotion do not. Use
+`pose.register()` for an associated static or native-rate Pose, or
+`bind_pose(...)` for a callable or exact unparameterized provider.
 
 ## Spatial Types
 
@@ -80,12 +113,24 @@ Spatial constructors validate representation labels. For example, position axes
 must be `x`, `y`, `z`; quaternions must be `x`, `y`, `z`, `w`; matrix layouts
 must use the expected row and column labels.
 
+Direct spatial constructors and the approved Pose, Velocity, and Acceleration
+factories accept `parent=`, `child=`, `expressed_in=`, and `graph=`. Omission
+inherits existing declarations, while explicit `None` clears the corresponding
+declaration or association. `Rotation.from_data(...)` remains a schema-ingress
+factory without these keywords; associate its result with
+`rotation.with_graph(graph)`. `obj.graph` is read-only, and
+`obj.with_graph(graph)` returns a distinct metadata-isolated alias.
+
 ## Transform Algebra
 
 Use `compose(...)`, `inverse()`, and `apply(...)` for local transform algebra.
 Use `Pose.from_components(...)`, `pose.decompose()`, `pose.as_matrix()`,
 `pose.as_components()`, and `Pose.from_matrix(...)` to move between pose
-layouts.
+layouts. Inverse remains graph-free: a framed Pose or Rotation must already be
+expressed in its parent basis. Re-express a third-frame value explicitly with
+`value.express_in(parent).inverse()`. A missing parent denotes an unframed value
+only when the child and expression basis are absent too; otherwise complete or
+clear the partial framing before inversion.
 
 Rotations can be converted with `Rotation.as_matrix()`, `Rotation.as_quat()`,
 and `Rotation.to_rep(...)`.
@@ -96,6 +141,11 @@ Spatial objects inherit `param` accessors, but typed objects can choose geometry
 appropriate interpolation. `Rotation.param.at(...)` uses rotation-aware
 interpolation by default; `Pose.param.at(...)` uses linear position
 interpolation and rotation-aware interpolation for the rotational part.
+For a labeled multidimensional query, typed Pose and Rotation results flatten
+query-only axes into a positional `sample` axis in row-major order. The
+original query labels remain sample-dependent coordinates; shared source batch
+axes remain batch axes. Ordinary parameter evaluation instead restores the
+caller's labeled grid.
 
 Kinematic temporal methods are available on the relevant typed wrappers:
 
@@ -138,8 +188,9 @@ solving needs more than topology.
 
 ## Quick Checks
 
-- Inspect `pose.unsafe_data` and `pose.unsafe_data.attrs["tal"]`.
-- Compare `rot_q.unsafe_data` with `rot_m.unsafe_data` when checking
+- Capture one `pose_snapshot = pose.as_dataset()`, then inspect it and
+  `pose_snapshot.attrs["tal"]`.
+- Compare `rot_q.as_dataset()` with `rot_m.as_dataset()` when checking
   representation changes.
 - Confirm the declared `param_coord` before using `.param.at(...)` or
   `.param.resample_to(...)`.

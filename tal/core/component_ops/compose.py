@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import xarray as xr
 
 from ..analysis_object import AnalysisObject
+from ..dataset_ownership import analysis_object_dataset
 from ..combine_ops import CoreConcatOptions, MergeOptions, concat_core, merge
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..schema import merge_schema
@@ -78,7 +79,7 @@ def _single_var_component_input(
     var_name: str,
 ) -> AnalysisObject:
     ds = data.to_dataset(name=var_name)
-    tal = source.unsafe_data.attrs.get("tal")
+    tal = analysis_object_dataset(source).attrs.get("tal")
     if isinstance(tal, Mapping):
         ds = merge_schema(ds, patch=dict(tal), validate=False)
     ds = merge_schema(ds, patch={"ext": {"components": None}}, validate=False)
@@ -93,13 +94,14 @@ def _prepare_entry(
     owner: str,
 ) -> _ComposeEntry:
     source = coerce_analysis_object_input(raw_component, owner=owner)
+    source_ds = analysis_object_dataset(source)
     sequence_dim, batch_dims, core_dims = require_declared_roles_with_sequence(
-        source.unsafe_data,
+        source_ds,
         owner=owner,
         operand=name,
     )
-    var_name = select_component_var(source.unsafe_data, spec=spec, component_name=name, owner=owner)
-    data = source.unsafe_data[var_name]
+    var_name = select_component_var(source_ds, spec=spec, component_name=name, owner=owner)
+    data = source_ds[var_name]
     labels = require_explicit_unique_labels(data, dim=spec.core_dim, owner=owner, operand=f"component {name!r}")
     require_exact_label_set(labels, expected=spec.labels, owner=owner, component_name=name)
     selected = data.sel({spec.core_dim: list(spec.labels)})
@@ -194,9 +196,10 @@ def _apply_output_var_policy(
 ) -> AnalysisObject:
     if output_var is None:
         return ao
-    if len(ao.unsafe_data.data_vars) != 1:
+    ds = analysis_object_dataset(ao)
+    if len(ds.data_vars) != 1:
         raise ValueError(f"{owner}: opts.output_var requires composed output to have exactly one data variable.")
-    current = str(next(iter(ao.unsafe_data.data_vars)))
+    current = str(next(iter(ds.data_vars)))
     if current == output_var:
         return ao
     return ao.rename({current: output_var}, validate=validate)
@@ -247,7 +250,7 @@ def compose_components(
     ... )
     >>> opts = ComponentComposeOptions({"x": ComponentSpec("axis", ("x",)), "y": ComponentSpec("axis", ("y",))})
     >>> out = compose_components({"x": x, "y": y}, opts=opts)
-    >>> out.unsafe_data["vec"].sel(axis="y").item()
+    >>> out.as_dataset()["vec"].sel(axis="y").item()
     2.0
     """
     owner = "components.compose"

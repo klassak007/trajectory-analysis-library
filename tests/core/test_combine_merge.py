@@ -41,6 +41,19 @@ def _ao_static(name: str, value: float) -> AnalysisObject:
     return AnalysisObject(xr.Dataset(data_vars={name: xr.DataArray(value)}))
 
 
+def _ao_outer_cell(*, trial: str, sample: int, value: float) -> AnalysisObject:
+    ds = xr.Dataset(
+        data_vars={"value": (("trial", "sample"), [[value]])},
+        coords={"trial": [trial], "sample": [sample]},
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+    )
+
+
 def test_combine_merge_001_merge_exact_sequence_and_inner_batch_default() -> None:
     """ID: COMBINE_MERGE_001_merge_exact_sequence_and_inner_batch_default."""
     right = _ao_grouped(
@@ -58,9 +71,9 @@ def test_combine_merge_001_merge_exact_sequence_and_inner_batch_default() -> Non
         size_name="n_valid",
     )
     out = left.combine.merge([right])
-    assert list(out.data.coords["trial"].values) == ["b"]
-    assert set(out.data.data_vars) == {"left_value", "right_value"}
-    assert out.data.attrs["tal"]["core"]["validity"]["sequence_size_coord"] == "n_valid"
+    assert list(out.as_dataset().coords["trial"].values) == ["b"]
+    assert set(out.as_dataset().data_vars) == {"left_value", "right_value"}
+    assert out.as_dataset().attrs["tal"]["core"]["validity"]["sequence_size_coord"] == "n_valid"
 
 
 def test_combine_merge_002_merge_outer_fill_value_mapping() -> None:
@@ -86,8 +99,8 @@ def test_combine_merge_002_merge_outer_fill_value_mapping() -> None:
             outer_fill_value={"left_value": -1.0, "right_value": -2.0},
         ),
     )
-    np.testing.assert_allclose(out.data["left_value"].sel(trial="c").values, [-1.0, -1.0, -1.0])
-    np.testing.assert_allclose(out.data["right_value"].sel(trial="a").values, [-2.0, -2.0, -2.0])
+    np.testing.assert_allclose(out.as_dataset()["left_value"].sel(trial="c").values, [-1.0, -1.0, -1.0])
+    np.testing.assert_allclose(out.as_dataset()["right_value"].sel(trial="a").values, [-2.0, -2.0, -2.0])
 
 
 def test_combine_merge_003_merge_with_param_prealign_delegates_to_sync(
@@ -120,7 +133,7 @@ def test_combine_merge_003_merge_with_param_prealign_delegates_to_sync(
         ),
     )
     assert calls == [2]
-    assert set(out.data.data_vars) == {"left_value", "right_value"}
+    assert set(out.as_dataset().data_vars) == {"left_value", "right_value"}
 
 
 def test_combine_merge_004_schema_optional_blocks_pruned_when_untruthful() -> None:
@@ -133,7 +146,7 @@ def test_combine_merge_004_schema_optional_blocks_pruned_when_untruthful() -> No
     )
     static = _ao_static("offset", 5.0)
     out = dynamic.combine.merge([static], opts=MergeOptions(batch_join="inner", sequence_join="exact", compat="override"))
-    core = out.data.attrs["tal"]["core"]
+    core = out.as_dataset().attrs["tal"]["core"]
     assert "param_coord" not in core
     assert "validity" not in core
 
@@ -143,8 +156,8 @@ def test_combine_merge_005_static_scalar_merge_without_sequence_dim() -> None:
     left = _ao_static("a", 1.0)
     right = _ao_static("b", 2.0)
     out = left.combine.merge([right])
-    assert set(out.data.data_vars) == {"a", "b"}
-    assert out.data.attrs["tal"]["core"]["roles"] == {"batch_dims": [], "core_dims": []}
+    assert set(out.as_dataset().data_vars) == {"a", "b"}
+    assert out.as_dataset().attrs["tal"]["core"]["roles"] == {"batch_dims": [], "core_dims": []}
 
 
 def test_orch_finalize_parity_004_combine_merge_finalize_path_stable(
@@ -174,7 +187,7 @@ def test_orch_finalize_parity_004_combine_merge_finalize_path_stable(
         var_name="right_value",
     )
     out = left.combine.merge([right], opts=MergeOptions(batch_join="inner", sequence_join="exact"))
-    assert set(out.data.data_vars) == {"left_value", "right_value"}
+    assert set(out.as_dataset().data_vars) == {"left_value", "right_value"}
     assert calls["finalize_with_schema"] >= 1
 
 
@@ -194,7 +207,7 @@ def test_combine_merge_006_outer_fill_ignored_for_non_outer_join() -> None:
         [right],
         opts=MergeOptions(batch_join="inner", sequence_join="exact", outer_fill_value={"a": -99.0}),
     )
-    np.testing.assert_allclose(out.data["a"].values, [1.0, np.nan, 3.0], equal_nan=True)
+    np.testing.assert_allclose(out.as_dataset()["a"].values, [1.0, np.nan, 3.0], equal_nan=True)
 
 
 def test_combine_merge_007_outer_fill_applies_only_outer_introduced_cells() -> None:
@@ -215,8 +228,8 @@ def test_combine_merge_007_outer_fill_applies_only_outer_introduced_cells() -> N
         [right],
         opts=MergeOptions(batch_join="outer", sequence_join="exact", outer_fill_value={"left_value": -1.0}),
     )
-    np.testing.assert_allclose(out.data["left_value"].sel(trial="c").values, [-1.0, -1.0, -1.0])
-    assert np.isnan(out.data["left_value"].sel(trial="a", sample=1).item())
+    np.testing.assert_allclose(out.as_dataset()["left_value"].sel(trial="c").values, [-1.0, -1.0, -1.0])
+    assert np.isnan(out.as_dataset()["left_value"].sel(trial="a", sample=1).item())
 
 
 def test_combine_merge_008_core_dims_deterministic_independent_of_input_order() -> None:
@@ -241,8 +254,8 @@ def test_combine_merge_008_core_dims_deterministic_independent_of_input_order() 
     )
     out_a = with_core.combine.merge([without_core], validate=False)
     out_b = without_core.combine.merge([with_core], validate=False)
-    assert out_a.data.attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
-    assert out_b.data.attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
+    assert out_a.as_dataset().attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
+    assert out_b.as_dataset().attrs["tal"]["core"]["roles"]["core_dims"] == ["axis"]
 
 
 def test_combine_merge_009_malformed_roles_fail_closed_schema_error() -> None:
@@ -279,7 +292,7 @@ def test_combine_merge_010_outer_fill_preserves_invariant_payload() -> None:
             outer_fill_value={"bias": -99.0},
         ),
     )
-    np.testing.assert_allclose(out.data["bias"].values, [5.0, 5.0])
+    np.testing.assert_allclose(out.as_dataset()["bias"].values, [5.0, 5.0])
 
 
 def test_combine_merge_011_override_preserves_right_only_shared_coords() -> None:
@@ -300,8 +313,8 @@ def test_combine_merge_011_override_preserves_right_only_shared_coords() -> None
         [right],
         opts=MergeOptions(batch_join="outer", sequence_join="exact", compat="override"),
     )
-    np.testing.assert_allclose(out.data.coords["tau"].sel(trial="c").values, [10.0, 11.0, 12.0])
-    assert int(out.data.coords["group_size"].sel(trial="c").item()) == 3
+    np.testing.assert_allclose(out.as_dataset().coords["tau"].sel(trial="c").values, [10.0, 11.0, 12.0])
+    assert int(out.as_dataset().coords["group_size"].sel(trial="c").item()) == 3
 
 
 def test_combine_merge_012_override_preserves_right_only_same_name_vars() -> None:
@@ -322,11 +335,11 @@ def test_combine_merge_012_override_preserves_right_only_same_name_vars() -> Non
         [right],
         opts=MergeOptions(batch_join="outer", sequence_join="exact", compat="override"),
     )
-    np.testing.assert_allclose(out.data["value"].sel(trial="c").values, [200.0, 201.0, 202.0])
-    np.testing.assert_allclose(out.data["value"].sel(trial="a").values, [0.0, 1.0, 2.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="c").values, [200.0, 201.0, 202.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="a").values, [0.0, 1.0, 2.0])
 
 
-def test_combine_merge_013_invalid_sequence_size_prunes_validity_metadata() -> None:
+def test_combine_merge_013_invalid_sequence_size_prunes_validity_metadata(unsafe_from_data) -> None:
     """ID: COMBINE_MERGE_013_invalid_sequence_size_prunes_validity_metadata."""
     left = _ao_grouped(
         trial_labels=("a",),
@@ -343,7 +356,7 @@ def test_combine_merge_013_invalid_sequence_size_prunes_validity_metadata() -> N
             "group_size": ("trial", [np.nan]),
         },
     )
-    right = AnalysisObject.from_data(
+    right = unsafe_from_data(
         right_ds,
         sequence_dim="sample",
         batch_dims=("trial",),
@@ -378,6 +391,153 @@ def test_combine_merge_014_no_conflicts_chunked_overlap_fails_fast() -> None:
     with pytest.raises(ValueError) as err:
         left.combine.merge([right], opts=MergeOptions(compat="no_conflicts"))
     assert "does not support overlapping chunked variables/coords" in str(err.value)
+
+
+@pytest.mark.parametrize("compat", ["no_conflicts", "override"])
+@pytest.mark.parametrize("mapped_fill", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_combine_merge_015_outer_fill_uses_union_of_all_variable_sources(
+    compat: str,
+    mapped_fill: bool,
+    reverse: bool,
+) -> None:
+    """ID: COMBINE_MERGE_015_outer_fill_uses_union_of_all_variable_sources."""
+    first = _ao_grouped(
+        trial_labels=("a", "nan"),
+        tau_rows=[[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]],
+        values=[[1.0, 1.0, 1.0], [np.nan, np.nan, np.nan]],
+        var_name="value",
+    )
+    later = _ao_grouped(
+        trial_labels=("b",),
+        tau_rows=[[0.0, 1.0, 2.0]],
+        values=[[2.0, 2.0, 2.0]],
+        var_name="value",
+    )
+    domain = _ao_grouped(
+        trial_labels=("c",),
+        tau_rows=[[0.0, 1.0, 2.0]],
+        values=[[3.0, 3.0, 3.0]],
+        var_name="domain_only",
+    )
+    inputs = [later, first] if reverse else [first, later]
+    fill: float | dict[str, float] = {"value": -1.0} if mapped_fill else -1.0
+    out = inputs[0].combine.merge(
+        [*inputs[1:], domain],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="exact",
+            compat=compat,  # type: ignore[arg-type]
+            outer_fill_value=fill,
+        ),
+    )
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="a"), [1.0, 1.0, 1.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="b"), [2.0, 2.0, 2.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="c"), [-1.0, -1.0, -1.0])
+    assert bool(out.as_dataset()["value"].sel(trial="nan").isnull().all())
+
+
+def test_combine_merge_016_outer_fill_preserves_multi_axis_source_coverage() -> None:
+    """ID: COMBINE_MERGE_016_outer_fill_preserves_multi_axis_source_coverage."""
+    left = _ao_outer_cell(trial="a", sample=0, value=1.0)
+    right = _ao_outer_cell(trial="b", sample=1, value=2.0)
+    out = left.combine.merge(
+        [right],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="outer",
+            compat="override",
+            outer_fill_value={"value": -1.0},
+        ),
+    )
+    np.testing.assert_allclose(
+        out.as_dataset()["value"].sel(trial=["a", "b"], sample=[0, 1]),
+        [[1.0, -1.0], [-1.0, 2.0]],
+    )
+
+
+def test_combine_merge_017_outer_fill_treats_omitted_outer_dims_as_invariant() -> None:
+    """ID: COMBINE_MERGE_017_outer_fill_treats_omitted_outer_dims_as_invariant."""
+    left_ds = xr.Dataset(
+        data_vars={
+            "value": ("sample", [5.0, 6.0]),
+            "left_domain": (("trial", "sample"), [[1.0, 1.0]]),
+        },
+        coords={"trial": ["a"], "sample": [0, 1]},
+    )
+    right_ds = xr.Dataset(
+        data_vars={"value": (("trial", "sample"), [[20.0, 21.0]])},
+        coords={"trial": ["b"], "sample": [0, 1]},
+    )
+    left = AnalysisObject.from_data(
+        left_ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+    )
+    right = AnalysisObject.from_data(
+        right_ds,
+        sequence_dim="sample",
+        batch_dims=("trial",),
+        core_dims=(),
+    )
+    out = left.combine.merge(
+        [right],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="exact",
+            compat="override",
+            outer_fill_value={"value": -1.0},
+        ),
+    )
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="a"), [5.0, 6.0])
+    np.testing.assert_allclose(out.as_dataset()["value"].sel(trial="b"), [5.0, 6.0])
+
+
+def test_combine_perf_001_outer_fill_coverage_preserves_dask_laziness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ID: COMBINE_PERF_001_outer_fill_coverage_preserves_dask_laziness."""
+    da = pytest.importorskip("dask.array")
+
+    def _chunked(trial: str, values: list[float], *, name: str = "value") -> AnalysisObject:
+        payload = da.from_array(np.asarray([values], dtype="float64"), chunks=(1, 2))
+        ds = xr.Dataset(
+            data_vars={name: (("trial", "sample"), payload)},
+            coords={"trial": [trial], "sample": [0, 1, 2]},
+        )
+        return AnalysisObject.from_data(
+            ds,
+            sequence_dim="sample",
+            batch_dims=("trial",),
+            core_dims=(),
+        )
+
+    left = _chunked("a", [1.0, 1.0, 1.0])
+    right = _chunked("b", [2.0, 2.0, 2.0])
+    domain = _chunked("c", [3.0, 3.0, 3.0], name="domain_only")
+    original_compute = da.Array.compute
+
+    def _forbid_compute(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("merge outer-fill planning must not compute Dask payloads")
+
+    monkeypatch.setattr(da.Array, "compute", _forbid_compute)
+    out = left.combine.merge(
+        [right, domain],
+        opts=MergeOptions(
+            batch_join="outer",
+            sequence_join="exact",
+            compat="override",
+            outer_fill_value={"value": -1.0},
+        ),
+    )
+    assert getattr(out.as_dataset(copy="none")["value"].data, "chunks", None) is not None
+
+    monkeypatch.setattr(da.Array, "compute", original_compute)
+    np.testing.assert_allclose(
+        out.as_dataset(copy="none")["value"].sel(trial=["a", "b", "c"]).compute(),
+        [[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [-1.0, -1.0, -1.0]],
+    )
 
 
 def test_combine_dry_003_sequence_size_derivation_single_owner_parity() -> None:

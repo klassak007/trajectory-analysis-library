@@ -5,13 +5,16 @@ from typing import TYPE_CHECKING
 import xarray as xr
 
 from tal.core.analysis_object import AnalysisObject
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.inputs import coerce_analysis_object_input
 from tal.core.orchestration.runtime_checks import select_single_numeric_var
 from tal.core.schema_read import read_roles, validate_schema_if_needed
 from tal.linalg import add as linalg_add
 from tal.utils.frame_schema import get_frames, set_frames
 
-from .policies.intent import PositionAddPlan, resolve_position_add_intent
+from .association import finalize_spatial_as, resolve_passive_association
+from .construction import SpatialConfigurationConstructionMixin
+from .field_recipes import SingleSpatialFieldFactoryMixin
 from .metadata import (
     get_position_intent,
     get_position_rep,
@@ -20,16 +23,20 @@ from .metadata import (
     set_position_rep,
 )
 from .ops.frame_api_ops import position_to_frame
+from .policies.intent import PositionAddPlan, resolve_position_add_intent
 from .policies.runtime_checks import require_xyz_core_labels
 
 _XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
 
 if TYPE_CHECKING:
-    from tal.frames import Frame
+    from tal.frames import Frame, FrameGraph
 
-    from .temporal.options import KinematicsDerivativeOptions, KinematicsSmoothingOptions
-    from .velocity import LinearVelocity
     from .path_solve import PathSolveOptions
+    from .temporal.options import (
+        KinematicsDerivativeOptions,
+        KinematicsSmoothingOptions,
+    )
+    from .velocity import LinearVelocity
 
 
 def _coerce_position_source(value: object, *, owner: str) -> AnalysisObject:
@@ -98,14 +105,35 @@ def _finalize_position_addition(
 def _add_positions(left_input: object, right_input: object, *, owner: str) -> "Position":
     left = _coerce_position_operand(left_input, owner=owner, side="left")
     right = _coerce_position_operand(right_input, owner=owner, side="right")
+    association = resolve_passive_association((left, right), owner=owner)
     plan = resolve_position_add_intent(left, right, owner=owner)
     numeric = linalg_add(left, right)
-    finalized = _finalize_position_addition(numeric.unsafe_data, plan=plan, owner=owner)
-    return Position._from_validated(finalized)
+    finalized = _finalize_position_addition(analysis_object_dataset(numeric), plan=plan, owner=owner)
+    return finalize_spatial_as(
+        Position,
+        finalized,
+        validate=True,
+        association=association,
+    )
 
 
-class Position(AnalysisObject):
+class Position(
+    SingleSpatialFieldFactoryMixin,
+    SpatialConfigurationConstructionMixin,
+    AnalysisObject,
+):
     """Cartesian 3D position with frame-aware spatial operations.
+
+    Parameters
+    ----------
+    data : AnalysisObject, xarray.Dataset, or xarray.DataArray
+        Position payload accepted by the typed ownership boundary.
+    parent, child, expressed_in : str or None, optional
+        Frame declarations to inherit, confirm, add, or explicitly clear. Omitting a
+        declaration inherits it from ``data``.
+    graph : FrameGraph or None, optional
+        Passive wrapper association. Omission inherits any association from ``data``;
+        this does not create graph topology.
 
     Notes
     -----
@@ -113,12 +141,9 @@ class Position(AnalysisObject):
     """
 
     XYZ_LABELS: tuple[str, str, str] = _XYZ_LABELS
-
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = _coerce_position_source(data, owner="spatial.position.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.position.__init__")
-        self._enforce_invariants(owner="spatial.position.__init__")
+    SPATIAL_FIELD_TARGET = "position"
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.position.__init__"
+    SPATIAL_SOURCE_COERCER = staticmethod(_coerce_position_source)
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Position":
@@ -128,18 +153,18 @@ class Position(AnalysisObject):
         return obj
 
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Position":
-        obj = super()._from_unvalidated(ds)
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> "Position":
+        obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
         return obj
 
     def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = _normalize_position_metadata(self.unsafe_data, owner=owner)
+        normalized = _normalize_position_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)
 
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_position_dataset_invariants(self.unsafe_data, owner=owner)
+        _enforce_position_dataset_invariants(analysis_object_dataset(self), owner=owner)
 
     def as_delta(self, *, validate: bool = True) -> "Position":
         """Return this position re-tagged with ``intent="delta"`` semantics.
@@ -177,20 +202,19 @@ class Position(AnalysisObject):
         True
         """
         ds = set_position_intent(
-            self.unsafe_data,
+            analysis_object_dataset(self),
             intent="delta",
             validate=False,
             owner="spatial.position.as_delta",
         )
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def to_frame(
         self,
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Position":
@@ -200,8 +224,10 @@ class Position(AnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_pose_fn : object
-            Callable resolving pose edges for frame-path traversal.
+        edge_pose_fn : object, optional
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -233,6 +259,7 @@ class Position(AnalysisObject):
             self,
             dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )
@@ -241,7 +268,8 @@ class Position(AnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_rotation_fn,
+        edge_rotation_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Position":
@@ -251,8 +279,10 @@ class Position(AnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_rotation_fn : object
-            Callable resolving rotation edges for frame-path traversal.
+        edge_rotation_fn : object, optional
+            Optional explicit parent-basis rotation resolver; omitted calls use bound Pose rotations.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -286,6 +316,7 @@ class Position(AnalysisObject):
             self,
             dst,
             edge_rotation_fn=edge_rotation_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )
@@ -339,7 +370,9 @@ class Position(AnalysisObject):
         >>> isinstance(opts, KinematicsDerivativeOptions)
         True
         """
-        from .ops.kinematics_temporal_ops import differentiate_position_to_linear_velocity
+        from .ops.kinematics_temporal_ops import (
+            differentiate_position_to_linear_velocity,
+        )
 
         return differentiate_position_to_linear_velocity(
             self,
@@ -424,6 +457,8 @@ class Position(AnalysisObject):
 __all__ = ["Position"]
 
 
-from .ops.magnitude_ops import install_position_magnitude_methods as _install_position_magnitude_methods
+from .ops.magnitude_ops import (
+    install_position_magnitude_methods as _install_position_magnitude_methods,
+)
 
 _install_position_magnitude_methods(Position)

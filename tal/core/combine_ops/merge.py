@@ -5,10 +5,14 @@ from collections.abc import Mapping
 import numpy as np
 import xarray as xr
 
+from .. import validity_values
 from ..param_ops import synchronize_param
-from ..param_engine.validity_mask import validate_sequence_size_values
 from .align import align_contexts
-from .finalize import finalize_combine_output
+from .finalize import (
+    CombineFinalizationPlan,
+    finalize_combine_output,
+    prepare_combine_finalization,
+)
 from .metadata import (
     canonicalize_optional_names,
     resolve_core_dims,
@@ -32,30 +36,38 @@ def _outer_dims(
     return tuple(dims)
 
 
-def _find_var_source(var_name: str, *, sources: list[CombineContext]) -> xr.Dataset | None:
-    for ctx in sources:
-        if var_name in ctx.ds.data_vars:
-            return ctx.ds
-    return None
+def _find_var_sources(var_name: str, *, sources: list[CombineContext]) -> tuple[xr.DataArray, ...]:
+    return tuple(ctx.ds[var_name] for ctx in sources if var_name in ctx.ds.data_vars)
 
 
-def _mask_for_outer_holes(
-    source: xr.Dataset,
-    target: xr.Dataset,
+def _source_outer_hole_mask(
+    source: xr.DataArray,
+    target: xr.DataArray,
     *,
-    var_dims: tuple[str, ...],
     outer_dims: tuple[str, ...],
 ) -> xr.DataArray | None:
     mask: xr.DataArray | None = None
-    for dim in var_dims:
-        if dim not in outer_dims or dim not in target.dims:
+    for dim in target.dims:
+        if dim not in outer_dims or dim not in source.dims:
             continue
-        if dim in source.dims:
-            missing = ~target.get_index(dim).isin(source.get_index(dim))
-        else:
-            continue
+        missing = ~target.get_index(dim).isin(source.get_index(dim))
         axis = xr.DataArray(np.asarray(missing, dtype=bool), dims=(dim,), coords={dim: target.coords[dim]})
         mask = axis if mask is None else (mask | axis)
+    return mask
+
+
+def _mask_for_outer_holes(
+    sources: tuple[xr.DataArray, ...],
+    target: xr.DataArray,
+    *,
+    outer_dims: tuple[str, ...],
+) -> xr.DataArray | None:
+    mask: xr.DataArray | None = None
+    for source in sources:
+        source_mask = _source_outer_hole_mask(source, target, outer_dims=outer_dims)
+        if source_mask is None:
+            return None
+        mask = source_mask if mask is None else (mask & source_mask)
     return mask
 
 
@@ -89,13 +101,12 @@ def _apply_outer_fill_scoped(
         fill_value = _fill_value_for_var(opts.outer_fill_value, var_name=str(name))
         if _is_noop_fill(fill_value):
             continue
-        source = _find_var_source(str(name), sources=sources)
-        if source is None:
+        source_vars = _find_var_sources(str(name), sources=sources)
+        if not source_vars:
             continue
         mask = _mask_for_outer_holes(
-            source,
-            out,
-            var_dims=tuple(var.dims),
+            source_vars,
+            var,
             outer_dims=outer_dims,
         )
         if mask is None:
@@ -169,7 +180,7 @@ def _validate_sequence_size_coord_if_present(
     if size_name is None or sequence_dim is None or size_name not in ds.coords:
         return ds, size_name
     try:
-        validated = validate_sequence_size_values(
+        validated = validity_values.require_valid_sequence_size_values(
             ds.coords[size_name],
             sequence_size_coord=size_name,
             sequence_len=int(ds.sizes.get(sequence_dim, 0)),
@@ -255,6 +266,10 @@ def merge_contexts(
     opts: MergeOptions,
     validate: bool,
 ) -> "AnalysisObject":
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner="merge",
+    )
     prealigned = _prealign_contexts(contexts, opts=opts)
     aligned = align_contexts(
         prealigned,
@@ -272,6 +287,7 @@ def merge_contexts(
         merged=merged,
         opts=opts,
         validate=validate,
+        finalization=finalization,
     )
 
 
@@ -296,6 +312,7 @@ def _finalize_merged_context(
     merged: xr.Dataset,
     opts: MergeOptions,
     validate: bool,
+    finalization: CombineFinalizationPlan,
 ) -> "AnalysisObject":
     ds, sequence_dim, batch_dims, param_name, size_name, core_dims = _merge_metadata(aligned, ds=merged)
     ds = _apply_outer_fill_scoped(
@@ -311,7 +328,7 @@ def _finalize_merged_context(
         sequence_dim=sequence_dim,
     )
     return finalize_combine_output(
-        aligned[0],
+        finalization,
         ds,
         sequence_dim=sequence_dim,
         batch_dims=batch_dims if sequence_dim is not None else (),

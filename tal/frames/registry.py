@@ -46,7 +46,6 @@ class Frame:
         "_graph",
         "_parent",
         "_children",
-        "_transform_to_parent",
         "_frame_ext",
         "_edge_to_parent_ext",
     )
@@ -56,7 +55,6 @@ class Frame:
         self._graph = graph
         self._parent: Frame | None = None
         self._children: dict[str, Frame] = {}
-        self._transform_to_parent: Any = None
         self._frame_ext: dict[str, Any] = {}
         self._edge_to_parent_ext: dict[str, Any] = {}
 
@@ -225,7 +223,6 @@ class FrameGraph:
 
     def __init__(self, *, frozen: bool = False) -> None:
         self._frames: dict[str, Frame] = {}
-        self._tokens: list[contextvars.Token[FrameGraph]] = []
         self._frozen = bool(frozen)
 
     @property
@@ -289,6 +286,42 @@ class FrameGraph:
         frame._parent = None
         frame._edge_to_parent_ext.clear()
 
+    def _require_attachable(
+        self,
+        frame: Frame | None,
+        parent: Frame | None,
+        *,
+        frame_id: str,
+        parent_id: str,
+        allow_reparent: bool,
+        on_conflict: str,
+        context: str,
+    ) -> Frame | None:
+        if frame is not None:
+            self._assert_owned(frame, context=context)
+        if parent is not None:
+            self._assert_owned(parent, context=context)
+        if on_conflict not in {"error", "replace"}:
+            raise ValueError(f"{context}: on_conflict must be 'error' or 'replace'.")
+        if frame_id == parent_id or (frame is not None and parent is not None and self._is_ancestor(parent, frame)):
+            raise ValueError(f"{context}: reparent would create a cycle.")
+        current_parent = None if frame is None else frame._parent
+        if current_parent is not None and current_parent is not parent and not allow_reparent:
+            raise ValueError(
+                f"{context}: frame {frame_id!r} already has parent {current_parent.id!r}; "
+                f"refusing reparent to {parent_id!r}."
+            )
+        conflict = None if parent is None else parent._children.get(frame_id)
+        if conflict is None or conflict is frame:
+            return None
+        if on_conflict == "error":
+            raise ValueError(f"{context}: child id collision under parent {parent_id!r}: {frame_id!r}.")
+        if frame is not None and self._is_replace_conflict_unsafe(frame, conflict):
+            raise ValueError(
+                f"{context}: on_conflict='replace' cannot replace ancestor/descendant frame {conflict.id!r}."
+            )
+        return conflict
+
     def _attach_to_parent(
         self,
         frame: Frame,
@@ -297,21 +330,17 @@ class FrameGraph:
         context: str,
         on_conflict: str = "error",
     ) -> None:
-        self._assert_owned(frame, context=context)
-        self._assert_owned(parent, context=context)
-        if on_conflict not in {"error", "replace"}:
-            raise ValueError(f"{context}: on_conflict must be 'error' or 'replace'.")
-        if frame is parent or self._is_ancestor(parent, frame):
-            raise ValueError(f"{context}: reparent would create a cycle.")
-        current = parent._children.get(frame.id)
-        if current is not None and current is not frame:
-            if on_conflict == "error":
-                raise ValueError(f"{context}: child id collision under parent {parent.id!r}: {frame.id!r}.")
-            if self._is_replace_conflict_unsafe(frame, current):
-                raise ValueError(
-                    f"{context}: on_conflict='replace' cannot replace ancestor/descendant frame {current.id!r}."
-                )
-            self.remove_frame(current, subtree=True)
+        conflict = self._require_attachable(
+            frame,
+            parent,
+            frame_id=frame.id,
+            parent_id=parent.id,
+            allow_reparent=True,
+            on_conflict=on_conflict,
+            context=context,
+        )
+        if conflict is not None:
+            self.remove_frame(conflict, subtree=True)
         self._detach_from_parent(frame)
         parent._children[frame.id] = frame
         frame._parent = parent
@@ -586,12 +615,12 @@ class FrameGraph:
         self._assert_owned(target, context=owner)
         self._assert_mutable(context=owner)
         if subtree:
-            for node in _iter_subtree(target):
+            nodes = _iter_subtree(target)
+            for node in nodes:
                 self._frames.pop(node.id, None)
-            self._detach_from_parent(target)
-            for node in _iter_subtree(target):
+            for node in nodes:
+                self._detach_from_parent(node)
                 node._children.clear()
-                node._parent = None
             return
         self._frames.pop(target.id, None)
         self._detach_from_parent(target)
@@ -601,14 +630,29 @@ class FrameGraph:
 
     def __enter__(self) -> "FrameGraph":
         token = _ACTIVE_FRAME_GRAPH.set(self)
-        self._tokens.append(token)
+        stack = _FRAME_GRAPH_CONTEXT_STACK.get()
+        _FRAME_GRAPH_CONTEXT_STACK.set((*stack, (self, token)))
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        token = self._tokens.pop()
-        _ACTIVE_FRAME_GRAPH.reset(token)
+        stack = _FRAME_GRAPH_CONTEXT_STACK.get()
+        if not stack or stack[-1][0] is not self:
+            raise RuntimeError(
+                "FrameGraph.__exit__: no matching context-local entry for this graph."
+            )
+        _, token = stack[-1]
+        try:
+            _ACTIVE_FRAME_GRAPH.reset(token)
+        except (RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                "FrameGraph.__exit__: no matching context-local entry for this graph."
+            ) from exc
+        _FRAME_GRAPH_CONTEXT_STACK.set(stack[:-1])
 
 
+_FRAME_GRAPH_CONTEXT_STACK: contextvars.ContextVar[
+    tuple[tuple[FrameGraph, contextvars.Token[FrameGraph]], ...]
+] = contextvars.ContextVar("tal_frame_graph_context_stack", default=())
 _DEFAULT_FRAME_GRAPH = FrameGraph()
 _ACTIVE_FRAME_GRAPH: contextvars.ContextVar[FrameGraph] = contextvars.ContextVar(
     "tal_active_frame_graph",
@@ -738,6 +782,7 @@ def set_edge_to_parent_runtime_ext(
     owner: str = "frames.registry.set_edge_to_parent_runtime_ext",
 ) -> None:
     target = _require_registered_frame(child, owner=owner, arg="child")
+    target._graph._assert_mutable(context=owner)
     if target.parent is None:
         raise ValueError(f"{owner}: child frame {target.id!r} has no parent edge.")
     target._edge_to_parent_ext[_require_extension_key(key, owner=owner)] = value

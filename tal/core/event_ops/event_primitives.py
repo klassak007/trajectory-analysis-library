@@ -5,14 +5,10 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from ._event_constants import EDGE_ENTER, EDGE_EXIT, EDGE_INVALID, EDGE_TRIGGER, SAMPLE_SENTINEL
+
 if TYPE_CHECKING:
     from .resolve import EventEvalContext
-
-EDGE_INVALID = np.int8(0)
-EDGE_ENTER = np.int8(1)
-EDGE_EXIT = np.int8(2)
-EDGE_TRIGGER = np.int8(3)
-SAMPLE_SENTINEL = np.int64(-1)
 
 
 def batch_dims(context: "EventEvalContext") -> tuple[str, ...]:

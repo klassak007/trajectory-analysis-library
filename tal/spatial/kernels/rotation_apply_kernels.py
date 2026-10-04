@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation as SciRotation
 
+from .scipy_buffers import writable_scipy_vectors
+
 _VEC3_SIZE = 3
 _QUAT_SIZE = 4
 
@@ -24,7 +26,7 @@ def rotate_vec3_kernel(values: np.ndarray, quat: np.ndarray) -> np.ndarray:
     vec_flat, leading = _reshape_vec3(values, owner=owner)
     quat_flat, _ = _reshape_quat(quat, owner=owner)
     try:
-        rotated = SciRotation.from_quat(quat_flat).apply(vec_flat)
+        rotated = SciRotation.from_quat(quat_flat).apply(writable_scipy_vectors(vec_flat))
     except ValueError as exc:
         raise ValueError(f"{owner}: invalid quaternion input: {exc}") from exc
     return rotated.reshape(leading + (_VEC3_SIZE,))

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.frames import (
     Frame,
     FrameGraph,
     FramePath,
     find_path,
-    get_active_frame_graph,
 )
 from tal.utils.frame_schema import get_frames
 
@@ -21,6 +20,16 @@ from ..metadata import (
 )
 from ..metadata.roles import get_kinematics_kind
 from ..path_solve import KinematicsPathSupportOptions, PathSolveOptions
+from .edge_resolver_ops import (
+    PreparedEdgeResolver,
+    _call_prepared_edge_callback,
+    _call_prepared_frame_callback,
+    _prepare_required_edge_callback,
+    _prepare_required_frame_callback,
+    _PreparedPathCallback,
+)
+from .path_configuration import SelectedPathConfiguration, resolve_path_endpoint
+from .pose_provider_ops import require_bound_pose_provider
 
 
 @dataclass(frozen=True)
@@ -32,13 +41,15 @@ class KinematicsPathSupportContext:
     path: FramePath
     operation: str
     edge_classes: tuple[str, ...]
-    support: KinematicsPathSupportOptions
+    motion_callback: _PreparedPathCallback | None
+    motion_payloads: tuple[object | None, ...]
+    finalized: bool = False
 
 
-def _require_callable(value: object, *, owner: str, name: str):
-    if callable(value):
-        return value
-    raise TypeError(f"{owner}: {name} must be callable.")
+@dataclass(frozen=True)
+class _PreparedSupportCallbacks:
+    edge_class: _PreparedPathCallback | None
+    frame_status: _PreparedPathCallback | None
 
 
 def _require_status(value: object, *, owner: str, what: str) -> str:
@@ -53,39 +64,11 @@ def _require_motion_class(value: object, *, owner: str, what: str) -> str:
     raise ValueError(f"{owner}: {what} must be one of {EDGE_MOTION_CLASS_VALUES!r}.")
 
 
-def _resolve_graph(opts: PathSolveOptions | None, *, dst: Frame | str, owner: str) -> FrameGraph:
-    if opts is not None and opts.graph is not None:
-        if isinstance(opts.graph, FrameGraph):
-            return opts.graph
-        raise TypeError(f"{owner}: opts.graph must be FrameGraph or None.")
-    if isinstance(dst, Frame):
-        graph = dst._graph
-        if isinstance(graph, FrameGraph):
-            return graph
-        raise ValueError(f"{owner}: dst frame is not bound to a valid FrameGraph.")
-    return get_active_frame_graph()
-
-
-def _resolve_endpoint(graph: FrameGraph, value: Frame | str, *, owner: str, arg: str) -> Frame:
-    if isinstance(value, Frame):
-        if value._graph is not graph:
-            raise ValueError(f"{owner}: {arg} frame belongs to a different FrameGraph.")
-        if graph.get_frame(value.id) is not value:
-            raise ValueError(f"{owner}: {arg} frame {value.id!r} is not registered in graph.")
-        return value
-    if isinstance(value, str) and value.strip():
-        resolved = graph.get_frame(value.strip())
-        if isinstance(resolved, Frame):
-            return resolved
-        raise ValueError(f"{owner}: {arg} frame {value.strip()!r} is not registered in graph.")
-    raise TypeError(f"{owner}: {arg} must be Frame or non-empty string frame id.")
-
-
 def _resolve_source_frames(source, graph: FrameGraph, *, owner: str) -> tuple[Frame, Frame | None]:
-    parent_id, child_id = get_frames(source.unsafe_data)
+    parent_id, child_id = get_frames(analysis_object_dataset(source))
     if parent_id is None:
         raise ValueError(f"{owner}: source requires parent frame metadata.")
-    src_parent = _resolve_endpoint(graph, parent_id, owner=owner, arg="source parent")
+    src_parent = resolve_path_endpoint(parent_id, graph=graph, owner=owner, arg="source parent")
     if child_id is None:
         src_child = None
     else:
@@ -95,7 +78,7 @@ def _resolve_source_frames(source, graph: FrameGraph, *, owner: str) -> tuple[Fr
 
 
 def _operation_kind(source, *, owner: str) -> str:
-    kind = get_kinematics_kind(source.unsafe_data, owner=owner)
+    kind = get_kinematics_kind(analysis_object_dataset(source), owner=owner)
     if kind is None:
         raise ValueError(f"{owner}: source kinematics kind metadata is required.")
     if "velocity" in kind:
@@ -115,18 +98,23 @@ def _resolve_support(opts: PathSolveOptions | None, *, owner: str) -> Kinematics
 
 
 def _require_inertial_role_support(
-    source,
+    inertial_roles,
     *,
     src_parent: Frame,
     src_child: Frame | None,
-    frame_status_fn: Callable[[Frame], object],
+    frame_status: _PreparedPathCallback | None,
     owner: str,
 ) -> None:
-    for role in get_instantaneous_inertial(source.unsafe_data, owner=owner):
+    for role in inertial_roles:
         target = src_parent if role == "parent" else src_child
         if target is None:
             raise ValueError(f"{owner}: inertial role {role!r} requires registered source child frame.")
-        status = _require_status(frame_status_fn(target), owner=owner, what=f"inertial status for {role} role")
+        value = (
+            get_frame_inertial_status(target, owner=owner)
+            if frame_status is None
+            else _call_prepared_frame_callback(frame_status, target, owner=owner)
+        )
+        status = _require_status(value, owner=owner, what=f"inertial status for {role} role")
         if status != "inertial":
             raise ValueError(f"{owner}: required inertial support for role {role!r} is missing.")
 
@@ -134,12 +122,14 @@ def _require_inertial_role_support(
 def _resolve_edge_classes(
     path: FramePath,
     *,
-    edge_class_fn: Callable[[Frame, Frame], object],
+    edge_class: _PreparedPathCallback | None,
     owner: str,
 ) -> tuple[str, ...]:
     classes = tuple(
         _require_motion_class(
-            edge_class_fn(step.child, step.parent),
+            get_edge_motion_class(step.child, step.parent, owner=owner)
+            if edge_class is None
+            else _call_prepared_edge_callback(edge_class, step.child, step.parent, owner=owner),
             owner=owner,
             what=f"edge motion class ({step.child.id!r}, {step.parent.id!r})",
         )
@@ -150,57 +140,206 @@ def _resolve_edge_classes(
     return classes
 
 
-def _require_operation_resolvers(
+def _prepare_motion_callback(
     *,
     operation: str,
     edge_classes: tuple[str, ...],
     support: KinematicsPathSupportOptions,
     owner: str,
+) -> _PreparedPathCallback | None:
+    velocity_required = operation == "velocity" and any(
+        cls in {"galilean", "dynamic"} for cls in edge_classes
+    )
+    acceleration_required = operation == "acceleration" and any(cls == "dynamic" for cls in edge_classes)
+    if not velocity_required and not acceleration_required:
+        return None
+    name = "edge_velocity_fn" if velocity_required else "edge_acceleration_fn"
+    value = getattr(support, name)
+    if value is None:
+        detail = "galilean/dynamic velocity" if velocity_required else "dynamic acceleration"
+        raise ValueError(f"{owner}: {name} is required for {detail} support.")
+    return _prepare_required_edge_callback(
+        value,
+        owner=owner,
+        arg=f"opts.kinematics_support.{name}",
+    )
+
+
+def _prepare_support_callbacks(
+    support: KinematicsPathSupportOptions,
+    *,
+    needs_frame_status: bool,
+    owner: str,
+) -> _PreparedSupportCallbacks:
+    edge_class = None
+    if support.edge_motion_class_fn is not None:
+        edge_class = _prepare_required_edge_callback(
+            support.edge_motion_class_fn,
+            owner=owner,
+            arg="opts.kinematics_support.edge_motion_class_fn",
+        )
+    frame_status = None
+    if needs_frame_status and support.frame_inertial_status_fn is not None:
+        frame_status = _prepare_required_frame_callback(
+            support.frame_inertial_status_fn,
+            owner=owner,
+            arg="opts.kinematics_support.frame_inertial_status_fn",
+        )
+    return _PreparedSupportCallbacks(edge_class, frame_status)
+
+
+def _coerce_motion_payload(payload: object, *, operation: str, owner: str):
+    if operation == "velocity":
+        from ..velocity import Velocity
+
+        if isinstance(payload, Velocity):
+            return payload
+        raise ValueError(f"{owner}: edge_velocity_fn must return Velocity payloads.")
+    from ..acceleration import Acceleration
+
+    if isinstance(payload, Acceleration):
+        return payload
+    raise ValueError(f"{owner}: edge_acceleration_fn must return Acceleration payloads.")
+
+
+def _motion_required(operation: str, motion_class: str) -> bool:
+    if operation == "velocity":
+        return motion_class in {"galilean", "dynamic"}
+    return motion_class == "dynamic"
+
+
+def _acquire_motion_payloads(
+    path: FramePath,
+    edge_classes: tuple[str, ...],
+    *,
+    operation: str,
+    callback: _PreparedPathCallback | None,
+    owner: str,
+) -> tuple[object | None, ...]:
+    payloads: list[object | None] = []
+    for step, motion_class in zip(path.steps, edge_classes, strict=True):
+        if not _motion_required(operation, motion_class):
+            payloads.append(None)
+            continue
+        if callback is None:
+            raise RuntimeError("motion support preflight did not prepare its callback")
+        payload = _call_prepared_edge_callback(callback, step.child, step.parent, owner=owner)
+        payloads.append(_coerce_motion_payload(payload, operation=operation, owner=owner))
+    return tuple(payloads)
+
+
+def finalize_kinematics_path_support(
+    context: KinematicsPathSupportContext,
+    payloads: tuple[object | None, ...],
+) -> KinematicsPathSupportContext:
+    return KinematicsPathSupportContext(
+        graph=context.graph,
+        src_parent=context.src_parent,
+        src_child=context.src_child,
+        dst=context.dst,
+        path=context.path,
+        operation=context.operation,
+        edge_classes=context.edge_classes,
+        motion_callback=context.motion_callback,
+        motion_payloads=payloads,
+        finalized=True,
+    )
+
+def _require_bound_path_providers(
+    path: FramePath,
+    prepared_resolver: PreparedEdgeResolver,
+    *,
+    owner: str,
 ) -> None:
-    if operation == "velocity" and any(cls in {"galilean", "dynamic"} for cls in edge_classes):
-        if support.edge_velocity_fn is None:
-            raise ValueError(f"{owner}: edge_velocity_fn is required for galilean/dynamic velocity support.")
-    if operation == "acceleration" and any(cls == "dynamic" for cls in edge_classes):
-        if support.edge_acceleration_fn is None:
-            raise ValueError(f"{owner}: edge_acceleration_fn is required for dynamic acceleration support.")
+    if prepared_resolver.resolver is not None:
+        return
+    for step in path.steps:
+        require_bound_pose_provider(step.child, step.parent, owner=owner)
+
+
+def _resolve_support_path(
+    source,
+    *,
+    dst: Frame | str,
+    graph: FrameGraph,
+    owner: str,
+) -> tuple[Frame, Frame | None, Frame, FramePath, str]:
+    src_parent, src_child = _resolve_source_frames(source, graph, owner=owner)
+    dst_frame = resolve_path_endpoint(dst, graph=graph, owner=owner, arg="dst")
+    operation = _operation_kind(source, owner=owner)
+    try:
+        path = find_path(src_parent, dst_frame)
+    except ValueError as exc:
+        raise ValueError(f"{owner}: {exc}") from exc
+    return src_parent, src_child, dst_frame, path, operation
+
+
+def _resolve_support_policy(
+    source,
+    path: FramePath,
+    *,
+    opts: PathSolveOptions,
+    src_parent: Frame,
+    src_child: Frame | None,
+    operation: str,
+    owner: str,
+) -> tuple[tuple[str, ...], _PreparedPathCallback | None]:
+    support = _resolve_support(opts, owner=owner)
+    inertial_roles = get_instantaneous_inertial(analysis_object_dataset(source), owner=owner)
+    callbacks = _prepare_support_callbacks(
+        support,
+        needs_frame_status=bool(inertial_roles),
+        owner=owner,
+    )
+    _require_inertial_role_support(
+        inertial_roles,
+        src_parent=src_parent,
+        src_child=src_child,
+        frame_status=callbacks.frame_status,
+        owner=owner,
+    )
+    edge_classes = _resolve_edge_classes(path, edge_class=callbacks.edge_class, owner=owner)
+    motion_callback = _prepare_motion_callback(
+        operation=operation,
+        edge_classes=edge_classes,
+        support=support,
+        owner=owner,
+    )
+    return edge_classes, motion_callback
 
 
 def resolve_kinematics_path_support(
     source,
     *,
     dst: Frame | str,
-    opts: PathSolveOptions | None,
+    configuration: SelectedPathConfiguration,
+    prepared_resolver: PreparedEdgeResolver,
     owner: str,
 ) -> KinematicsPathSupportContext:
-    graph = _resolve_graph(opts, dst=dst, owner=owner)
-    src_parent, src_child = _resolve_source_frames(source, graph, owner=owner)
-    dst_frame = _resolve_endpoint(graph, dst, owner=owner, arg="dst")
-    operation = _operation_kind(source, owner=owner)
-    path = find_path(src_parent, dst_frame)
-    support = _resolve_support(opts, owner=owner)
-    edge_class_fn = (
-        _require_callable(support.edge_motion_class_fn, owner=owner, name="opts.kinematics_support.edge_motion_class_fn")
-        if support.edge_motion_class_fn is not None
-        else (lambda child, parent: get_edge_motion_class(child, parent, owner=owner))
-    )
-    frame_status_fn = (
-        _require_callable(
-            support.frame_inertial_status_fn,
-            owner=owner,
-            name="opts.kinematics_support.frame_inertial_status_fn",
-        )
-        if support.frame_inertial_status_fn is not None
-        else (lambda frame: get_frame_inertial_status(frame, owner=owner))
-    )
-    _require_inertial_role_support(
+    opts, graph = configuration.options, configuration.graph
+    src_parent, src_child, dst_frame, path, operation = _resolve_support_path(
         source,
-        src_parent=src_parent,
-        src_child=src_child,
-        frame_status_fn=frame_status_fn,
+        dst=dst,
+        graph=graph,
         owner=owner,
     )
-    edge_classes = _resolve_edge_classes(path, edge_class_fn=edge_class_fn, owner=owner)
-    _require_operation_resolvers(operation=operation, edge_classes=edge_classes, support=support, owner=owner)
+    _require_bound_path_providers(path, prepared_resolver, owner=owner)
+    edge_classes, motion_callback = _resolve_support_policy(
+        source,
+        path,
+        opts=opts,
+        src_parent=src_parent,
+        src_child=src_child,
+        operation=operation,
+        owner=owner,
+    )
+    motion_payloads = _acquire_motion_payloads(
+        path,
+        edge_classes,
+        operation=operation,
+        callback=motion_callback,
+        owner=owner,
+    )
     return KinematicsPathSupportContext(
         graph=graph,
         src_parent=src_parent,
@@ -209,11 +348,13 @@ def resolve_kinematics_path_support(
         path=path,
         operation=operation,
         edge_classes=edge_classes,
-        support=support,
+        motion_callback=motion_callback,
+        motion_payloads=motion_payloads,
     )
 
 
 __all__ = [
     "KinematicsPathSupportContext",
+    "finalize_kinematics_path_support",
     "resolve_kinematics_path_support",
 ]

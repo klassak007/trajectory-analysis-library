@@ -29,7 +29,7 @@ class BatchConcatOptions:
     >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> out = concat_batch([left, right], opts=BatchConcatOptions(batch_dim="run"))
-    >>> out.unsafe_data.sizes["run"]
+    >>> out.as_dataset().sizes["run"]
     2
     """
 
@@ -54,7 +54,7 @@ class SequenceConcatOptions:
     >>> from tal.core import AnalysisObject, SequenceConcatOptions, concat_sequence
     >>> first = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> second = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [1]}), sequence_dim="sample", core_dims=(), validate=True)
-    >>> concat_sequence([first, second], opts=SequenceConcatOptions(overlap="error")).unsafe_data.sizes["sample"]
+    >>> concat_sequence([first, second], opts=SequenceConcatOptions(overlap="error")).as_dataset().sizes["sample"]
     2
     """
 
@@ -91,7 +91,7 @@ class MergeOptions:
     >>> from tal.core import AnalysisObject, MergeOptions, merge
     >>> left = AnalysisObject.from_data(xr.Dataset({"x": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"y": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-    >>> sorted(merge([left, right], opts=MergeOptions()).unsafe_data.data_vars)
+    >>> sorted(merge([left, right], opts=MergeOptions()).as_dataset().data_vars)
     ['x', 'y']
     """
 
@@ -119,7 +119,7 @@ class AlignOptions:
     >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0, 2.0])}, coords={"sample": [0, 1]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [3.0, 4.0])}, coords={"sample": [1, 2]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> a, b = align_pair(left, right, opts=AlignOptions(sequence_join="outer"))
-    >>> (a.unsafe_data.sizes["sample"], b.unsafe_data.sizes["sample"])
+    >>> (a.as_dataset().sizes["sample"], b.as_dataset().sizes["sample"])
     (3, 3)
     """
 
@@ -144,7 +144,7 @@ class CoreConcatOptions:
     >>> from tal.core import AnalysisObject, CoreConcatOptions, concat_core
     >>> x = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0]])}, coords={"sample": [0], "axis": ["x"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
     >>> y = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[2.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
-    >>> concat_core([x, y], opts=CoreConcatOptions(core_dim="axis")).unsafe_data.sizes["axis"]
+    >>> concat_core([x, y], opts=CoreConcatOptions(core_dim="axis")).as_dataset().sizes["axis"]
     2
     """
 
@@ -191,7 +191,7 @@ class CoreOverlayOptions:
     >>> from tal.core import AnalysisObject, CoreOverlayOptions, overlay_core
     >>> base = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0, 2.0]])}, coords={"sample": [0], "axis": ["x", "y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
     >>> patch = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[9.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
-    >>> overlay_core(base, patch, opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).unsafe_data["v"].sel(axis="y").item()
+    >>> overlay_core(base, patch, opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).as_dataset()["v"].sel(axis="y").item()
     9.0
     """
 

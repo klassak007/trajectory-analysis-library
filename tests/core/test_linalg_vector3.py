@@ -86,8 +86,8 @@ def test_linalg_core_022_vector3_constructor_enforces_xyz_len3_invariants() -> N
     )
     out = Vector3(ao)
     assert isinstance(out, Vector3)
-    assert _core_dims(out.unsafe_data) == ("axis",)
-    assert tuple(out.unsafe_data.coords["axis"].to_index().tolist()) == ("x", "y", "z")
+    assert _core_dims(out.as_dataset(copy="none")) == ("axis",)
+    assert tuple(out.as_dataset(copy="none").coords["axis"].to_index().tolist()) == ("x", "y", "z")
 
 
 def test_linalg_core_023_vector3_from_xyz_assembly_truthful() -> None:
@@ -98,14 +98,14 @@ def test_linalg_core_023_vector3_from_xyz_assembly_truthful() -> None:
     z_ao = _scalar_ao(z_vals, var="z")
     out = Vector3.from_xyz(x_ao, 2.0, z_ao, axis="axis", output_var="vec", validate=True)
     assert isinstance(out, Vector3)
-    assert _core_dims(out.unsafe_data) == ("axis",)
-    assert tuple(out.unsafe_data.coords["axis"].to_index().tolist()) == ("x", "y", "z")
-    xr.testing.assert_allclose(out.unsafe_data["vec"].sel(axis="x", drop=True), x_ao.unsafe_data["x"])
+    assert _core_dims(out.as_dataset(copy="none")) == ("axis",)
+    assert tuple(out.as_dataset(copy="none").coords["axis"].to_index().tolist()) == ("x", "y", "z")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["vec"].sel(axis="x", drop=True), x_ao.as_dataset(copy="none")["x"])
     xr.testing.assert_allclose(
-        out.unsafe_data["vec"].sel(axis="y", drop=True),
-        xr.full_like(x_ao.unsafe_data["x"], 2.0),
+        out.as_dataset(copy="none")["vec"].sel(axis="y", drop=True),
+        xr.full_like(x_ao.as_dataset(copy="none")["x"], 2.0),
     )
-    xr.testing.assert_allclose(out.unsafe_data["vec"].sel(axis="z", drop=True), z_ao.unsafe_data["z"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["vec"].sel(axis="z", drop=True), z_ao.as_dataset(copy="none")["z"])
 
 
 def test_linalg_core_025_vector3_from_xyz_canonical_semantic_dim_order() -> None:
@@ -117,10 +117,10 @@ def test_linalg_core_025_vector3_from_xyz_canonical_semantic_dim_order() -> None
     y_ao = _scalar_ao(y_vals, var="y")
     z_ao = _scalar_ao(z_vals, var="z")
     out = Vector3.from_xyz(x_ao, y_ao, z_ao, axis="axis", output_var="vec", validate=True)
-    assert tuple(out.unsafe_data["vec"].dims) == ("sample", "trial", "axis")
-    xr.testing.assert_allclose(out.unsafe_data["vec"].sel(axis="x", drop=True), x_ao.unsafe_data["x"])
-    xr.testing.assert_allclose(out.unsafe_data["vec"].sel(axis="y", drop=True), y_ao.unsafe_data["y"])
-    xr.testing.assert_allclose(out.unsafe_data["vec"].sel(axis="z", drop=True), z_ao.unsafe_data["z"])
+    assert tuple(out.as_dataset(copy="none")["vec"].dims) == ("sample", "trial", "axis")
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["vec"].sel(axis="x", drop=True), x_ao.as_dataset(copy="none")["x"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["vec"].sel(axis="y", drop=True), y_ao.as_dataset(copy="none")["y"])
+    xr.testing.assert_allclose(out.as_dataset(copy="none")["vec"].sel(axis="z", drop=True), z_ao.as_dataset(copy="none")["z"])
 
 
 def test_linalg_core_024_vector3_component_accessors_scalar_core_truthful() -> None:
@@ -138,12 +138,12 @@ def test_linalg_core_024_vector3_component_accessors_scalar_core_truthful() -> N
     assert type(out_x) is Array
     assert type(out_y) is Array
     assert type(out_z) is Array
-    assert _core_dims(out_x.unsafe_data) == ()
-    assert _core_dims(out_y.unsafe_data) == ()
-    assert _core_dims(out_z.unsafe_data) == ()
-    xr.testing.assert_allclose(out_x.unsafe_data["x"], vector3.unsafe_data["x"].sel(axis="x", drop=True))
-    xr.testing.assert_allclose(out_y.unsafe_data["x"], vector3.unsafe_data["x"].sel(axis="y", drop=True))
-    xr.testing.assert_allclose(out_z.unsafe_data["x"], vector3.unsafe_data["x"].sel(axis="z", drop=True))
+    assert _core_dims(out_x.as_dataset(copy="none")) == ()
+    assert _core_dims(out_y.as_dataset(copy="none")) == ()
+    assert _core_dims(out_z.as_dataset(copy="none")) == ()
+    xr.testing.assert_allclose(out_x.as_dataset(copy="none")["x"], vector3.as_dataset(copy="none")["x"].sel(axis="x", drop=True))
+    xr.testing.assert_allclose(out_y.as_dataset(copy="none")["x"], vector3.as_dataset(copy="none")["x"].sel(axis="y", drop=True))
+    xr.testing.assert_allclose(out_z.as_dataset(copy="none")["x"], vector3.as_dataset(copy="none")["x"].sel(axis="z", drop=True))
 
 
 def test_linalg_hard_066_vector3_requires_single_core_dim() -> None:
@@ -201,7 +201,7 @@ def test_linalg_hard_099_vector3_typed_lifecycle_parity() -> None:
             )
         )
     with pytest.raises(ValueError, match="must have labels"):
-        _ = Vector3(base.unsafe_data.drop_vars("axis"))
+        _ = Vector3(base.as_dataset(copy="none").drop_vars("axis"))
     with pytest.raises(ValueError, match="labels must equal"):
         _ = Vector3(
             _vector_ao(
@@ -334,6 +334,6 @@ def test_linalg_hard_089_vector3_from_xyz_scalar_promotion_optional_metadata_pru
         validate=True,
     )
     out = Vector3.from_xyz(x_ao, 3.0, z_ao, axis="axis", output_var="vec", validate=True)
-    tal_core = out.unsafe_data.attrs["tal"]["core"]
+    tal_core = out.as_dataset(copy="none").attrs["tal"]["core"]
     assert "param_coord" not in tal_core
     assert tal_core["validity"]["sequence_size_coord"] == "sample_size"

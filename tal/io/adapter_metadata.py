@@ -4,13 +4,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 
 from .options import AdapterMetadataPromotionOptions
 
 
-def _python_scalar(value: Any) -> Any:
+def normalize_metadata_scalar(value: Any) -> Any:
     if hasattr(value, "item") and callable(value.item):
         try:
             return value.item()
@@ -40,25 +39,12 @@ def _is_scalar_metadata(value: object) -> bool:
     return True
 
 
-def collect_csv_scalar_metadata(
-    frame: pd.DataFrame,
-    *,
-    metadata_columns: tuple[str, ...],
-    owner: str,
-    source_path: str,
-) -> dict[str, object]:
-    out: dict[str, object] = {}
-    for name in metadata_columns:
-        if name not in frame.columns:
-            raise ValueError(f"{owner}: metadata column {name!r} was not found in {source_path!r}.")
-        values = frame[name].dropna().unique().tolist()
-        if len(values) > 1:
-            raise ValueError(
-                f"{owner}: metadata column {name!r} must be scalar per input file; "
-                f"found multiple values in {source_path!r}."
-            )
-        out[name] = _python_scalar(values[0]) if values else None
-    return out
+def _require_attr_metadata_name(name: str, *, owner: str) -> None:
+    if name == "tal":
+        raise ValueError(
+            f"{owner}: metadata promotion key {name!r} is reserved for schema namespace and "
+            "cannot be promoted to attrs."
+        )
 
 
 def aggregate_batch_metadata(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
@@ -67,13 +53,47 @@ def aggregate_batch_metadata(rows: Sequence[Mapping[str, object]]) -> dict[str, 
     keys: set[str] = set().union(*(row.keys() for row in rows))
     out: dict[str, object] = {}
     for key in sorted(keys):
-        values = [_python_scalar(row.get(key)) for row in rows]
+        values = [normalize_metadata_scalar(row.get(key)) for row in rows]
         first = values[0]
         if all(_equal_or_both_nan(first, value) for value in values[1:]):
             out[key] = first
         else:
             out[key] = list(values)
     return out
+
+
+def require_generated_metadata_preflight(
+    *,
+    options: AdapterMetadataPromotionOptions,
+    generated_names: Sequence[str],
+    scalar_generated_names: Sequence[str],
+    user_metadata_names: Sequence[str],
+    occupied_names: Sequence[str],
+    owner: str,
+) -> None:
+    attr_targets = {options.scalar_target, options.nonscalar_target}
+    if "attrs" in attr_targets:
+        for name in user_metadata_names:
+            _require_attr_metadata_name(name, owner=owner)
+    generated = set(generated_names)
+    reserved = tuple(sorted(generated.intersection(user_metadata_names)))
+    if reserved:
+        raise ValueError(
+            f"{owner}: metadata columns {reserved!r} are reserved for generated "
+            "adapter metadata."
+        )
+    if options.scalar_target != "batch_coord":
+        return
+    scalar_generated = set(scalar_generated_names)
+    potential_coords = scalar_generated.union(user_metadata_names)
+    collisions = tuple(sorted(potential_coords.intersection(occupied_names)))
+    if collisions:
+        generated_collision = bool(scalar_generated.intersection(collisions))
+        source = "generated adapter metadata" if generated_collision else "adapter metadata"
+        raise ValueError(
+            f"{owner}: {source} batch-coordinate names "
+            f"collide with configured output names: {collisions!r}."
+        )
 
 
 def _require_metadata_name_available(
@@ -83,11 +103,15 @@ def _require_metadata_name_available(
     target: str,
     owner: str,
 ) -> None:
-    if target == "attrs" and name == "tal":
-        raise ValueError(
-            f"{owner}: metadata promotion key {name!r} is reserved for schema namespace and cannot "
-            "be promoted to attrs."
-        )
+    if target not in {"attrs", "batch_coord"}:
+        raise ValueError(f"{owner}: unsupported metadata promotion target {target!r}.")
+    if target == "attrs":
+        _require_attr_metadata_name(name, owner=owner)
+        if name in ds.attrs:
+            raise ValueError(
+                f"{owner}: metadata promotion target name {name!r} collides with existing attrs."
+            )
+        return
     if name in ds.data_vars or name in ds.coords or name in ds.dims:
         raise ValueError(
             f"{owner}: metadata promotion target name {name!r} collides with existing "
@@ -97,8 +121,6 @@ def _require_metadata_name_available(
         raise ValueError(
             f"{owner}: metadata promotion target name {name!r} collides with existing attrs."
         )
-    if target not in {"attrs", "batch_coord"}:
-        raise ValueError(f"{owner}: unsupported metadata promotion target {target!r}.")
 
 
 def promote_adapter_metadata(
@@ -109,34 +131,33 @@ def promote_adapter_metadata(
     options: AdapterMetadataPromotionOptions,
     owner: str,
 ) -> xr.Dataset:
-    out = ds
+    attr_updates: dict[str, object] = {}
+    coord_updates: dict[str, xr.DataArray] = {}
     for name, value in metadata.items():
         if not isinstance(name, str) or not name:
             raise ValueError(f"{owner}: metadata keys must be non-empty strings; got {name!r}.")
         scalar = _is_scalar_metadata(value)
-        if scalar:
-            target = options.scalar_target
-            if target == "none":
-                continue
-            _require_metadata_name_available(out, name=name, target=target, owner=owner)
-            if target == "attrs":
-                attrs = dict(out.attrs)
-                attrs[name] = _python_scalar(value)
-                out = out.copy(deep=False)
-                out.attrs = attrs
-                continue
-            out = out.assign_coords(
-                {name: xr.DataArray(np.full((out.sizes[batch_dim],), _python_scalar(value), dtype=object), dims=(batch_dim,))}
-            )
+        target = options.scalar_target if scalar else options.nonscalar_target
+        if target == "none":
             continue
-        if options.nonscalar_target == "none":
+        _require_metadata_name_available(ds, name=name, target=target, owner=owner)
+        if target == "attrs":
+            attr_updates[name] = normalize_metadata_scalar(value) if scalar else value
             continue
-        _require_metadata_name_available(out, name=name, target="attrs", owner=owner)
-        attrs = dict(out.attrs)
-        attrs[name] = value
-        out = out.copy(deep=False)
-        out.attrs = attrs
+        scalar_value = normalize_metadata_scalar(value)
+        coord_updates[name] = xr.DataArray(
+            np.full((ds.sizes[batch_dim],), scalar_value, dtype=object),
+            dims=(batch_dim,),
+        )
+    out = ds.assign_coords(coord_updates) if coord_updates else ds
+    if attr_updates:
+        out = out.assign_attrs(attr_updates)
     return out
 
 
-__all__ = ["aggregate_batch_metadata", "collect_csv_scalar_metadata", "promote_adapter_metadata"]
+__all__ = [
+    "aggregate_batch_metadata",
+    "normalize_metadata_scalar",
+    "promote_adapter_metadata",
+    "require_generated_metadata_preflight",
+]

@@ -1,209 +1,74 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
+import pandas as pd
 import xarray as xr
 
-from .backends import (
-    PARAM_BOUNDS_BACKEND_NUMPY_ROW,
-    PARAM_MAP_BACKEND_NUMPY_ROW,
-    bounds_row_backend,
-    map_row_backend,
+from ..orchestration.indexing import (
+    capture_result_coordinates,
+    restore_result_coordinates,
 )
+from ..ordered_dtypes import is_ordered_real_numeric_dtype
+from .backend_selection import (
+    _param_map_backend,
+    select_bounds_backend,
+    select_map_backend,
+)
+from .backends import bounds_block_backend
+from .backends import map_block_status_backend as map_block_backend
+from .blocking import (
+    LogicalRowBlockPlan,
+    logical_output_chunks,
+    prepare_logical_row_blocks,
+    select_logical_block,
+)
+from .datetime_rows import DATETIME_OPEN_START, DATETIME_OPEN_STOP
+from .map_assembly import assemble_empty_param_map, assemble_param_map_blocks
 from .types import ParamBoundsMap, ParamMap, ParamMapOptions
 
 _DUPLICATE_CODES = {"invalid": 0, "left": 1, "right": 2, "raise": 3}
-_DUPLICATE_BRACKET_ERROR = (
-    "build_param_map: duplicate parameter bracket encountered for linear interpolation."
-)
 
 
-@dataclass
-class _LinearOutputBuffers:
-    i0: np.ndarray
-    i1: np.ndarray
-    alpha: np.ndarray
-    valid: np.ndarray
+def _align_map_inputs(
+    *values: xr.DataArray,
+    owner: str,
+    what: str,
+) -> tuple[xr.DataArray, ...]:
+    from ..orchestration.alignment import align_exact
 
-
-def _empty_map_result(k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    i0 = np.zeros(k, dtype="int64")
-    i1 = np.zeros(k, dtype="int64")
-    alpha = np.zeros(k, dtype="float64")
-    valid = np.zeros(k, dtype=bool)
-    return i0, i1, alpha, valid
-
-
-def _nearest_row(
-    src_idx: np.ndarray,
-    src: np.ndarray,
-    query: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Map query values to nearest valid sample indices for one row."""
-    i0, i1, alpha, valid = _empty_map_result(int(query.size))
-    if src.size == 0:
-        return i0, i1, alpha, valid
-    q = np.asarray(query, dtype="float64")
-    finite = np.isfinite(q)
-    if not np.any(finite):
-        return i0, i1, alpha, valid
-
-    qf = q[finite]
-    right = np.searchsorted(src, qf, side="left")
-    right_pick = np.clip(right, 0, src.size - 1)
-    left_pick = np.clip(right - 1, 0, src.size - 1)
-    interior = (right > 0) & (right < src.size)
-    if np.any(interior):
-        left_dist = np.abs(qf[interior] - src[left_pick[interior]])
-        right_dist = np.abs(src[right_pick[interior]] - qf[interior])
-        choose_left = left_dist <= right_dist
-        right_pick[interior] = np.where(choose_left, left_pick[interior], right_pick[interior])
-    picks = src_idx[right_pick].astype("int64", copy=False)
-    finite_idx = np.flatnonzero(finite)
-    i0[finite_idx] = picks
-    i1[finite_idx] = picks
-    valid[finite_idx] = True
-    return i0, i1, alpha, valid
-
-
-def _assign_constant_picks(
-    row_idx: np.ndarray,
-    mask: np.ndarray,
-    src_pick: np.ndarray,
-    src_idx: np.ndarray,
-    i0: np.ndarray,
-    i1: np.ndarray,
-    valid: np.ndarray,
-) -> None:
-    if not np.any(mask):
-        return
-    out_idx = row_idx[mask]
-    picked = src_idx[src_pick[mask]].astype("int64", copy=False)
-    i0[out_idx] = picked
-    i1[out_idx] = picked
-    valid[out_idx] = True
-
-
-def _apply_duplicate_policy(
-    dup_code: int,
-    row_idx: np.ndarray,
-    mask: np.ndarray,
-    left_pick: np.ndarray,
-    right_pick: np.ndarray,
-    src_idx: np.ndarray,
-    i0: np.ndarray,
-    i1: np.ndarray,
-    valid: np.ndarray,
-) -> None:
-    if not np.any(mask):
-        return
-    if dup_code == 3:
-        raise ValueError(_DUPLICATE_BRACKET_ERROR)
-    if dup_code == 0:
-        return
-    src_pick = left_pick if dup_code == 1 else right_pick
-    _assign_constant_picks(row_idx, mask, src_pick, src_idx, i0, i1, valid)
-
-
-def _apply_linear_interior(
-    dup_code: int,
-    qf: np.ndarray,
-    lo: np.ndarray,
-    dup: np.ndarray,
-    finite_idx: np.ndarray,
-    src: np.ndarray,
-    src_idx: np.ndarray,
-    out: _LinearOutputBuffers,
-) -> None:
-    interior = (~dup) & (lo > 0) & (lo < src.size)
-    if not np.any(interior):
-        return
-    left = lo[interior] - 1
-    right = lo[interior]
-    t0 = src[left]
-    t1 = src[right]
-    inner_idx = finite_idx[interior]
-    degenerate = t1 == t0
-    _apply_duplicate_policy(dup_code, inner_idx, degenerate, left, right, src_idx, out.i0, out.i1, out.valid)
-    interp = ~degenerate
-    if not np.any(interp):
-        return
-    interp_idx = inner_idx[interp]
-    left_idx = left[interp]
-    right_idx = right[interp]
-    out.i0[interp_idx] = src_idx[left_idx].astype("int64", copy=False)
-    out.i1[interp_idx] = src_idx[right_idx].astype("int64", copy=False)
-    out.alpha[interp_idx] = (qf[interior][interp] - t0[interp]) / (t1[interp] - t0[interp])
-    out.valid[interp_idx] = True
-
-
-def _linear_row(
-    src_idx: np.ndarray,
-    src: np.ndarray,
-    query: np.ndarray,
-    *,
-    dup_code: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Map query values to interpolation brackets for one row."""
-    i0, i1, alpha, valid = _empty_map_result(int(query.size))
-    if src.size == 0:
-        return i0, i1, alpha, valid
-    q = np.asarray(query, dtype="float64")
-    finite = np.isfinite(q)
-    if not np.any(finite):
-        return i0, i1, alpha, valid
-
-    qf = q[finite]
-    lo = np.searchsorted(src, qf, side="left")
-    hi = np.searchsorted(src, qf, side="right")
-    finite_idx = np.flatnonzero(finite)
-
-    dup = (hi - lo) > 1
-    _apply_duplicate_policy(dup_code, finite_idx, dup, lo, hi - 1, src_idx, i0, i1, valid)
-
-    endpoint = (~dup) & (((lo == 0) & (qf == src[0])) | ((lo >= src.size) & (qf == src[-1])))
-    _assign_constant_picks(finite_idx, endpoint, np.where(lo == 0, 0, src.size - 1), src_idx, i0, i1, valid)
-    _apply_linear_interior(
-        dup_code,
-        qf,
-        lo,
-        dup,
-        finite_idx,
-        src,
-        src_idx,
-        _LinearOutputBuffers(i0=i0, i1=i1, alpha=alpha, valid=valid),
-    )
-    return i0, i1, alpha, valid
-
-
-def _map_row(
-    param_row: np.ndarray,
-    valid_row: np.ndarray,
-    query_row: np.ndarray,
-    *,
-    method: str,
-    dup_code: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    src = np.asarray(param_row, dtype="float64")
-    valid = np.asarray(valid_row, dtype=bool) & np.isfinite(src)
-    src_idx = np.flatnonzero(valid).astype("int64", copy=False)
-    src_vals = src[src_idx]
-    if src_vals.size >= 2 and np.any(np.diff(src_vals) < 0):
-        raise ValueError("build_param_map: parameter coordinate must be monotonic non-decreasing on valid domain.")
-    query = np.asarray(query_row, dtype="float64")
-    if method == "nearest":
-        return _nearest_row(src_idx, src_vals, query)
-    return _linear_row(src_idx, src_vals, query, dup_code=dup_code)
+    return align_exact(*values, exclude=set(), owner=owner, what=what)
 
 
 def _validate_numeric_param_dtype(*, param: xr.DataArray, owner: str) -> None:
-    if np.issubdtype(np.dtype(param.dtype), np.number):
+    if is_ordered_real_numeric_dtype(param.dtype):
         return
     raise ValueError(
-        f"{owner}: param coordinate must have numeric dtype, got {param.dtype!r}. "
-        "Use a numeric param_coord before interpolation."
+        f"{owner}: param coordinate must have an ordered real numeric dtype, got {param.dtype!r}. "
+        "Use an integer or floating-point param_coord before interpolation."
     )
+
+
+def _validate_numeric_operand_dtype(*, value: xr.DataArray, field: str, owner: str) -> None:
+    if is_ordered_real_numeric_dtype(value.dtype):
+        return
+    raise ValueError(
+        f"{owner}: {field} must have an ordered real numeric dtype, got {value.dtype!r}."
+    )
+
+
+def _validate_datetime_param_dtype(*, param: xr.DataArray, owner: str) -> None:
+    if np.issubdtype(np.dtype(param.dtype), np.datetime64):
+        return
+    raise ValueError(
+        f"{owner}: param coordinate must have datetime64 dtype, got {param.dtype!r}. "
+        "Use a datetime64 param_coord before datetime64 interpolation."
+    )
+
+
+def _validate_param_kind(param_kind: str, *, owner: str) -> None:
+    if param_kind in {"numeric", "datetime64"}:
+        return
+    raise ValueError(f"{owner}: param_kind must be 'numeric' or 'datetime64', got {param_kind!r}.")
 
 
 def _validate_map_dims(
@@ -267,36 +132,218 @@ def _validate_bounds_dims(
     )
 
 
-def _bounds_row(
-    param_row: np.ndarray,
-    valid_row: np.ndarray,
-    start: np.ndarray,
-    stop: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    src = np.asarray(param_row, dtype="float64")
-    valid = np.asarray(valid_row, dtype=bool) & np.isfinite(src)
-    src_idx = np.flatnonzero(valid).astype("int64", copy=False)
-    src_vals = src[src_idx]
-    if src_vals.size >= 2 and np.any(np.diff(src_vals) < 0):
-        raise ValueError(
-            "build_param_bounds_map: parameter coordinate must be monotonic non-decreasing on valid domain."
+def _prepare_map_inputs(
+    *,
+    param: xr.DataArray,
+    query: xr.DataArray,
+    sequence_dim: str,
+    query_dim: str,
+    valid_mask: xr.DataArray | None,
+    options: ParamMapOptions | None,
+    param_kind: str,
+) -> tuple[ParamMapOptions, xr.DataArray, xr.DataArray, xr.DataArray]:
+    _validate_param_kind(param_kind, owner="build_param_map")
+    _validate_map_dims(param=param, query=query, sequence_dim=sequence_dim, query_dim=query_dim)
+    opts = options or ParamMapOptions()
+    if opts.method not in ("nearest", "linear"):
+        raise ValueError(f"build_param_map: method must be 'nearest' or 'linear', got {opts.method!r}.")
+    if opts.duplicate_policy not in _DUPLICATE_CODES:
+        raise ValueError(f"build_param_map: invalid duplicate policy {opts.duplicate_policy!r}.")
+    if param_kind == "numeric":
+        _validate_numeric_param_dtype(param=param, owner="build_param_map")
+        _validate_numeric_operand_dtype(value=query, field="query", owner="build_param_map")
+        mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
+        aligned = _align_map_inputs(
+            param, mask.astype(bool), query,
+            owner="build_param_map", what="parameter-map",
         )
-    row_len = int(src.shape[0])
-    if src_vals.size == 0:
-        return np.asarray(0, dtype="int64"), np.asarray(0, dtype="int64")
-    s0 = float(np.asarray(start, dtype="float64"))
-    s1 = float(np.asarray(stop, dtype="float64"))
-    if np.isnan(s0) or np.isnan(s1):
-        return np.asarray(0, dtype="int64"), np.asarray(0, dtype="int64")
-    lo = int(np.searchsorted(src_vals, s0, side="left"))
-    hi = int(np.searchsorted(src_vals, s1, side="right"))
-    if hi <= lo:
-        edge = row_len if lo >= src_idx.size else int(src_idx[lo])
-        edge = max(0, min(edge, row_len))
-        return np.asarray(edge, dtype="int64"), np.asarray(edge, dtype="int64")
-    i0 = int(src_idx[min(lo, src_idx.size - 1)])
-    i1 = int(src_idx[min(hi - 1, src_idx.size - 1)] + 1)
-    return np.asarray(min(i0, row_len), dtype="int64"), np.asarray(min(i1, row_len), dtype="int64")
+        return opts, aligned[0], aligned[1], aligned[2]
+    _validate_datetime_param_dtype(param=param, owner="build_param_map")
+    mask = valid_mask if valid_mask is not None else param.notnull()
+    aligned = _align_map_inputs(
+        param.astype("datetime64[ns]"),
+        mask.astype(bool),
+        query.astype("datetime64[ns]"),
+        owner="build_param_map", what="parameter-map",
+    )
+    return opts, aligned[0], aligned[1], aligned[2]
+
+
+def _without_kernel_coordinates(value: xr.DataArray) -> xr.DataArray:
+    """Project one mapped block to its schema-free numerical payload."""
+    return value.drop_vars(tuple(value.coords))
+
+
+def _apply_status_ufunc(
+    function,
+    arrays: tuple[xr.DataArray, xr.DataArray, xr.DataArray],
+    *,
+    sequence_dim: str,
+    query_dim: str,
+    kwargs: dict[str, object],
+) -> tuple[xr.DataArray, ...]:
+    return xr.apply_ufunc(
+        function,
+        *arrays,
+        kwargs=kwargs,
+        input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
+        output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim], [], [], []],
+        vectorize=False,
+        dask="parallelized",
+        dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[np.int64, np.int64, np.float64, bool, np.int8, np.int64, object],
+    )
+
+
+def _apply_param_map_block(
+    *,
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    query_da: xr.DataArray,
+    sequence_dim: str,
+    query_dim: str,
+    opts: ParamMapOptions,
+    param_kind: str,
+    backend: str | None,
+) -> tuple[xr.DataArray, ...]:
+    backend = select_map_backend(param_da, mask_da, query_da, backend)
+    arrays = tuple(
+        _without_kernel_coordinates(value)
+        for value in (param_da, mask_da, query_da)
+    )
+    if param_kind == "datetime64":
+        from .numpy_backends import datetime_map_block_numpy_status
+
+        return _apply_status_ufunc(
+            datetime_map_block_numpy_status,
+            arrays,
+            sequence_dim=sequence_dim,
+            query_dim=query_dim,
+            kwargs={"method": opts.method, "dup_code": _DUPLICATE_CODES[opts.duplicate_policy]},
+        )
+    return _apply_status_ufunc(
+        map_block_backend,
+        arrays,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
+        kwargs={
+            "method": opts.method,
+            "dup_code": _DUPLICATE_CODES[opts.duplicate_policy],
+            "backend": backend,
+        },
+    )
+
+
+def _empty_domain_validation(
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    *,
+    sequence_dim: str,
+    param_kind: str,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray]:
+    from .numpy_backends import validate_map_domain_block_numpy_status
+
+    return xr.apply_ufunc(
+        validate_map_domain_block_numpy_status,
+        param_da,
+        mask_da,
+        kwargs={"param_kind": param_kind},
+        input_core_dims=[[sequence_dim], [sequence_dim]],
+        output_core_dims=[[], [], []],
+        vectorize=False,
+        dask="parallelized",
+        dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[np.int8, np.int64, object],
+    )
+
+
+def _empty_param_map(
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    query_da: xr.DataArray,
+    *,
+    sequence_dim: str,
+    query_dim: str,
+    param_kind: str,
+    output_plan: LogicalRowBlockPlan,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    validation_plan = prepare_logical_row_blocks(
+        param_da,
+        mask_da,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=query_dim,
+    )
+    blocks = (
+        _empty_domain_validation(
+            select_logical_block(param_da, block),
+            select_logical_block(mask_da, block),
+            sequence_dim=sequence_dim,
+            param_kind=param_kind,
+        )
+        for block in validation_plan.blocks
+        if int(param_da.sizes[sequence_dim]) and not validation_plan.has_no_rows
+    )
+    return assemble_empty_param_map(
+        blocks,
+        output_plan=output_plan,
+        param=param_da,
+        mask=mask_da,
+        query=query_da,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
+    )
+
+
+def _apply_param_map_blocks(
+    *,
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    query_da: xr.DataArray,
+    sequence_dim: str,
+    query_dim: str,
+    opts: ParamMapOptions,
+    param_kind: str,
+    backend: str | None,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    plan = prepare_logical_row_blocks(
+        param_da,
+        mask_da,
+        query_da,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=query_dim,
+    )
+    if plan.has_no_rows or int(param_da.sizes[sequence_dim]) == 0:
+        return _empty_param_map(
+            param_da,
+            mask_da,
+            query_da,
+            sequence_dim=sequence_dim,
+            query_dim=query_dim,
+            param_kind=param_kind,
+            output_plan=plan,
+        )
+    blocks = (
+        _apply_param_map_block(
+            param_da=select_logical_block(param_da, block),
+            mask_da=select_logical_block(mask_da, block),
+            query_da=select_logical_block(query_da, block),
+            sequence_dim=sequence_dim,
+            query_dim=query_dim,
+            opts=opts,
+            param_kind=param_kind,
+            backend=backend,
+        )
+        for block in plan.blocks
+    )
+    return assemble_param_map_blocks(
+        blocks,
+        plan=plan,
+        param=param_da,
+        mask=mask_da,
+        query=query_da,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
+    )
 
 
 def build_param_map(
@@ -307,6 +354,7 @@ def build_param_map(
     query_dim: str,
     valid_mask: xr.DataArray | None = None,
     options: ParamMapOptions | None = None,
+    param_kind: str = "numeric",
 ) -> ParamMap:
     """Build mapping from parameter values to sample indices.
 
@@ -324,6 +372,8 @@ def build_param_map(
         Validity/mask payload used by this operation.
     options : ParamMapOptions | None, optional
         Options controlling policy and execution behavior.
+    param_kind : {'numeric', 'datetime64'}, optional
+        Parameter coordinate kind used for query and map coercion.
 
     Returns
     -------
@@ -334,47 +384,174 @@ def build_param_map(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    _validate_map_dims(
+    opts, param_da, mask_da, query_da = _prepare_map_inputs(
         param=param,
         query=query,
         sequence_dim=sequence_dim,
         query_dim=query_dim,
+        valid_mask=valid_mask,
+        options=options,
+        param_kind=param_kind,
     )
-    _validate_numeric_param_dtype(param=param, owner="build_param_map")
-    opts = options or ParamMapOptions()
-    if opts.method not in ("nearest", "linear"):
-        raise ValueError(f"build_param_map: method must be 'nearest' or 'linear', got {opts.method!r}.")
-    if opts.duplicate_policy not in _DUPLICATE_CODES:
-        raise ValueError(f"build_param_map: invalid duplicate policy {opts.duplicate_policy!r}.")
-    mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
-    param_da, mask_da, query_da = xr.align(param.astype("float64"), mask.astype(bool), query.astype("float64"), join="exact")
-    i0, i1, alpha, valid = xr.apply_ufunc(
-        map_row_backend,
-        param_da,
-        mask_da,
-        query_da,
-        kwargs={
-            "method": opts.method,
-            "dup_code": _DUPLICATE_CODES[opts.duplicate_policy],
-            "backend": PARAM_MAP_BACKEND_NUMPY_ROW,
-        },
-        input_core_dims=[[sequence_dim], [sequence_dim], [query_dim]],
-        output_core_dims=[[query_dim], [query_dim], [query_dim], [query_dim]],
-        vectorize=True,
-        dask="parallelized",
-        dask_gufunc_kwargs={"allow_rechunk": True},
-        output_dtypes=[np.int64, np.int64, np.float64, bool],
+    backend = _param_map_backend(opts)
+    i0, i1, alpha, valid = _apply_param_map_blocks(
+        param_da=param_da,
+        mask_da=mask_da,
+        query_da=query_da,
+        sequence_dim=sequence_dim,
+        query_dim=query_dim,
+        opts=opts,
+        param_kind=param_kind,
+        backend=backend,
     )
     return ParamMap(i0=i0, i1=i1, alpha=alpha, valid=valid, query_dim=query_dim)
+
+
+def _prepare_bounds_inputs(
+    *,
+    param: xr.DataArray,
+    start: xr.DataArray | float | object,
+    stop: xr.DataArray | float | object,
+    sequence_dim: str,
+    valid_mask: xr.DataArray | None,
+    param_kind: str,
+) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
+    _validate_param_kind(param_kind, owner="build_param_bounds_map")
+    start_da = _coerce_bound_value(start, bound="start", param_kind=param_kind)
+    stop_da = _coerce_bound_value(stop, bound="stop", param_kind=param_kind)
+    _validate_bounds_dims(param=param, start=start_da, stop=stop_da, sequence_dim=sequence_dim)
+    if param_kind == "numeric":
+        _validate_numeric_param_dtype(param=param, owner="build_param_bounds_map")
+        _validate_numeric_operand_dtype(value=start_da, field="slice.start", owner="build_param_bounds_map")
+        _validate_numeric_operand_dtype(value=stop_da, field="slice.stop", owner="build_param_bounds_map")
+        mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
+        aligned = _align_map_inputs(
+            param,
+            mask.astype(bool),
+            start_da,
+            stop_da,
+            owner="build_param_bounds_map", what="slice-bound",
+        )
+        return aligned[0], aligned[1], aligned[2], aligned[3]
+    _validate_datetime_param_dtype(param=param, owner="build_param_bounds_map")
+    mask = valid_mask if valid_mask is not None else param.notnull()
+    aligned = _align_map_inputs(
+        param.astype("datetime64[ns]"),
+        mask.astype(bool),
+        start_da.astype("datetime64[ns]"),
+        stop_da.astype("datetime64[ns]"),
+        owner="build_param_bounds_map", what="slice-bound",
+    )
+    return aligned[0], aligned[1], aligned[2], aligned[3]
+
+
+def _coerce_bound_value(value: object, *, bound: str, param_kind: str) -> xr.DataArray:
+    if isinstance(value, xr.DataArray):
+        return _coerce_bound_dataarray(value, bound=bound, param_kind=param_kind)
+    if param_kind == "numeric":
+        fill = -np.inf if bound == "start" and value is None else np.inf if value is None else value
+        try:
+            out = xr.DataArray(np.asarray(fill))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"build_param_bounds_map: slice.{bound} must be numeric.") from exc
+        _validate_numeric_operand_dtype(value=out, field=f"slice.{bound}", owner="build_param_bounds_map")
+        return out
+    fill = DATETIME_OPEN_START if bound == "start" and value is None else DATETIME_OPEN_STOP if value is None else value
+    if np.issubdtype(np.asarray(fill).dtype, np.number):
+        raise ValueError(f"build_param_bounds_map: {bound} must be datetime-like, got numeric dtype.")
+    try:
+        if isinstance(fill, np.datetime64):
+            arr = np.asarray(fill, dtype="datetime64[ns]")
+        else:
+            arr = np.asarray(pd.to_datetime(fill), dtype="datetime64[ns]")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"build_param_bounds_map: {bound} must be datetime-like for datetime64 param coordinates."
+        ) from exc
+    return xr.DataArray(arr)
+
+
+def _coerce_bound_dataarray(value: xr.DataArray, *, bound: str, param_kind: str) -> xr.DataArray:
+    if param_kind == "numeric":
+        _validate_numeric_operand_dtype(value=value, field=f"slice.{bound}", owner="build_param_bounds_map")
+        return value
+    if np.issubdtype(np.dtype(value.dtype), np.number):
+        raise ValueError(f"build_param_bounds_map: {bound} must be datetime-like, got numeric dtype.")
+    return value.astype("datetime64[ns]")
+
+
+def _apply_param_bounds_block(
+    *,
+    param_da: xr.DataArray,
+    mask_da: xr.DataArray,
+    start_da: xr.DataArray,
+    stop_da: xr.DataArray,
+    sequence_dim: str,
+    param_kind: str,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    if param_kind == "datetime64":
+        from .numpy_backends import datetime_bounds_block_numpy
+
+        return xr.apply_ufunc(
+            datetime_bounds_block_numpy,
+            param_da,
+            mask_da,
+            start_da,
+            stop_da,
+            input_core_dims=[[sequence_dim], [sequence_dim], [], []],
+            output_core_dims=[[], []],
+            vectorize=False,
+            dask="parallelized",
+            dask_gufunc_kwargs={"allow_rechunk": True},
+            output_dtypes=[np.int64, np.int64],
+        )
+    backend = select_bounds_backend(param_da, mask_da, start_da, stop_da)
+    return xr.apply_ufunc(
+        bounds_block_backend,
+        param_da,
+        mask_da,
+        start_da,
+        stop_da,
+        kwargs={"backend": backend},
+        input_core_dims=[[sequence_dim], [sequence_dim], [], []],
+        output_core_dims=[[], []],
+        vectorize=False,
+        dask="parallelized",
+        dask_gufunc_kwargs={"allow_rechunk": True},
+        output_dtypes=[np.int64, np.int64],
+    )
+
+
+def _empty_param_bounds(
+    values: tuple[xr.DataArray, ...],
+    *,
+    plan: LogicalRowBlockPlan,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    snapshot = capture_result_coordinates(
+        *values,
+        output_dims=plan.dims,
+        owner="build_param_bounds_map",
+    )
+    shape = plan.sizes
+    data: object = np.zeros(shape, dtype=np.int64)
+    if any(value.chunks is not None for value in values):
+        from dask.array import zeros
+
+        chunks = logical_output_chunks(values, dims=plan.dims, sizes=plan.sizes)
+        data = zeros(shape, chunks=chunks, dtype=np.int64)
+    out = xr.DataArray(data, dims=plan.dims)
+    restored = restore_result_coordinates(out, snapshot)
+    return restored, restored.copy(deep=False)  # type: ignore[return-value]
 
 
 def build_param_bounds_map(
     *,
     param: xr.DataArray,
-    start: xr.DataArray | float,
-    stop: xr.DataArray | float,
+    start: xr.DataArray | float | object,
+    stop: xr.DataArray | float | object,
     sequence_dim: str,
     valid_mask: xr.DataArray | None = None,
+    param_kind: str = "numeric",
 ) -> ParamBoundsMap:
     """Build searchsorted bounds for per-row param slice selection.
 
@@ -390,6 +567,8 @@ def build_param_bounds_map(
         Optional override for the sequence dimension used by temporal semantics.
     valid_mask : xr.DataArray | None, optional
         Validity/mask payload used by this operation.
+    param_kind : {'numeric', 'datetime64'}, optional
+        Parameter coordinate kind used for bound coercion.
 
     Returns
     -------
@@ -400,38 +579,32 @@ def build_param_bounds_map(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    start_da = start if isinstance(start, xr.DataArray) else xr.DataArray(np.asarray(start, dtype="float64"))
-    stop_da = stop if isinstance(stop, xr.DataArray) else xr.DataArray(np.asarray(stop, dtype="float64"))
-    _validate_bounds_dims(
+    param_da, mask_da, start_da, stop_da = _prepare_bounds_inputs(
         param=param,
-        start=start_da,
-        stop=stop_da,
+        start=start,
+        stop=stop,
         sequence_dim=sequence_dim,
+        valid_mask=valid_mask,
+        param_kind=param_kind,
     )
-    _validate_numeric_param_dtype(param=param, owner="build_param_bounds_map")
-    mask = valid_mask if valid_mask is not None else xr.apply_ufunc(np.isfinite, param, dask="allowed")
-    param_da, mask_da, start_da, stop_da = xr.align(
-        param.astype("float64"),
-        mask.astype(bool),
-        start_da.astype("float64"),
-        stop_da.astype("float64"),
-        join="exact",
+    values = (param_da, mask_da, start_da, stop_da)
+    plan = prepare_logical_row_blocks(
+        *values,
+        excluded_dims=frozenset({sequence_dim}),
+        fastest_dim=sequence_dim,
     )
-    i0, i1 = xr.apply_ufunc(
-        bounds_row_backend,
-        param_da,
-        mask_da,
-        start_da,
-        stop_da,
-        kwargs={"backend": PARAM_BOUNDS_BACKEND_NUMPY_ROW},
-        input_core_dims=[[sequence_dim], [sequence_dim], [], []],
-        output_core_dims=[[], []],
-        vectorize=True,
-        dask="parallelized",
-        dask_gufunc_kwargs={"allow_rechunk": True},
-        output_dtypes=[np.int64, np.int64],
-    )
+    if plan.has_no_rows:
+        i0, i1 = _empty_param_bounds(values, plan=plan)
+    else:
+        i0, i1 = _apply_param_bounds_block(
+            param_da=param_da,
+            mask_da=mask_da,
+            start_da=start_da,
+            stop_da=stop_da,
+            sequence_dim=sequence_dim,
+            param_kind=param_kind,
+        )
     return ParamBoundsMap(i0=i0, i1=i1)
 
 
-__all__ = ["build_param_map", "build_param_bounds_map"]
+__all__ = ["build_param_bounds_map", "build_param_map"]

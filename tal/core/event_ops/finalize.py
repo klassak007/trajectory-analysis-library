@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like
 from ..validity_finalize import set_left_packed_validity_or_prune_from_size_coord
 
@@ -30,7 +31,7 @@ def finalize_event_output(
         core_dims=core_dims,
         validate=validate,
     )
-    if param_name not in out.unsafe_data.coords:
+    if param_name not in analysis_object_dataset(out).coords:
         raise ValueError(f"{owner}: gathered output is missing param coord {param_name!r}.")
     out = out.set_param_coord(name=param_name, validate=validate)
     return set_left_packed_validity_or_prune_from_size_coord(

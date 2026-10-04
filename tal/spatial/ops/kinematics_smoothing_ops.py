@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
+
 from ..kernels.kinematics_temporal_kernels import (
     gaussian_partial_renorm_kernel,
     local_poly_smooth_kernel,
@@ -97,7 +99,7 @@ def _smoothing_spec_for_source(source: object, *, owner: str) -> TemporalOutputS
     from ..velocity import AngularVelocity, LinearVelocity
 
     if isinstance(source, Position):
-        intent = get_position_intent(source.unsafe_data, owner=owner)
+        intent = get_position_intent(analysis_object_dataset(source), owner=owner)
         return TemporalOutputSpec(Position, get_position_rep, set_position_rep, None, intent)
     if isinstance(source, LinearVelocity):
         return TemporalOutputSpec(LinearVelocity, get_linear_velocity_rep, set_linear_velocity_rep, "linear_velocity", None)
@@ -147,12 +149,17 @@ def smooth_kinematics_like(
     sequence_size_coord: str | None,
     owner: str,
 ):
-    from ..policies.wrap import wrap_as
+    from ..association import finalize_spatial_from_source
 
     request = SmoothingRequest(source, on, opts, validate, sequence_dim, batch_dims, sequence_size_coord, owner)
     try:
         finalized, spec = _run_smoothing_request(request)
-        return wrap_as(spec.target_cls, finalized, validate=validate)
+        return finalize_spatial_from_source(
+            source,
+            spec.target_cls,
+            finalized,
+            validate=validate,
+        )
     except (TypeError, ValueError) as exc:
         raise _wrap_owner_error(exc, owner=owner) from exc
 

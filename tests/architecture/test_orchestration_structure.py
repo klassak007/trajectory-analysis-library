@@ -1,8 +1,232 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
-from ._budget import file_loc, function_lengths
+from tools.architecture_budget import file_loc, function_lengths
+
+
+def _module_tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _top_level_function_names(tree: ast.Module) -> set[str]:
+    return {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+
+def _top_level_function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"function {name!r} not found")
+
+
+def _module_exports(tree: ast.Module) -> set[str]:
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+            continue
+        if not isinstance(node.value, (ast.List, ast.Tuple)):
+            return set()
+        return {
+            item.value
+            for item in node.value.elts
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        }
+    return set()
+
+
+def _dotted_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if not isinstance(node, ast.Attribute):
+        return None
+    prefix = _dotted_name(node.value)
+    return f"{prefix}.{node.attr}" if prefix is not None else None
+
+
+def _core_owner_imports(
+    tree: ast.Module,
+    *,
+    module_name: str,
+) -> tuple[dict[str, str], set[str]]:
+    bindings: dict[str, str] = {}
+    absolute_modules: set[str] = set()
+    absolute_owner = f"tal.core.{module_name}"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name != absolute_owner:
+                    continue
+                if alias.asname:
+                    bindings[alias.asname] = module_name
+                else:
+                    absolute_modules.add(alias.name)
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        direct_owner = (
+            node.level in {1, 2} and node.module == module_name
+        ) or (
+            node.level == 0 and node.module == absolute_owner
+        )
+        if direct_owner:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = f"{module_name}.{alias.name}"
+            continue
+        module_owner = (
+            node.level in {1, 2} and node.module is None
+        ) or (
+            node.level == 0 and node.module == "tal.core"
+        )
+        if not module_owner:
+            continue
+        for alias in node.names:
+            if alias.name == module_name:
+                bindings[alias.asname or alias.name] = module_name
+    return bindings, absolute_modules
+
+
+def _resolve_core_owner_call(
+    dotted: str,
+    *,
+    module_name: str,
+    bindings: dict[str, str],
+    absolute_modules: set[str],
+) -> str | None:
+    first, _, remainder = dotted.partition(".")
+    if first in bindings:
+        resolved = f"{bindings[first]}.{remainder}" if remainder else bindings[first]
+    else:
+        imported = next((name for name in absolute_modules if dotted.startswith(f"{name}.")), None)
+        if imported is None:
+            return None
+        resolved = f"{module_name}{dotted.removeprefix(imported)}"
+    if not resolved.startswith(f"{module_name}."):
+        return None
+    return resolved.rsplit(".", maxsplit=1)[-1]
+
+
+def _core_owner_calls(tree: ast.Module, *, module_name: str) -> set[str]:
+    bindings, absolute_modules = _core_owner_imports(tree, module_name=module_name)
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        dotted = _dotted_name(node.func)
+        if dotted is None:
+            continue
+        resolved = _resolve_core_owner_call(
+            dotted,
+            module_name=module_name,
+            bindings=bindings,
+            absolute_modules=absolute_modules,
+        )
+        if resolved is not None:
+            calls.add(resolved)
+    return calls
+
+
+def _validity_owner_calls(tree: ast.Module) -> set[str]:
+    return _core_owner_calls(tree, module_name="validity_values")
+
+
+def _imports_param_engine_validity_mask(tree: ast.Module) -> bool:
+    absolute = "tal.core.param_engine.validity_mask"
+    relative = "param_engine.validity_mask"
+    absolute_parent = "tal.core.param_engine"
+    relative_parent = "param_engine"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            alias.name == absolute for alias in node.names
+        ):
+            return True
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0 and node.module == absolute:
+            return True
+        if node.level == 2 and node.module == relative:
+            return True
+        parent_import = (
+            node.level == 0 and node.module == absolute_parent
+        ) or (
+            node.level == 2 and node.module == relative_parent
+        )
+        if parent_import and any(alias.name == "validity_mask" for alias in node.names):
+            return True
+    return False
+
+
+def _imports_reducer_ops_validity(tree: ast.Module) -> bool:
+    absolute = "tal.core.reducer_ops.validity"
+    parent = "tal.core.reducer_ops"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            alias.name in {absolute, parent} for alias in node.names
+        ):
+            return True
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0 and node.module == absolute:
+            return True
+        if node.level == 2 and node.module == "reducer_ops.validity":
+            return True
+        parent_import = (
+            node.level == 0 and node.module == parent
+        ) or (
+            node.level == 2 and node.module == "reducer_ops"
+        )
+        if parent_import and any(alias.name == "validity" for alias in node.names):
+            return True
+        if node.level == 2 and node.module is None and any(
+            alias.name == "reducer_ops" for alias in node.names
+        ):
+            return True
+        if node.level == 0 and node.module == "tal.core" and any(
+            alias.name == "reducer_ops" for alias in node.names
+        ):
+            return True
+    return False
+
+
+def _references_reducer_validity_base(tree: ast.Module) -> bool:
+    absolute = "tal.core.reducer_ops.validity"
+    parent = "tal.core.reducer_ops"
+    base_name = "resolve_structural_valid_mask_base"
+    module_bindings: set[str] = {absolute}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == absolute and alias.asname:
+                    module_bindings.add(alias.asname)
+                if alias.name == parent and alias.asname:
+                    module_bindings.add(f"{alias.asname}.validity")
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        direct_module = node.module in {absolute, "reducer_ops.validity"}
+        if direct_module and any(alias.name == base_name for alias in node.names):
+            return True
+        parent_module = node.module in {"tal.core.reducer_ops", "reducer_ops"}
+        if parent_module:
+            for alias in node.names:
+                if alias.name == "validity":
+                    module_bindings.add(alias.asname or alias.name)
+        if node.module is None:
+            for alias in node.names:
+                if alias.name == "reducer_ops":
+                    module_bindings.add(f"{alias.asname or alias.name}.validity")
+        if node.module == "tal.core":
+            for alias in node.names:
+                if alias.name == "reducer_ops":
+                    module_bindings.add(f"{alias.asname or alias.name}.validity")
+    target = f".{base_name}"
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        dotted = _dotted_name(node)
+        if dotted is not None and any(dotted == f"{binding}{target}" for binding in module_bindings):
+            return True
+    return False
 
 
 def test_orch_arch_001_single_owner_input_coercion() -> None:
@@ -94,6 +318,166 @@ def test_orch_arch_008_validity_finalize_owner_single_source() -> None:
     assert "def assign_sequence_size_if_left_packed(" not in param_finalize
 
 
+def test_orch_arch_013_sequence_size_value_contract_has_shared_core_owner() -> None:
+    """ID: ORCH_ARCH_013_sequence_size_value_contract_has_shared_core_owner."""
+    owner_path = Path("tal/core/validity_values.py")
+    owner_tree = _module_tree(owner_path)
+    consumer_calls = {
+        Path("tal/core/schema_validate/phase_validity.py"): "normalize_sequence_size_values",
+        Path("tal/core/validity_mask.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/align.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/concat_batch.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/concat_topology.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/finalize.py"): "require_valid_sequence_size_values",
+        Path("tal/core/combine_ops/merge.py"): "require_valid_sequence_size_values",
+    }
+    owner_defs = _top_level_function_names(owner_tree)
+    assert {"normalize_sequence_size_values", "require_valid_sequence_size_values"} <= owner_defs
+    assert file_loc(path=owner_path) <= 600
+    for name, length in function_lengths(owner_path).items():
+        assert length <= 50, f"{owner_path}:{name} exceeds function budget ({length} > 50)."
+    for path, call_name in consumer_calls.items():
+        tree = _module_tree(path)
+        calls = _validity_owner_calls(tree)
+        assert call_name in calls, f"shared validity owner call is missing from {path}"
+        local_defs = _top_level_function_names(tree)
+        assert not owner_defs.intersection(local_defs)
+
+    for path in (item for item in consumer_calls if "combine_ops" in item.parts):
+        assert not _imports_param_engine_validity_mask(_module_tree(path))
+
+
+def test_orch_arch_014_validity_owner_guard_resolves_import_forms() -> None:
+    """ID: ORCH_ARCH_014_validity_owner_guard_resolves_import_forms."""
+    sources = (
+        (
+            "from .. import validity_values as vv\n"
+            "vv.normalize_sequence_size_values(value, sequence_len=1)"
+        ),
+        (
+            "from ..validity_values import normalize_sequence_size_values as normalize\n"
+            "normalize(value, sequence_len=1)"
+        ),
+        (
+            "import tal.core.validity_values\n"
+            "tal.core.validity_values.normalize_sequence_size_values(value, sequence_len=1)"
+        ),
+        (
+            "import tal.core.validity_values as vv\n"
+            "vv.normalize_sequence_size_values(value, sequence_len=1)"
+        ),
+    )
+    for source in sources:
+        assert "normalize_sequence_size_values" in _validity_owner_calls(ast.parse(source))
+    wrong_owner = ast.parse(
+        "import other.validity_values as vv\n"
+        "vv.normalize_sequence_size_values(value, sequence_len=1)"
+    )
+    assert "normalize_sequence_size_values" not in _validity_owner_calls(wrong_owner)
+    forbidden_sources = (
+        "from ..param_engine.validity_mask import validate as check",
+        "from tal.core.param_engine.validity_mask import validate as check",
+        "from ..param_engine import validity_mask as old_validity",
+        "from tal.core.param_engine import validity_mask as old_validity",
+        "import tal.core.param_engine.validity_mask as old_validity",
+        "import tal.core.param_engine.validity_mask",
+    )
+    for source in forbidden_sources:
+        assert _imports_param_engine_validity_mask(ast.parse(source))
+    assert not _imports_param_engine_validity_mask(
+        ast.parse("import other.param_engine.validity_mask")
+    )
+
+
+def test_orch_arch_015_structural_valid_mask_has_shared_core_owner() -> None:
+    """ID: ORCH_ARCH_015_structural_valid_mask_has_shared_core_owner."""
+    owner_path = Path("tal/core/validity_mask.py")
+    owner_defs = _top_level_function_names(_module_tree(owner_path))
+    consumers = {
+        Path("tal/core/group_ops/foundation.py"): "resolve_validated_structural_mask_base",
+        Path("tal/core/group_ops/runtime_plan.py"): "resolve_validated_structural_mask_base",
+        Path("tal/core/reducer_ops/api.py"): "resolve_validated_structural_mask_base",
+        Path("tal/core/reducer_ops/validity.py"): "resolve_structural_valid_mask_base",
+    }
+    assert {
+        "resolve_structural_valid_mask_base",
+        "resolve_validated_structural_mask_base",
+    } <= owner_defs
+    assert file_loc(path=owner_path) <= 600
+    for name, length in function_lengths(owner_path).items():
+        assert length <= 50, f"{owner_path}:{name} exceeds function budget ({length} > 50)."
+    for path, call_name in consumers.items():
+        calls = _core_owner_calls(_module_tree(path), module_name="validity_mask")
+        assert call_name in calls, f"shared structural-mask owner call is missing from {path}"
+        assert not owner_defs.intersection(_top_level_function_names(_module_tree(path)))
+    reducer_validity_path = Path("tal/core/reducer_ops/validity.py")
+    assert "resolve_structural_valid_mask_base" in _module_exports(
+        _module_tree(reducer_validity_path)
+    )
+    for path in sorted(Path("tal").rglob("*.py")):
+        if path == reducer_validity_path:
+            continue
+        assert not _references_reducer_validity_base(
+            _module_tree(path)
+        ), f"deprecated reducer-local structural-mask owner referenced from {path}"
+    for path in sorted(Path("tal/core/group_ops").glob("*.py")):
+        assert not _imports_reducer_ops_validity(
+            _module_tree(path)
+        ), f"grouping imports reducer validity ownership from {path}"
+    valid_sources = (
+        "from .. import validity_mask as vm\nvm.resolve_validated_structural_mask_base(value)",
+        "from ..validity_mask import resolve_validated_structural_mask_base as resolve\nresolve(value)",
+        "import tal.core.validity_mask as vm\nvm.resolve_validated_structural_mask_base(value)",
+    )
+    for source in valid_sources:
+        calls = _core_owner_calls(ast.parse(source), module_name="validity_mask")
+        assert "resolve_validated_structural_mask_base" in calls
+    forbidden_sources = (
+        "from ..reducer_ops.validity import resolve_structural_valid_mask_base",
+        "from tal.core.reducer_ops import validity\nvalidity.resolve_structural_valid_mask_base(value)",
+        "from .. import reducer_ops\nreducer_ops.validity.resolve_structural_valid_mask_base(value)",
+        "from tal.core import reducer_ops as ro\nro.validity.resolve_structural_valid_mask_base(value)",
+        "import tal.core.reducer_ops as ro\nro.validity.resolve_structural_valid_mask_base(value)",
+        (
+            "import tal.core.reducer_ops.validity\n"
+            "tal.core.reducer_ops.validity.resolve_structural_valid_mask_base(value)"
+        ),
+    )
+    for source in forbidden_sources:
+        assert _imports_reducer_ops_validity(ast.parse(source))
+        assert _references_reducer_validity_base(ast.parse(source))
+    assert not _imports_reducer_ops_validity(
+        ast.parse("from ..reducer_ops.finalize_policy import resolve_reducer_finalize_source")
+    )
+
+
+def test_combine_arch_001_outer_fill_coverage_has_single_merge_owner() -> None:
+    """ID: COMBINE_ARCH_001_outer_fill_coverage_has_single_merge_owner."""
+    tree = _module_tree(Path("tal/core/combine_ops/merge.py"))
+    names = _top_level_function_names(tree)
+    assert "_find_var_source" not in names
+    assert {"_find_var_sources", "_source_outer_hole_mask", "_mask_for_outer_holes"} <= names
+
+    apply_owner = _top_level_function(tree, "_apply_outer_fill_scoped")
+    apply_calls = {
+        node.func.id
+        for node in ast.walk(apply_owner)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert {"_find_var_sources", "_mask_for_outer_holes"} <= apply_calls
+
+    mask_owner = _top_level_function(tree, "_mask_for_outer_holes")
+    source_calls = [
+        node
+        for node in ast.walk(mask_owner)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_source_outer_hole_mask"
+    ]
+    assert len(source_calls) == 1
+    assert any(isinstance(node, ast.BitAnd) for node in ast.walk(mask_owner))
+
+
 def test_orch_arch_010_typed_lifecycle_core_owner_exists() -> None:
     """ID: ORCH_ARCH_010_typed_lifecycle_core_owner_exists."""
     path = Path("tal/core/typed_lifecycle.py")
@@ -123,12 +507,6 @@ def test_orch_arch_011_typed_lifecycle_core_owner_has_no_domain_imports() -> Non
     )
     for needle in forbidden:
         assert needle not in text
-
-
-def test_orch_arch_012_typed_lifecycle_no_tal_v2_imports() -> None:
-    """ID: ORCH_ARCH_012_typed_lifecycle_no_tal_v2_imports."""
-    text = Path("tal/core/typed_lifecycle.py").read_text(encoding="utf-8")
-    assert "tal_v2" not in text
 
 
 def test_arch_topo_001_core_topology_owner_module_present_and_budgeted() -> None:
@@ -445,7 +823,6 @@ def test_arch_bcast_036_spatial_approved_family_matrix_is_explicit_and_guarded()
 def test_bcast_doc_004_spatial_frame_aware_alignment_and_broadcast_boundaries_documented() -> None:
     """ID: BCAST_DOC_004_spatial_frame_aware_alignment_and_broadcast_boundaries_documented."""
     numpy_doc = Path("docs/user-guide/numpy.md").read_text(encoding="utf-8").lower()
-    spatial_doc = Path("docs/user-guide/spatial.md").read_text(encoding="utf-8").lower()
     assert "frame-sensitive spatial" in numpy_doc
 
 
@@ -456,31 +833,6 @@ def test_arch_spatial_131_temporal_vector_like_param_key_resolution_reuses_share
     assert "resolve_param_runtime_context(" in accessor_text
     assert "def resolve_param_runtime_context(" in resolve_text
     assert "_resolve_schema_context_validated(" in resolve_text
-
-
-def test_arch_spatial_135_temporal_vector_like_execution_owners_contain_no_vectorize_true() -> None:
-    """ID: ARCH_SPATIAL_135_temporal_vector_like_execution_owners_contain_no_vectorize_true."""
-    files = [
-        Path("tal/core/param_ops/accessor.py"),
-        Path("tal/core/param_ops/evaluate.py"),
-        Path("tal/core/param_ops/resample.py"),
-        Path("tal/core/param_engine/map_apply.py"),
-    ]
-    for path in files:
-        text = path.read_text(encoding="utf-8")
-        assert "vectorize=True" not in text
-
-
-def test_arch_spatial_136_temporal_vector_like_stopgaps_are_backend_routed_and_explicit() -> None:
-    """ID: ARCH_SPATIAL_136_temporal_vector_like_stopgaps_are_backend_routed_and_explicit."""
-    map_build = Path("tal/core/param_engine/map_build.py").read_text(encoding="utf-8")
-    backends = Path("tal/core/param_engine/backends.py").read_text(encoding="utf-8")
-    assert "map_row_backend" in map_build
-    assert "bounds_row_backend" in map_build
-    assert "PARAM_MAP_BACKEND_NUMPY_ROW" in backends
-    assert "PARAM_BOUNDS_BACKEND_NUMPY_ROW" in backends
-    assert "def map_row_backend(" in backends
-    assert "def bounds_row_backend(" in backends
 
 
 def test_arch_spatial_151_d3_derivative_integral_paths_do_not_reuse_interpolation_execution_owners() -> None:

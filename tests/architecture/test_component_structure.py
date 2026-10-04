@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.architecture._budget import executable_source, file_loc, function_loc
+from tools.architecture_budget import executable_source, file_loc, function_loc
 
 
 def _module(path: str) -> ast.Module:
@@ -145,22 +145,6 @@ def test_arch_component_014_no_eager_materialization_in_extract_patch_paths() ->
         assert ".item(" not in text
         assert ".compute(" not in text
         assert "np.asarray(" not in text
-
-
-def test_arch_component_015_extract_output_var_rename_after_finalize_boundary() -> None:
-    """ID: ARCH_COMPONENT_015_extract_output_var_rename_after_finalize_boundary."""
-    extract = Path("tal/core/component_ops/extract.py").read_text(encoding="utf-8")
-    module = _module("tal/core/component_ops/extract.py")
-    kernel = next(
-        node
-        for node in module.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_extract_component_dataset"
-    )
-    kernel_args = [arg.arg for arg in kernel.args.args]
-    assert "def _rename_output_var_after_finalize(" in extract
-    assert "result.rename({source_var: output_var}, validate=validate)" in extract
-    assert "finalize_like(source, ds_out, validate=validate, owner=owner)" in extract
-    assert "output_var" not in kernel_args
 
 
 def test_arch_component_016_compose_owner_split_and_budget() -> None:

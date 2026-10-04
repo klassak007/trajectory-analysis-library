@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..param_engine.validity_mask import validate_sequence_size_values
+from .. import validity_values
 from ..param_ops.batch_labels import join_batch_index, labels_selectable_from
 from ..param_ops.guards import assert_unique_dim_labels, dataset_namespace_names
 from .align import _repair_outer_sequence_validity
-from .finalize import finalize_combine_output
+from .finalize import (
+    CombineFinalizationPlan,
+    finalize_combine_output,
+    prepare_combine_finalization,
+)
 from .metadata import (
     canonicalize_optional_names,
     resolve_core_dims,
@@ -20,6 +24,15 @@ from .metadata import (
 from .normalize import effective_batch_dims, effective_sequence_dim
 from .options import normalize_batch_labels
 from .types import BatchConcatOptions, CombineContext
+
+
+@dataclass(frozen=True)
+class _PreparedBatchConcat:
+    finalization: CombineFinalizationPlan
+    sequence_dim: str | None
+    batch_dims: tuple[str, ...]
+    aligned: list[CombineContext]
+    size_contexts: list[CombineContext]
 
 
 def _ensure_batch_dim_available(contexts: Sequence[CombineContext], *, batch_dim: str) -> None:
@@ -106,19 +119,19 @@ def _declared_lengths(ctx: CombineContext, *, sequence_dim: str) -> xr.DataArray
     if name and name in ctx.ds.coords:
         coord = ctx.ds.coords[name]
         if ctx.batch_dims and tuple(coord.dims) == ctx.batch_dims:
-            return validate_sequence_size_values(
+            return validity_values.require_valid_sequence_size_values(
                 coord,
                 sequence_size_coord=name,
                 sequence_len=n,
                 owner="concat_batch",
-            ).astype("int64")
+            )
         if not ctx.batch_dims and tuple(coord.dims) == ():
-            return validate_sequence_size_values(
+            return validity_values.require_valid_sequence_size_values(
                 coord,
                 sequence_size_coord=name,
                 sequence_len=n,
                 owner="concat_batch",
-            ).astype("int64")
+            )
     if not ctx.batch_dims:
         return xr.DataArray(np.asarray(n, dtype="int64"), dims=())
     shape = tuple(int(ctx.ds.sizes[dim]) for dim in ctx.batch_dims)
@@ -199,12 +212,15 @@ def _concat_batch_metadata(
     return ds_out, param_name, size_name, core_dims
 
 
-def concat_batch_contexts(
+def _prepare_batch_concat(
     contexts: list[CombineContext],
     *,
     opts: BatchConcatOptions,
-    validate: bool,
-) -> "AnalysisObject":
+) -> _PreparedBatchConcat:
+    finalization = prepare_combine_finalization(
+        contexts,
+        owner="concat_batch",
+    )
     _ensure_batch_dim_available(contexts, batch_dim=opts.batch_dim)
     sequence_dim = effective_sequence_dim(contexts, owner="concat_batch", require=False)
     batch_dims = effective_batch_dims(contexts)
@@ -220,29 +236,46 @@ def concat_batch_contexts(
         batch_dims=batch_dims,
         fill_value=opts.fill_value,
     )
+    return _PreparedBatchConcat(
+        finalization,
+        sequence_dim,
+        batch_dims,
+        aligned,
+        size_contexts,
+    )
+
+
+def concat_batch_contexts(
+    contexts: list[CombineContext],
+    *,
+    opts: BatchConcatOptions,
+    validate: bool,
+) -> "AnalysisObject":
+    plan = _prepare_batch_concat(contexts, opts=opts)
+    aligned = plan.aligned
     labels = normalize_batch_labels(opts.batch_labels, size=len(aligned))
     ds_out = _concat_dataset(aligned, opts=opts, labels=labels)
-    out_batch_dims = (opts.batch_dim,) + batch_dims
+    out_batch_dims = (opts.batch_dim,) + plan.batch_dims
     size_name = shared_optional_name([ctx.sequence_size_coord for ctx in aligned])
-    if sequence_dim is not None and size_name:
+    if plan.sequence_dim is not None and size_name:
         ds_out = _assign_sequence_size_coord(
             ds_out,
-            contexts=size_contexts,
-            sequence_dim=sequence_dim,
+            contexts=plan.size_contexts,
+            sequence_dim=plan.sequence_dim,
             out_batch_dims=out_batch_dims,
             name=size_name,
         )
     ds_out, param_name, size_name, core_dims = _concat_batch_metadata(
         aligned,
         ds_out=ds_out,
-        sequence_dim=sequence_dim,
+        sequence_dim=plan.sequence_dim,
         out_batch_dims=out_batch_dims,
     )
     return finalize_combine_output(
-        aligned[0],
+        plan.finalization,
         ds_out,
-        sequence_dim=sequence_dim,
-        batch_dims=out_batch_dims if sequence_dim is not None else (),
+        sequence_dim=plan.sequence_dim,
+        batch_dims=out_batch_dims if plan.sequence_dim is not None else (),
         core_dims=core_dims,
         param_coord=param_name,
         sequence_size_coord=size_name,

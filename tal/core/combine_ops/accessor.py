@@ -113,7 +113,7 @@ class CombineAccessor:
         >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> out = left.combine.concat_batch([right], opts=BatchConcatOptions(batch_dim="run", batch_labels=("a", "b")))
-        >>> tuple(out.unsafe_data.coords["run"].values.tolist())
+        >>> tuple(out.as_dataset().coords["run"].values.tolist())
         ('a', 'b')
         """
         values = _with_self(self._ao, others)
@@ -160,7 +160,7 @@ class CombineAccessor:
         >>> first = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> second = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [1]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> out = first.combine.concat_sequence([second], opts=SequenceConcatOptions(overlap="error"))
-        >>> out.unsafe_data.sizes["sample"]
+        >>> out.as_dataset().sizes["sample"]
         2
         """
         values = _with_self(self._ao, others)
@@ -207,7 +207,7 @@ class CombineAccessor:
         >>> left = AnalysisObject.from_data(xr.Dataset({"x": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> right = AnalysisObject.from_data(xr.Dataset({"y": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> out = left.combine.merge([right], opts=MergeOptions())
-        >>> sorted(out.unsafe_data.data_vars)
+        >>> sorted(out.as_dataset().data_vars)
         ['x', 'y']
         """
         values = _with_self(self._ao, others)
@@ -254,7 +254,7 @@ class CombineAccessor:
         >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0, 2.0])}, coords={"sample": [0, 1]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [3.0, 4.0])}, coords={"sample": [1, 2]}), sequence_dim="sample", core_dims=(), validate=True)
         >>> aligned = left.combine.align([right], opts=AlignOptions(sequence_join="outer"))
-        >>> [item.unsafe_data.sizes["sample"] for item in aligned]
+        >>> [item.as_dataset().sizes["sample"] for item in aligned]
         [3, 3]
         """
         values = _with_self(self._ao, others)
@@ -313,7 +313,7 @@ class CombineAccessor:
         ...     validate=True,
         ... )
         >>> out = x.combine.assemble_core([y], core_dims=("axis",), core_labels=(("x", "y"),))
-        >>> out.unsafe_data.sizes["axis"]
+        >>> out.as_dataset().sizes["axis"]
         2
         """
         merged = _with_self_core_layout(self._ao, values, depth=len(core_dims))
@@ -376,7 +376,7 @@ class CombineAccessor:
         ...     validate=True,
         ... )
         >>> out = x.combine.stack_core([y], core_dim="axis", core_labels=("x", "y"))
-        >>> out.unsafe_data.sizes["axis"]
+        >>> out.as_dataset().sizes["axis"]
         2
         """
         merged = _with_self_core_layout(self._ao, values, depth=1)
@@ -445,7 +445,7 @@ class CombineAccessor:
         ...     validate=True,
         ... )
         >>> out = x.combine.block_core([[y]], row_dim="row", col_dim="col")
-        >>> (out.unsafe_data.sizes["row"], out.unsafe_data.sizes["col"])
+        >>> (out.as_dataset().sizes["row"], out.as_dataset().sizes["col"])
         (2, 1)
         """
         merged = _with_self_core_layout(self._ao, values, depth=2)
@@ -500,7 +500,7 @@ class CombineAccessor:
         >>> x = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0]])}, coords={"sample": [0], "axis": ["x"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> y = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[2.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> out = x.combine.concat_core([y], opts=CoreConcatOptions(core_dim="axis"))
-        >>> tuple(out.unsafe_data.coords["axis"].values.tolist())
+        >>> tuple(out.as_dataset().coords["axis"].values.tolist())
         ('x', 'y')
         """
         values = _with_self(self._ao, others)
@@ -589,7 +589,7 @@ class CombineAccessor:
         >>> base = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0, 2.0]])}, coords={"sample": [0], "axis": ["x", "y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> patch = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[9.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
         >>> out = base.combine.overlay_core([patch], opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace"))
-        >>> out.unsafe_data["v"].sel(axis="y").item()
+        >>> out.as_dataset()["v"].sel(axis="y").item()
         9.0
         """
         return overlay_core(self._ao, patches, opts=opts, validate=validate)
@@ -628,7 +628,7 @@ def concat_batch(
     >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> out = concat_batch([left, right], opts=BatchConcatOptions(batch_dim="run", batch_labels=("a", "b")))
-    >>> tuple(out.unsafe_data.coords["run"].values.tolist())
+    >>> tuple(out.as_dataset().coords["run"].values.tolist())
     ('a', 'b')
     """
     options = coerce_batch_concat_options(opts, owner="concat_batch")
@@ -689,7 +689,7 @@ def concat_sequence(
     ...     validate=True,
     ... )
     >>> out = concat_sequence([left, right], opts=SequenceConcatOptions(overlap="error"), validate=True)
-    >>> out.unsafe_data.sizes["sample"]
+    >>> out.as_dataset().sizes["sample"]
     4
 
     See Also
@@ -734,7 +734,7 @@ def merge(
     >>> from tal.core import AnalysisObject, MergeOptions, merge
     >>> left = AnalysisObject.from_data(xr.Dataset({"x": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"y": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
-    >>> sorted(merge([left, right], opts=MergeOptions()).unsafe_data.data_vars)
+    >>> sorted(merge([left, right], opts=MergeOptions()).as_dataset().data_vars)
     ['x', 'y']
     """
     options = coerce_merge_options(opts, owner="merge")
@@ -775,7 +775,7 @@ def align_many(
     >>> from tal.core import AlignOptions, AnalysisObject, align_many
     >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0, 2.0])}, coords={"sample": [0, 1]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [3.0, 4.0])}, coords={"sample": [1, 2]}), sequence_dim="sample", core_dims=(), validate=True)
-    >>> [item.unsafe_data.sizes["sample"] for item in align_many([left, right], opts=AlignOptions(sequence_join="outer"))]
+    >>> [item.as_dataset().sizes["sample"] for item in align_many([left, right], opts=AlignOptions(sequence_join="outer"))]
     [3, 3]
     """
     options = coerce_align_options(opts, owner="align_many")
@@ -820,7 +820,7 @@ def align_pair(
     >>> left = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> right = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> a, b = align_pair(left, right, opts=AlignOptions())
-    >>> (a.unsafe_data.sizes["sample"], b.unsafe_data.sizes["sample"])
+    >>> (a.as_dataset().sizes["sample"], b.as_dataset().sizes["sample"])
     (1, 1)
     """
     out = align_many([left, right], opts=opts, validate=validate)
@@ -866,7 +866,7 @@ def assemble_core(
     >>> x = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> y = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> out = assemble_core([x, y], core_dims=("axis",), core_labels=(("x", "y"),))
-    >>> out.unsafe_data.sizes["axis"]
+    >>> out.as_dataset().sizes["axis"]
     2
     """
     return _assemble_core(
@@ -917,7 +917,7 @@ def stack_core(
     >>> x = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> y = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> out = stack_core([x, y], core_dim="axis", core_labels=("x", "y"))
-    >>> tuple(out.unsafe_data.coords["axis"].values.tolist())
+    >>> tuple(out.as_dataset().coords["axis"].values.tolist())
     ('x', 'y')
     """
     return _stack_core(
@@ -974,7 +974,7 @@ def block_core(
     >>> x = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [1.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> y = AnalysisObject.from_data(xr.Dataset({"value": ("sample", [2.0])}, coords={"sample": [0]}), sequence_dim="sample", core_dims=(), validate=True)
     >>> out = block_core([[x], [y]], row_dim="row", col_dim="col")
-    >>> (out.unsafe_data.sizes["row"], out.unsafe_data.sizes["col"])
+    >>> (out.as_dataset().sizes["row"], out.as_dataset().sizes["col"])
     (2, 1)
     """
     return _block_core(
@@ -1020,7 +1020,7 @@ def concat_core(
     >>> from tal.core import AnalysisObject, CoreConcatOptions, concat_core
     >>> x = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0]])}, coords={"sample": [0], "axis": ["x"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
     >>> y = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[2.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
-    >>> concat_core([x, y], opts=CoreConcatOptions(core_dim="axis")).unsafe_data.sizes["axis"]
+    >>> concat_core([x, y], opts=CoreConcatOptions(core_dim="axis")).as_dataset().sizes["axis"]
     2
     """
     options = coerce_core_concat_options(opts, owner="concat_core")
@@ -1103,7 +1103,7 @@ def overlay_core(
     >>> from tal.core import AnalysisObject, CoreOverlayOptions, overlay_core
     >>> base = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[1.0, 2.0]])}, coords={"sample": [0], "axis": ["x", "y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
     >>> patch = AnalysisObject.from_data(xr.Dataset({"v": (("sample", "axis"), [[9.0]])}, coords={"sample": [0], "axis": ["y"]}), sequence_dim="sample", core_dims=("axis",), validate=True)
-    >>> overlay_core(base, patch, opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).unsafe_data["v"].sel(axis="y").item()
+    >>> overlay_core(base, patch, opts=CoreOverlayOptions(core_dim="axis", on_overlap="replace")).as_dataset()["v"].sel(axis="y").item()
     9.0
     """
     options = coerce_core_overlay_options(opts, owner="overlay_core")

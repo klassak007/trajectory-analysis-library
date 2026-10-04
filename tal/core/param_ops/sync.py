@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 import xarray as xr
 
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.finalize import finalize_like, restore_and_finalize
 from ..orchestration.inputs import normalize_analysis_object_inputs
 from ..orchestration.lazy import require_unchunked_auto_grid_sources
@@ -19,6 +20,7 @@ from .resample import resample_param
 from .sync_runtime import (
     align_contexts_batch,
     apply_fill,
+    ensure_shared_param_kind,
     ensure_shared_topology,
     eval_options_from_sync,
     grid_from_join,
@@ -82,7 +84,7 @@ def _resolve_target_grid(
     *,
     grid: xr.DataArray | np.ndarray | Sequence[float] | float | None,
     join: str,
-    tol: float,
+    tol: float | int,
 ) -> xr.DataArray:
     target = _single_input_target(aligned, grid=grid)
     if target is not None:
@@ -103,7 +105,7 @@ def _sync_one(
     target: xr.DataArray,
     eval_opts,
     how: Literal["interp", "nearest", "fill"],
-    tol: float,
+    tol: float | int,
     fill_value: float | int,
     batch_plan,
     validate: bool,
@@ -119,11 +121,12 @@ def _sync_one(
             eval_opts=eval_opts,
             validate=validate,
         )
+    synced_ds = analysis_object_dataset(synced)
     if not batch_plan.enabled:
-        return finalize_like(src_ctx.ao, synced.unsafe_data, validate=validate, owner="synchronize_param")
+        return finalize_like(src_ctx.ao, synced_ds, validate=validate, owner="synchronize_param")
     return restore_and_finalize(
         src_ctx.ao,
-        synced.unsafe_data,
+        synced_ds,
         plan=batch_plan,
         validate=validate,
         owner="synchronize_param",
@@ -143,7 +146,7 @@ def _sync_identity_one(
         return out
     return restore_and_finalize(
         src_ctx.ao,
-        out.unsafe_data,
+        analysis_object_dataset(out),
         plan=batch_plan,
         validate=validate,
         owner="synchronize_param",
@@ -189,7 +192,10 @@ def synchronize_param(
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Raises deterministic fail-closed errors when semantic/layout assumptions are
+    not met. Numeric and datetime64 param coordinates cannot be mixed in one
+    synchronization call. Datetime64 synchronization accepts timedelta-like
+    ``ParamSyncOptions.tol`` values; selection and indexing remain tolerance-free.
 
     Examples
     --------
@@ -203,14 +209,13 @@ def synchronize_param(
     ...     validate=True,
     ... )
     >>> synced = synchronize_param([ao], on="time", grid=[0.0, 1.0], opts=ParamSyncOptions(join="override"))
-    >>> synced[0].unsafe_data["value"].values.tolist()
+    >>> synced[0].as_dataset()["value"].values.tolist()
     [0.0, 1.0]
     """
     if not aos:
         raise ValueError("synchronize_param: expected at least one AnalysisObject.")
     ao_inputs = normalize_analysis_object_inputs(aos, owner="synchronize_param", require_nonempty=True)
     options = coerce_sync_options(opts, owner="synchronize_param")
-    tol, fill_value = resolve_sync_runtime(options, owner="synchronize_param")
     eval_opts = eval_options_from_sync(query_dim=options.query_dim, how=options.how)
     base_contexts, contexts, batch_plan = _resolve_sync_contexts(
         ao_inputs,
@@ -220,6 +225,8 @@ def synchronize_param(
         sequence_size_coord=sequence_size_coord,
     )
     aligned = align_contexts_batch(contexts, mode=options.batch_join)
+    ensure_shared_param_kind(aligned)
+    tol, fill_value = resolve_sync_runtime(options, owner="synchronize_param", param_kind=aligned[0].param_kind)
     if len(aligned) == 1 and _is_identity_sync_case(grid=grid, options=options):
         return [_sync_identity_one(base_contexts[0], aligned[0], batch_plan=batch_plan, validate=validate)]
     target = _resolve_target_grid(aligned, grid=grid, join=options.join, tol=tol)
@@ -282,7 +289,10 @@ def synchronize(
 
     Notes
     -----
-    Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
+    Raises deterministic fail-closed errors when semantic/layout assumptions are
+    not met. Numeric and datetime64 param coordinates cannot be mixed in one
+    synchronization call. Datetime64 synchronization accepts timedelta-like
+    ``ParamSyncOptions.tol`` values; selection and indexing remain tolerance-free.
 
     Examples
     --------
@@ -296,7 +306,7 @@ def synchronize(
     ...     validate=True,
     ... )
     >>> out = synchronize([ao], on="time", grid=[0.0, 2.0], opts=ParamSyncOptions(join="override"))
-    >>> out[0].unsafe_data["value"].values.tolist()
+    >>> out[0].as_dataset()["value"].values.tolist()
     [0.0, 4.0]
     """
     if mode != "param":

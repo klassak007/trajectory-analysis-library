@@ -17,8 +17,14 @@ dist/
 docs/_build/
 docs/api/_generated/
 docs/api/types/_generated/
+extensions/docs/_build/
+extensions/docs/api/_generated/
+extensions/docs/api/types/_generated/
 
 # Misc
 *.log
 *.tmp
 .pytest_cache/
+
+# Local benchmark measurements
+/benchmarks/results/

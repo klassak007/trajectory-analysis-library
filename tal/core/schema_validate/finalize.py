@@ -2,13 +2,109 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 import xarray as xr
 
 
+def _copy_schema_value(value: Any, memo: dict[int, Any]) -> Any:
+    if id(value) in memo:
+        return memo[id(value)]
+    if isinstance(value, Mapping):
+        out: dict[Any, Any] = {}
+        memo[id(value)] = out
+        for key, item in value.items():
+            out[deepcopy(key, memo)] = _copy_schema_value(item, memo)
+        return out
+    if type(value) is list:
+        items: list[Any] = []
+        memo[id(value)] = items
+        items.extend(_copy_schema_value(item, memo) for item in value)
+        return items
+    if type(value) is tuple:
+        items = tuple(_copy_schema_value(item, memo) for item in value)
+        memo[id(value)] = items
+        return items
+    return deepcopy(value, memo)
+
+
+def _copy_tal_graph(tal: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Own canonical and extension regions without cross-region aliases."""
+    out: dict[Any, Any] = {}
+    root_memo: dict[int, Any] = {id(tal): out}
+    for key, value in tal.items():
+        copied_key = deepcopy(key, root_memo)
+        region = str.__str__(key) if isinstance(key, str) else None
+        memo = {} if region in {"core", "ext"} else root_memo
+        out[copied_key] = _copy_schema_value(value, memo)
+    return out
+
+
+def _attrs_without_tal(attrs: Mapping[Any, Any]) -> dict[Any, Any]:
+    return {name: value for name, value in attrs.items() if name != "tal"}
+
+
+def _replace_dataset_attrs_with_tal(
+    ds: xr.Dataset | xr.DataArray,
+    *,
+    ordinary_attrs: Mapping[Any, Any],
+    tal: Mapping[str, Any] | None,
+    canonicalize: bool = False,
+    isolate_tal: bool = True,
+    variable_without_tal: str | None = None,
+) -> xr.Dataset | xr.DataArray:
+    """Replace dataset attrs through the single TAL-attribute write owner."""
+    attrs = _attrs_without_tal(ordinary_attrs)
+    if tal is not None:
+        tal_value = tal
+        if isolate_tal:
+            tal_value = canonicalize_tal(tal) if canonicalize else _copy_tal_graph(tal)
+        attrs["tal"] = tal_value
+    out = ds.copy(deep=False)
+    out.attrs = attrs
+    if variable_without_tal is not None and isinstance(out, xr.Dataset):
+        out[variable_without_tal].attrs = _attrs_without_tal(
+            out[variable_without_tal].attrs
+        )
+    return out
+
+
+def transfer_dataarray_metadata(
+    source: xr.DataArray,
+    target: xr.DataArray,
+) -> xr.DataArray:
+    """Copy DataArray metadata through the canonical TAL-attribute owner."""
+    tal = source.attrs.get("tal")
+    out = cast(
+        xr.DataArray,
+        _replace_dataset_attrs_with_tal(
+            target,
+            ordinary_attrs=source.attrs,
+            tal=tal if isinstance(tal, Mapping) else None,
+        ),
+    )
+    out.encoding = deepcopy(source.encoding)
+    return out
+
+
+def _relocate_promoted_dataarray_tal(
+    ds: xr.Dataset,
+    *,
+    variable_name: str,
+    tal: Mapping[str, Any],
+) -> xr.Dataset:
+    """Move a promoted DataArray TAL payload before ingress validation."""
+    return _replace_dataset_attrs_with_tal(
+        ds,
+        ordinary_attrs=ds.attrs,
+        tal=tal,
+        isolate_tal=False,
+        variable_without_tal=variable_name,
+    )
+
+
 def canonicalize_tal(tal: Mapping[str, Any]) -> dict[str, Any]:
-    out = deepcopy(dict(tal))
+    out = _copy_tal_graph(tal)
     out["version"] = int(out["version"])
     core = out.get("core")
     if not isinstance(core, Mapping):
@@ -30,8 +126,9 @@ def canonicalize_tal(tal: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def finalize_validated_schema(ds: xr.Dataset, tal: Mapping[str, Any]) -> xr.Dataset:
-    out = ds.copy(deep=False)
-    attrs = dict(out.attrs)
-    attrs["tal"] = canonicalize_tal(tal)
-    out.attrs = attrs
-    return out
+    return _replace_dataset_attrs_with_tal(
+        ds,
+        ordinary_attrs=ds.attrs,
+        tal=tal,
+        canonicalize=True,
+    )

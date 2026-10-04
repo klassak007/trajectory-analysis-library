@@ -31,6 +31,10 @@ combined spatial6 payload.
 `Velocity` requires either component registry metadata for `linear` and
 `angular` parts or a valid vector6 representation.
 
+All three velocity constructors accept frame declarations and passive
+`graph=` association. The read-only `graph` property and functional
+`with_graph(...)` method are inherited by each type.
+
 ## Composition and Decomposition
 
 ```python
@@ -85,6 +89,8 @@ provided and preserve representation/frame metadata when invariants hold.
    :nosignatures:
 
    tal.spatial.LinearVelocity
+   tal.spatial.LinearVelocity.graph
+   tal.spatial.LinearVelocity.with_graph
    tal.spatial.LinearVelocity.norm
    tal.spatial.LinearVelocity.magnitude
    tal.spatial.LinearVelocity.differentiate
@@ -93,6 +99,8 @@ provided and preserve representation/frame metadata when invariants hold.
    tal.spatial.LinearVelocity.to_frame
    tal.spatial.LinearVelocity.express_in
    tal.spatial.AngularVelocity
+   tal.spatial.AngularVelocity.graph
+   tal.spatial.AngularVelocity.with_graph
    tal.spatial.AngularVelocity.norm
    tal.spatial.AngularVelocity.magnitude
    tal.spatial.AngularVelocity.differentiate
@@ -100,6 +108,8 @@ provided and preserve representation/frame metadata when invariants hold.
    tal.spatial.AngularVelocity.to_frame
    tal.spatial.AngularVelocity.express_in
    tal.spatial.Velocity
+   tal.spatial.Velocity.graph
+   tal.spatial.Velocity.with_graph
    tal.spatial.Velocity.from_linear_angular
    tal.spatial.Velocity.from_vector6
    tal.spatial.Velocity.linear

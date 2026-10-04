@@ -11,6 +11,8 @@ import pandas as pd
 import xarray as xr
 
 from ..ao_internal import finalize_structural
+from ..dataset_ownership import analysis_object_dataset
+from ..ordered_dtypes import is_float64_exact_integer
 from ..param_engine import ParamMapOptions, build_param_map, normalize_query_grid
 from ..param_engine.map_apply import gather_along_sequence
 from ..validity_finalize import assign_sequence_size_from_valid_mask
@@ -24,7 +26,12 @@ from .batch_labels import (
     labels_selectable_from,
     missing_label_mask,
 )
-from .guards import assert_query_dim_safe, assert_unique_dim_labels, mark_reserved_coord
+from .guards import (
+    assert_query_dim_safe,
+    assert_unique_dim_labels,
+    mark_generated_size_coord,
+    mark_reserved_coord,
+)
 from .sync_autogrid import build_auto_grid_from_join
 from .types import ParamEvalOptions, ParamRuntimeContext
 
@@ -47,7 +54,7 @@ def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: f
         Resolved runtime context/payload used by this orchestration boundary.
     join : str, optional
         Policy selector controlling alignment/join behavior.
-    tol : float, optional
+    tol : float | int, optional
         Numeric tolerance used for matching/alignment logic.
 
     Returns
@@ -63,7 +70,13 @@ def grid_from_join(contexts: Sequence[ParamRuntimeContext], *, join: str, tol: f
         return contexts[0].spec.coord
     if join == "right":
         return contexts[-1].spec.coord
-    return build_auto_grid_from_join(contexts, join=join, tol=tol, owner="synchronize_param")
+    return build_auto_grid_from_join(
+        contexts,
+        join=join,
+        tol=tol,
+        owner="synchronize_param",
+        param_kind=contexts[0].param_kind,
+    )
 
 
 def _join_batch_labels(
@@ -133,7 +146,7 @@ def _align_valid_mask_for_batch(
     labels: pd.Index,
     mode: Literal["inner", "outer", "exact"],
 ) -> xr.DataArray:
-    valid = context.valid_mask
+    valid = context.valid_mask.reset_coords(drop=True)
     if dim in valid.dims:
         if mode == "outer":
             return valid.reindex({dim: labels}, fill_value=False)
@@ -152,6 +165,26 @@ def _align_valid_mask_for_batch(
     return out.where(~missing, other=False)
 
 
+def _outer_batch_reindex_fill_values(context: ParamRuntimeContext) -> dict[str, object]:
+    fills: dict[str, object] = {}
+    for name, variable in context.ds.variables.items():
+        dtype = np.dtype(variable.dtype)
+        if np.issubdtype(dtype, np.datetime64):
+            fills[str(name)] = np.datetime64("NaT", "ns")
+        elif np.issubdtype(dtype, np.timedelta64):
+            fills[str(name)] = np.timedelta64("NaT", "ns")
+    return fills
+
+
+def _retain_declared_parameter_coordinates(
+    value: xr.DataArray,
+    *,
+    reference: xr.DataArray,
+) -> xr.DataArray:
+    extra = tuple(name for name in value.coords if name not in reference.coords)
+    return value.drop_vars(extra) if extra else value
+
+
 def _align_batch_context(
     context: ParamRuntimeContext,
     *,
@@ -160,7 +193,7 @@ def _align_batch_context(
     mode: Literal["inner", "outer", "exact"],
 ) -> ParamRuntimeContext:
     if mode == "outer":
-        ds = context.ds.reindex({dim: labels}, fill_value=np.nan)
+        ds = context.ds.reindex({dim: labels}, fill_value=_outer_batch_reindex_fill_values(context))
     else:
         source = batch_index(context.ds, dim=dim)
         if not labels_selectable_from(source, labels=labels):
@@ -169,7 +202,10 @@ def _align_batch_context(
             ds = context.ds.sel({dim: labels})
         except KeyError as exc:
             raise _batch_selectability_error(dim=dim, mode=mode) from exc
-    spec_coord = ds.coords[context.spec.name]
+    spec_coord = _retain_declared_parameter_coordinates(
+        ds.coords[context.spec.name],
+        reference=context.spec.coord,
+    )
     valid = _align_valid_mask_for_batch(context, dim=dim, labels=labels, mode=mode)
     batch_coord = ds.coords[dim] if dim in ds.coords else xr.DataArray(labels, dims=[dim], name=dim)
     return replace(context, ds=ds, spec=replace(context.spec, coord=spec_coord), valid_mask=valid, batch_coords={dim: batch_coord})
@@ -219,6 +255,13 @@ def ensure_shared_topology(contexts: Sequence[ParamRuntimeContext]) -> None:
             raise ValueError("synchronize_param: all inputs must share the same batch_dims.")
 
 
+def ensure_shared_param_kind(contexts: Sequence[ParamRuntimeContext]) -> None:
+    first = contexts[0].param_kind
+    for ctx in contexts[1:]:
+        if ctx.param_kind != first:
+            raise ValueError("synchronize_param: all inputs must share the same param coordinate kind.")
+
+
 def _nearest_tolerance_mask(
     context: ParamRuntimeContext,
     *,
@@ -227,7 +270,13 @@ def _nearest_tolerance_mask(
     tol: float,
 ) -> xr.DataArray:
     assert_query_dim_safe(context.ds, sequence_dim=context.sequence_dim, query_dim=query_dim, owner="synchronize_param")
-    q = normalize_query_grid(grid, query_dim=query_dim, batch_dims=context.batch_dims, batch_coords=context.batch_coords)
+    q = normalize_query_grid(
+        grid,
+        query_dim=query_dim,
+        batch_dims=context.batch_dims,
+        batch_coords=context.batch_coords,
+        param_kind=context.param_kind,
+    )
     pmap = build_param_map(
         param=context.spec.coord,
         query=q.values,
@@ -235,6 +284,7 @@ def _nearest_tolerance_mask(
         query_dim=q.query_dim,
         valid_mask=context.valid_mask,
         options=ParamMapOptions(method="nearest"),
+        param_kind=context.param_kind,
     )
     nearest = gather_along_sequence(
         context.spec.coord,
@@ -243,7 +293,7 @@ def _nearest_tolerance_mask(
         query_dim=q.query_dim,
         owner="synchronize_param",
     )
-    mask = pmap.valid & (xr.apply_ufunc(np.abs, nearest - q.values, dask="allowed") <= tol)
+    mask = _within_tolerance(nearest=nearest, query=q.values, valid=pmap.valid, tol=tol, param_kind=context.param_kind)
     if q.query_dim != context.sequence_dim and q.query_dim in mask.dims:
         out = mask
         if context.sequence_dim in out.coords and context.sequence_dim not in out.dims:
@@ -252,12 +302,67 @@ def _nearest_tolerance_mask(
     return mask
 
 
+def _within_tolerance(
+    *,
+    nearest: xr.DataArray,
+    query: xr.DataArray,
+    valid: xr.DataArray,
+    tol: float,
+    param_kind: str,
+) -> xr.DataArray:
+    if param_kind == "datetime64":
+        delta = (nearest - query).astype("timedelta64[ns]").astype("int64")
+        safe_delta = delta.where(valid, other=0)
+        return valid & (xr.apply_ufunc(np.abs, safe_delta, dask="allowed") <= int(tol))
+    if np.dtype(nearest.dtype).kind in {"i", "u"} or np.dtype(query.dtype).kind in {"i", "u"}:
+        return xr.apply_ufunc(
+            _numeric_within_tolerance_block,
+            nearest,
+            query,
+            valid,
+            kwargs={"tol": tol},
+            vectorize=False,
+            dask="parallelized",
+            output_dtypes=[bool],
+        )
+    return valid & (xr.apply_ufunc(np.abs, nearest - query, dask="allowed") <= float(tol))
+
+
+def _numeric_within_tolerance_block(
+    nearest: np.ndarray,
+    query: np.ndarray,
+    valid: np.ndarray,
+    *,
+    tol: float,
+) -> np.ndarray:
+    nearest_values, query_values, valid_values = np.broadcast_arrays(nearest, query, valid)
+    nearest_integral = nearest_values.dtype.kind in {"i", "u"}
+    query_integral = query_values.dtype.kind in {"i", "u"}
+    mixed_float_integer = nearest_integral != query_integral
+    out = np.zeros(valid_values.shape, dtype=bool)
+    for index in np.ndindex(valid_values.shape):
+        if not bool(valid_values[index]):
+            continue
+        left = np.asarray(nearest_values[index]).reshape(()).item()
+        right = np.asarray(query_values[index]).reshape(()).item()
+        integer_value = left if nearest_integral else right
+        if mixed_float_integer and not is_float64_exact_integer(integer_value):
+            raise ValueError(
+                "synchronize_param: mixed integer/float tolerance comparison would convert "
+                f"integer value {int(integer_value)!r} lossily to float64. "
+                "Use matching integer parameter/grid dtypes or rescale the parameter domain."
+            )
+        if np.isfinite(left) and np.isfinite(right):
+            out[index] = abs(left - right) <= tol
+    return out
+
+
 def _mask_numeric_sequence(
     ds: xr.Dataset,
     *,
     sequence_dim: str,
     mask: xr.DataArray,
-    fill_value: float | int,
+    fill_value: float,
 ) -> xr.Dataset:
     out = ds.copy(deep=False)
     updates: dict[str, xr.DataArray] = {}
@@ -281,19 +386,19 @@ def _apply_fill_metadata(
         batch_dims=context.batch_dims,
         sequence_size_coord=context.sequence_size_coord,
     )
-    return out
+    return mark_generated_size_coord(out, name=context.sequence_size_coord)
 
 
 def apply_fill(
-    out: "AnalysisObject",
+    out: AnalysisObject,
     *,
     context: ParamRuntimeContext,
     grid: xr.DataArray,
     tol: float,
-    fill_value: float | int,
+    fill_value: float,
     eval_opts: ParamEvalOptions,
     validate: bool,
-) -> "AnalysisObject":
+) -> AnalysisObject:
     """Apply tolerance-masked nearest fill and finalize structural metadata.
 
     Parameters
@@ -323,7 +428,12 @@ def apply_fill(
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
     mask = _nearest_tolerance_mask(context, grid=grid, query_dim=eval_opts.query_dim, tol=tol)
-    ds = _mask_numeric_sequence(out.unsafe_data, sequence_dim=context.sequence_dim, mask=mask, fill_value=fill_value)
+    ds = _mask_numeric_sequence(
+        analysis_object_dataset(out),
+        sequence_dim=context.sequence_dim,
+        mask=mask,
+        fill_value=fill_value,
+    )
     ds = _apply_fill_metadata(ds, context=context, mask=mask)
     return finalize_structural(out, ds, validate=validate)
 
@@ -331,6 +441,7 @@ def apply_fill(
 __all__ = [
     "align_contexts_batch",
     "apply_fill",
+    "ensure_shared_param_kind",
     "ensure_shared_topology",
     "eval_options_from_sync",
     "grid_from_join",

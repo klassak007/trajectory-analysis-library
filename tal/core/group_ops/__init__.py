@@ -1,7 +1,12 @@
-from .accessor import GroupAccessor, GroupedView
+from .accessor import BatchGroupedView, GroupAccessor, GroupedView
 from .foundation import resolve_grouping_foundation_context
-from .grouped_types import GroupByOptions, GroupMaterializeOptions
+from .grouped_types import (
+    BatchGroupReduceOptions,
+    GroupByOptions,
+    GroupMaterializeOptions,
+)
 from .types import (
+    BatchGroupingFoundationContext,
     GroupingBinSpec,
     GroupingFoundationContext,
     GroupingFoundationOptions,
@@ -11,6 +16,9 @@ from .types import (
 )
 
 __all__ = [
+    "BatchGroupReduceOptions",
+    "BatchGroupedView",
+    "BatchGroupingFoundationContext",
     "GroupAccessor",
     "GroupByOptions",
     "GroupMaterializeOptions",

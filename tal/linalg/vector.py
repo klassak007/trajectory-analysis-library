@@ -77,7 +77,7 @@ class Vector(Array):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> left.dot(right).unsafe_data["datavar"].to_numpy().tolist()
+        >>> left.dot(right).as_dataset()["datavar"].to_numpy().tolist()
         [32.0]
         """
         from .ops import dot
@@ -116,7 +116,7 @@ class Vector(Array):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> vec.norm().unsafe_data["datavar"].to_numpy().tolist()
+        >>> vec.norm().as_dataset()["datavar"].to_numpy().tolist()
         [5.0]
         """
         from .ops import norm

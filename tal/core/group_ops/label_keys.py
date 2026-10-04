@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
-_NAN_LABEL_KEY = object()
+_MISSING_LABEL_KEY = object()
 
 
 def canonical_group_label_key(label: object) -> object:
@@ -22,8 +23,14 @@ def canonical_group_label_key(label: object) -> object:
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    if isinstance(label, (float, np.floating)) and bool(np.isnan(label)):
-        return _NAN_LABEL_KEY
+    if type(label) is tuple:
+        return tuple(canonical_group_label_key(value) for value in label)
+    try:
+        missing = pd.isna(label)
+    except (TypeError, ValueError):
+        return label
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return _MISSING_LABEL_KEY
     return label
 
 

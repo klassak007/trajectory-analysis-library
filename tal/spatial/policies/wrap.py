@@ -8,7 +8,7 @@ def wrap_as(cls: type, ds, *, validate: bool):
 
 
 def wrap_like(instance, ds, *, validate: bool):
-    return wrap_as(instance.__class__, ds, validate=validate)
+    return instance._rewrap_dataset(ds, validate=validate)
 
 
 __all__ = ["wrap_as", "wrap_like"]

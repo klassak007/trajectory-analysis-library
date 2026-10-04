@@ -7,6 +7,7 @@ from functools import partial
 import numpy as np
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core import AnalysisObject, read_components
 from tal.core.orchestration.alignment import align_exact_for_plan, non_core_dims
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
@@ -196,7 +197,7 @@ def _build_vector6_base_dataset(
         **kwargs,
     )
     try:
-        return clear_component_registry(base.unsafe_data, owner=owner)
+        return clear_component_registry(analysis_object_dataset(base), owner=owner)
     except ValueError as exc:
         raise ValueError(f"{owner}: failed to clear component registry for vector6 layout: {exc}") from exc
 
@@ -228,7 +229,7 @@ def _build_vector3_base_dataset(
         **kwargs,
     )
     try:
-        return clear_component_registry(base.unsafe_data, owner=owner)
+        return clear_component_registry(analysis_object_dataset(base), owner=owner)
     except ValueError as exc:
         raise ValueError(f"{owner}: failed to clear component registry for vec3 layout: {exc}") from exc
 

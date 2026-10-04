@@ -7,6 +7,11 @@ from typing import ClassVar, Literal, Self
 import xarray as xr
 
 from .analysis_object import AnalysisObject
+from .dataset_ownership import (
+    analysis_object_dataset,
+    couple_dataset_resource,
+    metadata_isolated_dataset,
+)
 
 LifecyclePhase = Literal["init", "from_validated", "from_unvalidated"]
 
@@ -19,8 +24,9 @@ class TypedLifecycleContext:
     ----------
     owner : str
         Owner string used by hooks when raising deterministic diagnostics.
-    phase : {'init', 'from_validated', 'from_unvalidated'}
-        Lifecycle path currently invoking the hook.
+    phase : str
+        Lifecycle path currently invoking the hook: ``"init"``,
+        ``"from_validated"``, or ``"from_unvalidated"``.
     options : object | None, optional
         Constructor-specific options supplied by a subclass.
 
@@ -87,6 +93,17 @@ def default_coerce_source(value: object, ctx: TypedLifecycleContext) -> Analysis
     from .orchestration.inputs import coerce_analysis_object_input
 
     return coerce_analysis_object_input(value, owner=ctx.owner)
+
+
+def _prepare_typed_promotion(source: AnalysisObject, *, owner: str) -> xr.Dataset:
+    candidate = AnalysisObject._prepared_ingress_dataset(
+        analysis_object_dataset(source)
+    )
+    return metadata_isolated_dataset(candidate, owner=owner)
+
+
+def _finish_typed_promotion(source: AnalysisObject, target: xr.Dataset) -> None:
+    couple_dataset_resource(analysis_object_dataset(source), target)
 
 
 def identity_init_options(ds: xr.Dataset, ctx: TypedLifecycleContext) -> xr.Dataset:
@@ -219,6 +236,8 @@ class TypedLifecycleSpec:
         Hook that adds or normalizes subtype metadata.
     enforce : EnforceHook, optional
         Hook that checks subtype invariants.
+    enforce_prepared : EnforceHook | None, optional
+        Copy-neutral invariant hook for an already committed core schema.
 
     Raises
     ------
@@ -248,6 +267,7 @@ class TypedLifecycleSpec:
     apply_init_options: DatasetHook = identity_init_options
     normalize: DatasetHook = identity_normalize
     enforce: EnforceHook = no_op_enforce
+    enforce_prepared: EnforceHook | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.type_name, field="type_name")
@@ -256,6 +276,8 @@ class TypedLifecycleSpec:
         _require_callable(self.apply_init_options, field="apply_init_options")
         _require_callable(self.normalize, field="normalize")
         _require_callable(self.enforce, field="enforce")
+        if self.enforce_prepared is not None:
+            _require_callable(self.enforce_prepared, field="enforce_prepared")
 
 
 class TypedAnalysisObject(AnalysisObject):
@@ -310,7 +332,7 @@ class TypedAnalysisObject(AnalysisObject):
     ...     validate=True,
     ... )
     >>> temp = Temperature(base)
-    >>> temp.unsafe_data.attrs["tal"]["ext"]["thermal"]["kind"]
+    >>> temp.as_dataset().attrs["tal"]["ext"]["thermal"]["kind"]
     'temperature'
     """
 
@@ -341,7 +363,7 @@ class TypedAnalysisObject(AnalysisObject):
         ...         owner_prefix="thermal.Temperature",
         ...     )
         >>> temp = Temperature(xr.Dataset({"celsius": ("sample", [20.0])}, coords={"sample": [0]}))
-        >>> temp.unsafe_data.attrs["tal"]["version"]
+        >>> temp.as_dataset().attrs["tal"]["version"]
         1
         """
         self._init_typed(data, options=None)
@@ -388,14 +410,17 @@ class TypedAnalysisObject(AnalysisObject):
         source = spec.coerce_source(data, ctx)
         if not isinstance(source, AnalysisObject):
             raise TypeError(f"{ctx.owner}: lifecycle source coercer returned {type(source).__name__}; expected AnalysisObject.")
-        AnalysisObject.__init__(self, source.unsafe_data)
-        self._bind_from_hook(spec.apply_init_options(self.unsafe_data, ctx), ctx=ctx, hook="apply_init_options")
+        self._bind_dataset(_prepare_typed_promotion(source, owner=ctx.owner))
+        initialized = spec.apply_init_options(analysis_object_dataset(self), ctx)
+        self._bind_from_hook(initialized, ctx=ctx, hook="apply_init_options")
         self._run_typed_lifecycle(ctx)
+        _finish_typed_promotion(source, analysis_object_dataset(self))
 
     def _run_typed_lifecycle(self, ctx: TypedLifecycleContext) -> None:
         spec = self.__class__._lifecycle_spec()
-        self._bind_from_hook(spec.normalize(self.unsafe_data, ctx), ctx=ctx, hook="normalize")
-        spec.enforce(self.unsafe_data, ctx)
+        source = analysis_object_dataset(self)
+        self._bind_from_hook(spec.normalize(source, ctx), ctx=ctx, hook="normalize")
+        spec.enforce(analysis_object_dataset(self), ctx)
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> Self:
@@ -433,7 +458,7 @@ class TypedAnalysisObject(AnalysisObject):
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> isinstance(Temperature._from_validated(base.unsafe_data), Temperature)
+        >>> isinstance(Temperature._from_validated(base.as_dataset()), Temperature)
         True
         """
         obj = super()._from_validated(ds)
@@ -441,7 +466,7 @@ class TypedAnalysisObject(AnalysisObject):
         return obj
 
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> Self:
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> Self:
         """Bind a dataset without core schema validation and run lifecycle hooks.
 
         Parameters
@@ -449,6 +474,8 @@ class TypedAnalysisObject(AnalysisObject):
         ds : xr.Dataset | xr.DataArray
             Dataset or data array produced by an owner that intentionally chose
             the unvalidated rewrap path.
+        schema_prepared : bool, optional
+            Whether the trusted caller already completed schema preparation.
 
         Returns
         -------
@@ -473,18 +500,36 @@ class TypedAnalysisObject(AnalysisObject):
         >>> isinstance(Temperature._from_unvalidated(ds), Temperature)
         True
         """
-        obj = super()._from_unvalidated(ds)
+        obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._run_typed_lifecycle(cls._lifecycle_context(phase="from_unvalidated"))
+        return obj
+
+    @classmethod
+    def _from_composite_committed(
+        cls,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+    ) -> Self:
+        """Bind an already normalized composite and enforce typed invariants."""
+        if validate:
+            obj = super()._from_validated(ds)
+        else:
+            obj = super()._from_unvalidated(ds, schema_prepared=True)
+        ctx = cls._lifecycle_context(phase="from_unvalidated")
+        spec = cls._lifecycle_spec()
+        enforce = spec.enforce_prepared or spec.enforce
+        enforce(analysis_object_dataset(obj), ctx)
         return obj
 
     def _normalize_metadata(self, *, owner: str) -> None:
         ctx = TypedLifecycleContext(owner=owner, phase="init", options=None)
         spec = self.__class__._lifecycle_spec()
-        self._bind_from_hook(spec.normalize(self.unsafe_data, ctx), ctx=ctx, hook="normalize")
+        self._bind_from_hook(spec.normalize(analysis_object_dataset(self), ctx), ctx=ctx, hook="normalize")
 
     def _enforce_invariants(self, *, owner: str) -> None:
         ctx = TypedLifecycleContext(owner=owner, phase="init", options=None)
-        self.__class__._lifecycle_spec().enforce(self.unsafe_data, ctx)
+        self.__class__._lifecycle_spec().enforce(analysis_object_dataset(self), ctx)
 
 
 __all__ = [

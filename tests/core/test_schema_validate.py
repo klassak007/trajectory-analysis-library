@@ -1,10 +1,34 @@
+from collections import namedtuple
+from collections.abc import Callable
 from copy import deepcopy
+from types import MappingProxyType
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
 from tal.core import SchemaError, merge_schema, set_roles, validate_schema
+from tal.core.schema_validate import validate_schema_structure
+
+
+_ExtensionPair = namedtuple("_ExtensionPair", ("left", "right"))
+
+
+class _ExtensionValues(list[object]):
+    pass
+
+
+class _MutableSchemaKey:
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self.notes: list[str] = []
+
+    def __hash__(self) -> int:
+        return hash(self.label)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _MutableSchemaKey) and self.label == other.label
 
 
 def _ds_sample_axis() -> xr.Dataset:
@@ -27,6 +51,32 @@ def _valid_schema_payload() -> dict:
     }
 
 
+def _batched_validity_ds(size: object) -> xr.Dataset:
+    ds = xr.Dataset(
+        {"value": (("trial", "sample"), np.arange(6.0).reshape(2, 3))},
+        coords={
+            "trial": ["a", "b"],
+            "sample": [0, 1, 2],
+            "n_valid": ("trial", size),
+        },
+    )
+    ds.attrs["tal"] = {
+        "version": 1,
+        "core": {
+            "roles": {
+                "sequence_dim": "sample",
+                "batch_dims": ["trial"],
+                "core_dims": [],
+            },
+            "validity": {
+                "sequence_size_coord": "n_valid",
+                "layout": "left_packed",
+            },
+        },
+    }
+    return ds
+
+
 class _HostileKey:
     def __hash__(self) -> int:
         return 1
@@ -39,6 +89,31 @@ class _HostileKey:
 
     def __str__(self) -> str:
         raise RuntimeError("str exploded")
+
+
+class _HostileTypeHash(type):
+    def __hash__(cls) -> int:
+        raise RuntimeError("type hash exploded")
+
+
+class _HostileTypedKey(metaclass=_HostileTypeHash):
+    def __hash__(self) -> int:
+        return 1
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+
+class _MutableName(str):
+    notes: list[str]
+
+    def __new__(cls, value: str) -> "_MutableName":
+        name = super().__new__(cls, value)
+        name.notes = []
+        return name
+
+    def __str__(self) -> "_MutableName":
+        return self
 
 
 def _assert_schema_error(
@@ -216,7 +291,18 @@ def test_schema_validate_flow_009_validity_mixed_key_types_raise_schema_error() 
     assert err.value.actual["key_type"] == "int"
 
 
-def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runtime() -> None:
+@pytest.mark.parametrize(
+    ("key", "path"),
+    (
+        (_HostileKey(), "tal.core.<_HostileKey>"),
+        (_HostileTypedKey(), "tal.core.<_HostileTypedKey>"),
+    ),
+    ids=("hostile-value", "hostile-type-hash"),
+)
+def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runtime(
+    key: object,
+    path: str,
+) -> None:
     """ID: SCHEMA_VALIDATE_FLOW_010_hostile_core_key_raises_schema_error_not_runtime."""
     ds = _ds_sample_axis()
     ds.attrs["tal"] = {
@@ -227,7 +313,7 @@ def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runti
                 "batch_dims": [],
                 "core_dims": ["axis"],
             },
-            _HostileKey(): "bad",
+            key: "bad",
         },
     }
     with pytest.raises(SchemaError) as err:
@@ -235,10 +321,10 @@ def test_schema_validate_flow_010_hostile_core_key_raises_schema_error_not_runti
     _assert_schema_error(
         err,
         code="schema.core.unknown_key",
-        path="tal.core.<_HostileKey>",
+        path=path,
     )
     assert isinstance(err.value.actual, dict)
-    assert err.value.actual["key_type"] == "_HostileKey"
+    assert err.value.actual["key_type"] == type(key).__name__
 
 
 def test_schema_validate_flow_011_hostile_roles_key_raises_schema_error_not_runtime() -> None:
@@ -375,6 +461,189 @@ def test_schema_validate_flow_016_hostile_ext_namespace_key_raises_schema_error(
     with pytest.raises(SchemaError) as err:
         validate_schema(ds)
     _assert_schema_error(err, code="schema.ext.namespace.invalid", path="tal.ext.<_HostileKey>")
+
+
+def test_schema_validate_flow_017_validity_values_precede_extension_envelope() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_017_validity_values_precede_extension_envelope."""
+    ds = _batched_validity_ds([2, 4])
+    ds.attrs["tal"]["ext"] = {1: {}}
+
+    with pytest.raises(SchemaError) as err:
+        validate_schema(ds)
+
+    _assert_schema_error(
+        err,
+        code="schema.validity.sequence_size_coord.values.invalid",
+        path="tal.core.validity.sequence_size_coord",
+    )
+
+
+@pytest.mark.parametrize("validator", [validate_schema_structure, validate_schema])
+def test_schema_validate_flow_018_categorical_validity_dtype_raises_schema_error(
+    validator: Callable[[xr.Dataset], object],
+) -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_018_categorical_validity_dtype_raises_schema_error."""
+    ds = _batched_validity_ds(pd.Categorical([2, 3]))
+
+    with pytest.raises(SchemaError) as err:
+        validator(ds)
+
+    _assert_schema_error(
+        err,
+        code="schema.validity.sequence_size_coord.values.invalid",
+        path="tal.core.validity.sequence_size_coord",
+    )
+
+
+@pytest.mark.parametrize("validator", [validate_schema_structure, validate_schema])
+def test_schema_validate_flow_019_categorical_param_dtype_raises_schema_error(
+    validator: Callable[[xr.Dataset], object],
+) -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_019_categorical_param_dtype_raises_schema_error."""
+    ds = _ds_sample_axis().assign_coords(
+        category_time=("sample", pd.Categorical([1, 2, 3, 4]))
+    )
+    schema = _valid_schema_payload()
+    schema["core"]["param_coord"] = {"name": "category_time"}
+    ds.attrs["tal"] = schema
+
+    with pytest.raises(SchemaError) as err:
+        validator(ds)
+
+    _assert_schema_error(
+        err,
+        code="schema.param_coord.dtype.invalid",
+        path="tal.core.param_coord.name",
+    )
+
+
+def test_schema_validate_flow_020_structure_projection_does_not_expose_schema_alias() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_020_structure_projection_does_not_expose_schema_alias."""
+    ds = _batched_validity_ds([2, 3])
+    original_name = _MutableName("n_valid")
+    ds.attrs["tal"]["core"]["validity"]["sequence_size_coord"] = original_name
+    before = deepcopy(ds.attrs["tal"])
+
+    size_name = validate_schema_structure(ds)
+
+    assert size_name == "n_valid"
+    assert type(size_name) is str
+    assert size_name is not original_name
+    assert not hasattr(size_name, "notes")
+    assert original_name.notes == []
+    assert ds.attrs["tal"] == before
+
+
+@pytest.mark.parametrize(
+    "extension",
+    (_ExtensionPair("left", "right"), _ExtensionValues(["left", "right"])),
+    ids=("named-tuple", "list-subclass"),
+)
+def test_schema_validate_flow_021_extension_container_type_is_preserved(
+    extension: object,
+) -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_021_extension_container_type_is_preserved."""
+    ds = _ds_sample_axis()
+    ds.attrs["tal"] = _valid_schema_payload()
+    ds.attrs["tal"]["ext"] = {"demo": extension}
+
+    out = validate_schema(ds)
+    actual = out.attrs["tal"]["ext"]["demo"]
+
+    assert type(actual) is type(extension)
+    assert actual == extension
+    assert actual is not extension
+
+
+def test_schema_validate_flow_022_plain_sequences_normalize_nested_mappings() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_022_plain_sequences_normalize_nested_mappings."""
+    nested = MappingProxyType({"enabled": True})
+    ds = _ds_sample_axis()
+    ds.attrs["tal"] = _valid_schema_payload()
+    ds.attrs["tal"]["ext"] = {"demo": [nested, (nested,)]}
+
+    out = validate_schema(ds)
+    actual = out.attrs["tal"]["ext"]["demo"]
+
+    assert type(actual) is list
+    assert type(actual[0]) is dict
+    assert type(actual[1]) is tuple
+    assert type(actual[1][0]) is dict
+    assert actual == [{"enabled": True}, ({"enabled": True},)]
+
+
+def _extension_alias_graph() -> tuple[dict[str, object], _MutableSchemaKey, list[str]]:
+    key = _MutableSchemaKey("entry")
+    items = ["value"]
+    shared = MappingProxyType({key: MappingProxyType({"items": items})})
+    graph = {"first": shared, "again": [shared, (shared,)]}
+    return graph, key, items
+
+
+def _assert_owned_extension_graph(
+    actual: dict[str, object],
+    source_key: _MutableSchemaKey,
+    source_items: list[str],
+) -> None:
+    first = actual["first"]
+    again = actual["again"]
+    assert isinstance(first, dict)
+    assert isinstance(again, list)
+    assert first is again[0]
+    assert isinstance(again[1], tuple)
+    assert first is again[1][0]
+    copied_key = next(iter(first))
+    assert isinstance(copied_key, _MutableSchemaKey)
+    assert copied_key is not source_key
+    source_key.notes.append("caller-key-mutation")
+    source_items.append("caller-value-mutation")
+    assert copied_key.notes == []
+    assert first[copied_key]["items"] == ["value"]
+
+
+def test_schema_validate_flow_023_extension_graph_owns_keys_and_aliases() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_023_extension_graph_owns_keys_and_aliases."""
+    graph, key, items = _extension_alias_graph()
+    ds = _ds_sample_axis()
+    ds.attrs["tal"] = _valid_schema_payload()
+    ds.attrs["tal"]["ext"] = {"demo": graph}
+
+    out = validate_schema(ds)
+
+    _assert_owned_extension_graph(out.attrs["tal"]["ext"]["demo"], key, items)
+
+
+def test_schema_validate_flow_024_core_extension_alias_is_value_only() -> None:
+    """ID: SCHEMA_VALIDATE_FLOW_024_core_extension_alias_is_value_only."""
+    shared_dims = ["axis"]
+    ds = _ds_sample_axis()
+    ds.attrs["tal"] = _valid_schema_payload()
+    ds.attrs["tal"]["core"]["roles"]["core_dims"] = shared_dims
+    ds.attrs["tal"]["ext"] = {"demo": {"dims": shared_dims}}
+
+    out = validate_schema(ds)
+    tal = out.attrs["tal"]
+
+    assert type(tal["core"]["roles"]["core_dims"]) is list
+    assert tal["core"]["roles"]["core_dims"] == ["axis"]
+    assert tal["ext"]["demo"]["dims"] == ["axis"]
+    shared_dims.append("caller-mutation")
+    assert tal["core"]["roles"]["core_dims"] == ["axis"]
+    assert tal["ext"]["demo"]["dims"] == ["axis"]
+
+
+@pytest.mark.parametrize("validate", (False, True), ids=("unvalidated", "validated"))
+def test_schema_write_merge_010_extension_graph_owns_keys_and_aliases(
+    validate: bool,
+) -> None:
+    """ID: SCHEMA_WRITE_MERGE_010_extension_graph_owns_keys_and_aliases."""
+    graph, key, items = _extension_alias_graph()
+    ds = _ds_sample_axis()
+    ds.attrs["tal"] = _valid_schema_payload()
+
+    out = merge_schema(ds, {"ext": {"demo": graph}}, validate=validate)
+
+    _assert_owned_extension_graph(out.attrs["tal"]["ext"]["demo"], key, items)
 
 
 def test_nolegacy_001_legacy_role_keys_rejected() -> None:

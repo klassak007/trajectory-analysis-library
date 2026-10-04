@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xarray as xr
 
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment import align_exact_for_plan
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.context import resolve_semantic_topology_from_dataset
@@ -27,7 +28,7 @@ def _pair_operand(
     what: str,
 ) -> TopologyOperand:
     var_name = "__tal_alignment_operand__"
-    ds = value.unsafe_data.copy()
+    ds = analysis_object_dataset(value).copy()
     if ds.data_vars:
         ds = ds.drop_vars(tuple(ds.data_vars), errors="ignore")
     ds[var_name] = data

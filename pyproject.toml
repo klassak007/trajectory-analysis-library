@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tal"
-version = "0.1.0"
-description = "Xarray-native trajectory analysis with semantic roles, alignment, spatial frames, events, catalogs, and I/O."
+version = "0.2.0"
+description = "Xarray-native trajectory analysis with semantic roles, alignment, spatial frames, events, and I/O."
 readme = "README.md"
 authors = [
     { name = "Kyle Lassak" },
@@ -54,6 +54,7 @@ viz = [
 ]
 ros = ["rosbags"]
 netcdf = ["netCDF4>=1.7"]
+numba = ["numba>=0.65.1"]
 notebooks = [
     "ipykernel>=6.29",
     "jupyterlab>=4.3",
@@ -70,15 +71,46 @@ docs = [
     "sphinx-autodoc-typehints>=3.0,<4.0",
 ]
 test = [
+    "import-linter>=2.14",
     "pytest>=8.4",
+    "ruff>=0.16.5",
     "tal[docs,frames,viz]",
 ]
 dev = [
     "build>=1.4",
+    "psutil>=5.9",
     "tal[notebooks,test]",
 ]
 full = ["tal[frames,netcdf,notebooks,ros,viz]"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "phase_guard(owner): temporary architecture guard owned by an active contract or slice",
+]
+
 # Packaging: only ship the `tal` Python package (exclude non-package top-level dirs like `contracts/`).
 [tool.setuptools.packages.find]
-include = ["tal*"]
+include = ["tal", "tal.*"]
+
+[tool.importlinter]
+root_packages = ["tal", "tal_extensions"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "TAL is independent of extensions"
+type = "forbidden"
+source_modules = ["tal"]
+forbidden_modules = ["tal_extensions", "pyproj", "astropy", "spiceypy"]
+
+[[tool.importlinter.contracts]]
+name = "Geo is independent of astro"
+type = "forbidden"
+source_modules = ["tal_extensions.geo"]
+forbidden_modules = ["tal_extensions.astro", "astropy", "spiceypy"]
+
+[[tool.importlinter.contracts]]
+name = "Domain kernels are independent of schema and xarray"
+type = "forbidden"
+source_modules = ["tal_extensions.geo.kernels"]
+forbidden_modules = ["tal", "xarray", "pyproj"]

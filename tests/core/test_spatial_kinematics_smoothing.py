@@ -41,7 +41,7 @@ def _temporal_vector3_dataset(*, var_name: str, core_dim: str, values: np.ndarra
         param_coord="time_s",
         validate=True,
     )
-    return ao.unsafe_data.copy(deep=True)
+    return ao.as_dataset(copy="none").copy(deep=True)
 
 
 def _linear_velocity(values: np.ndarray, param: np.ndarray) -> LinearVelocity:
@@ -63,9 +63,9 @@ def test_spatial_core_144_kinematics_smoothing_preserves_frame_kind_rep_truthful
     )
     out = linear.smooth(validate=True)
     assert isinstance(out, LinearVelocity)
-    assert get_frames(out.unsafe_data) == ("world", "body")
-    assert get_kinematics_kind(out.unsafe_data, owner="test") == "linear_velocity"
-    assert get_linear_velocity_rep(out.unsafe_data, owner="test") == "cart"
+    assert get_frames(out.as_dataset(copy="none")) == ("world", "body")
+    assert get_kinematics_kind(out.as_dataset(copy="none"), owner="test") == "linear_velocity"
+    assert get_linear_velocity_rep(out.as_dataset(copy="none"), owner="test") == "cart"
 
     pos = Position(
         _temporal_vector3_dataset(
@@ -76,7 +76,7 @@ def test_spatial_core_144_kinematics_smoothing_preserves_frame_kind_rep_truthful
         )
     ).as_delta(validate=True)
     smoothed_pos = pos.smooth(validate=True)
-    assert get_position_intent(smoothed_pos.unsafe_data, owner="test") == "delta"
+    assert get_position_intent(smoothed_pos.as_dataset(copy="none"), owner="test") == "delta"
 
 
 def test_spatial_core_145_kinematics_smoothing_uses_specified_param_coord_as_primary_domain_key() -> None:
@@ -93,7 +93,7 @@ def test_spatial_core_145_kinematics_smoothing_uses_specified_param_coord_as_pri
     out_default = linear.smooth(on="time_s", opts=opts, validate=True)
     out_alt = linear.smooth(on="alt_time", opts=opts, validate=True)
     assert not np.allclose(
-        out_default.unsafe_data["linear_velocity"].values, out_alt.unsafe_data["linear_velocity"].values
+        out_default.as_dataset(copy="none")["linear_velocity"].values, out_alt.as_dataset(copy="none")["linear_velocity"].values
     )
 
 
@@ -109,7 +109,7 @@ def test_spatial_core_146_kinematics_local_derivative_optin_present_without_defa
         opts=KinematicsDerivativeOptions(method="local_poly", edge_mode="partial_renorm", order=1, window=5),
         validate=True,
     )
-    np.testing.assert_allclose(default.unsafe_data["linear_velocity"].values, explicit.unsafe_data["linear_velocity"].values)
+    np.testing.assert_allclose(default.as_dataset(copy="none")["linear_velocity"].values, explicit.as_dataset(copy="none")["linear_velocity"].values)
     assert isinstance(local_poly, LinearAcceleration)
 
 
@@ -124,8 +124,8 @@ def test_spatial_core_147_kinematics_local_stencil_methods_support_nonuniform_pa
         opts=KinematicsDerivativeOptions(method="local_poly", edge_mode="partial_renorm", order=1, window=5),
         validate=True,
     )
-    assert np.isfinite(smoothed.unsafe_data["linear_velocity"].values[:4]).all()
-    assert np.isfinite(derived.unsafe_data["linear_velocity"].values[:4]).all()
+    assert np.isfinite(smoothed.as_dataset(copy="none")["linear_velocity"].values[:4]).all()
+    assert np.isfinite(derived.as_dataset(copy="none")["linear_velocity"].values[:4]).all()
 
 
 def test_spatial_core_152_kinematics_smoothing_gaussian_uses_param_distance_weighting() -> None:
@@ -145,8 +145,8 @@ def test_spatial_core_152_kinematics_smoothing_gaussian_uses_param_distance_weig
         opts=KinematicsSmoothingOptions(method="moving_average", window=5),
         validate=True,
     )
-    center_gaussian = float(gaussian.unsafe_data["linear_velocity"].isel(sample=2, linear_axis=0))
-    center_moving = float(moving.unsafe_data["linear_velocity"].isel(sample=2, linear_axis=0))
+    center_gaussian = float(gaussian.as_dataset(copy="none")["linear_velocity"].isel(sample=2, linear_axis=0))
+    center_moving = float(moving.as_dataset(copy="none")["linear_velocity"].isel(sample=2, linear_axis=0))
     assert center_gaussian < 1.0
     assert center_moving > 15.0
 
@@ -164,8 +164,8 @@ def test_spatial_core_153_kinematics_smoothing_gaussian_respects_selected_on_dom
     opts = KinematicsSmoothingOptions(method="gaussian", window=5, sigma=1.0)
     out_default = linear.smooth(on="time_s", opts=opts, validate=True)
     out_alt = linear.smooth(on="alt_time", opts=opts, validate=True)
-    center_default = float(out_default.unsafe_data["linear_velocity"].isel(sample=2, linear_axis=0))
-    center_alt = float(out_alt.unsafe_data["linear_velocity"].isel(sample=2, linear_axis=0))
+    center_default = float(out_default.as_dataset(copy="none")["linear_velocity"].isel(sample=2, linear_axis=0))
+    center_alt = float(out_alt.as_dataset(copy="none")["linear_velocity"].isel(sample=2, linear_axis=0))
     assert center_default > 15.0
     assert center_alt < 1.0
 
@@ -201,9 +201,9 @@ def test_spatial_core_148_kinematics_smoothing_validity_and_sequence_size_metada
         validate=True,
     )
     out = LinearVelocity(ao).smooth(validate=True)
-    assert read_param_coord_name(out.unsafe_data) == "time_s"
-    assert read_sequence_size_coord_name(out.unsafe_data) == "sample_size"
-    assert np.isnan(out.unsafe_data["linear_velocity"].sel(trial="t1").isel(sample=3)).all()
+    assert read_param_coord_name(out.as_dataset(copy="none")) == "time_s"
+    assert read_sequence_size_coord_name(out.as_dataset(copy="none")) == "sample_size"
+    assert np.isnan(out.as_dataset(copy="none")["linear_velocity"].sel(trial="t1").isel(sample=3)).all()
 
 
 def test_spatial_core_149_kinematics_smoothing_dask_lazy_boundary_preserved() -> None:
@@ -219,7 +219,7 @@ def test_spatial_core_149_kinematics_smoothing_dask_lazy_boundary_preserved() ->
     )
     ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=("linear_axis",), param_coord="time_s", validate=True)
     out = LinearVelocity(ao).smooth(validate=True)
-    assert getattr(out.unsafe_data["linear_velocity"].data, "chunks", None) is not None
+    assert getattr(out.as_dataset(copy="none")["linear_velocity"].data, "chunks", None) is not None
 
 
 def test_spatial_core_150_kinematics_smoothing_batch_isolation_no_cross_batch_bleed() -> None:
@@ -240,8 +240,8 @@ def test_spatial_core_150_kinematics_smoothing_batch_isolation_no_cross_batch_bl
         ds, sequence_dim="sample", batch_dims=("trial",), core_dims=("linear_axis",), param_coord="time_s", validate=True
     )
     out = LinearVelocity(ao).smooth(validate=True)
-    row0 = out.unsafe_data["linear_velocity"].sel(trial="t0").isel(sample=1).values
-    row1 = out.unsafe_data["linear_velocity"].sel(trial="t1").isel(sample=1).values
+    row0 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t0").isel(sample=1).values
+    row1 = out.as_dataset(copy="none")["linear_velocity"].sel(trial="t1").isel(sample=1).values
     assert not np.allclose(row0, row1)
 
 
@@ -316,5 +316,5 @@ def test_spatial_hard_170_kinematics_smoothing_no_translational_transport_coupli
         np.asarray([0.0, 1.0, 2.0], dtype="float64"),
     )
     out = linear.smooth(validate=True)
-    assert set(out.unsafe_data.data_vars) == {"linear_velocity"}
-    assert out.unsafe_data["linear_velocity"].dims == linear.unsafe_data["linear_velocity"].dims
+    assert set(out.as_dataset(copy="none").data_vars) == {"linear_velocity"}
+    assert out.as_dataset(copy="none")["linear_velocity"].dims == linear.as_dataset(copy="none")["linear_velocity"].dims

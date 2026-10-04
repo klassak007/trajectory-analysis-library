@@ -92,11 +92,11 @@ def _normalize_group_key(value: object, *, owner: str) -> GroupingKeyInput | Non
         return None
     if isinstance(value, tuple):
         if len(value) != 1:
-            raise ValueError(f"{owner}: opts.group_key supports exactly one key in Slice A/B.")
+            raise ValueError(f"{owner}: opts.group_key supports exactly one key.")
         return value[0]
     if isinstance(value, list):
         if len(value) != 1:
-            raise ValueError(f"{owner}: opts.group_key supports exactly one key in Slice A/B.")
+            raise ValueError(f"{owner}: opts.group_key supports exactly one key.")
         return value[0]
     return value  # type: ignore[return-value]
 

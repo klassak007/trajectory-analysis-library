@@ -64,7 +64,7 @@ def _base_ao() -> AnalysisObject:
 
 
 def _multi_var_ao() -> AnalysisObject:
-    ds = _base_ao().unsafe_data.copy(deep=True)
+    ds = _base_ao().as_dataset(copy="none").copy(deep=True)
     ds["value_b"] = ds["value"] * -1.0
     ao = AnalysisObject._from_validated(ds)
     return define_components(
@@ -73,6 +73,52 @@ def _multi_var_ao() -> AnalysisObject:
             registry={
                 "position": ComponentSpec(core_dim="axis", labels=("x", "y"), var="value"),
                 "heading": ComponentSpec(core_dim="axis", labels=("z",), var="value_b"),
+            }
+        ),
+        validate=True,
+    )
+
+
+def _distinct_core_ao(
+    *,
+    offset: float = 0.0,
+    chunked: bool = False,
+) -> AnalysisObject:
+    linear = np.arange(6, dtype=float).reshape(2, 3) + offset
+    angular = np.arange(6, 12, dtype=float).reshape(2, 3) + offset
+    ds = xr.Dataset(
+        {
+            "linear": (("sample", "linear_axis"), linear),
+            "angular": (("sample", "angular_axis"), angular),
+        },
+        coords={
+            "sample": np.asarray([0, 1]),
+            "linear_axis": np.asarray(["x", "y", "z"], dtype=object),
+            "angular_axis": np.asarray(["x", "y", "z"], dtype=object),
+        },
+    )
+    if chunked:
+        ds = ds.chunk({"sample": 1})
+    ao = AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        core_dims=("linear_axis", "angular_axis"),
+        validate=True,
+    )
+    return define_components(
+        ao,
+        opts=ComponentRegistryOptions(
+            registry={
+                "linear": ComponentSpec(
+                    core_dim="linear_axis",
+                    labels=("x", "y", "z"),
+                    var="linear",
+                ),
+                "angular": ComponentSpec(
+                    core_dim="angular_axis",
+                    labels=("x", "y", "z"),
+                    var="angular",
+                ),
             }
         ),
         validate=True,
@@ -88,8 +134,38 @@ def _registry_options() -> ComponentRegistryOptions:
     )
 
 
+def _component_selection_ao(values: Mapping[str, float]) -> AnalysisObject:
+    ds = xr.Dataset(
+        {
+            name: (("sample", "axis"), np.asarray([[value, value + 1.0, value + 2.0]]))
+            for name, value in values.items()
+        },
+        coords={"sample": [0], "axis": ["x", "y", "z"]},
+    )
+    return AnalysisObject.from_data(
+        ds,
+        sequence_dim="sample",
+        core_dims=("axis",),
+        validate=True,
+    )
+
+
+def _component_selection_base(*, explicit_var: bool) -> AnalysisObject:
+    base = _component_selection_ao({"v": 0.0})
+    spec = ComponentSpec(
+        core_dim="axis",
+        labels=("x", "y", "z"),
+        var="v" if explicit_var else None,
+    )
+    return define_components(
+        base,
+        opts=ComponentRegistryOptions(registry={"vector": spec}),
+        validate=True,
+    )
+
+
 def _offset_component(component: AnalysisObject, *, delta: float) -> AnalysisObject:
-    ds = component.unsafe_data.copy(deep=True)
+    ds = component.as_dataset(copy="none").copy(deep=True)
     name = str(next(iter(ds.data_vars)))
     ds[name] = ds[name] + delta
     return AnalysisObject._from_unvalidated(ds)
@@ -106,7 +182,7 @@ def test_comp_backbone_core_018_extract_registry_order_and_name_subset_determini
     )
     assert list(subset.keys()) == ["heading", "position"]
     for out in subset.values():
-        assert list(out.unsafe_data.data_vars) == ["component_value"]
+        assert list(out.as_dataset(copy="none").data_vars) == ["component_value"]
 
 
 def test_comp_backbone_core_019_extract_unknown_component_name_fail_closed() -> None:
@@ -121,12 +197,12 @@ def test_comp_backbone_core_020_extract_preserves_schema_truthfulness_and_label_
     ao = _base_ao()
     extracted = extract_components(ao, opts=ComponentExtractOptions(names=("position",)))
     position = extracted["position"]
-    labels = tuple(position.unsafe_data.get_index("axis").tolist())
+    labels = tuple(position.as_dataset(copy="none").get_index("axis").tolist())
     assert labels == ("x", "y")
     assert read_components(position) == {
         "position": ComponentSpec(core_dim="axis", labels=("x", "y"), var="value")
     }
-    roles_declared, sequence_dim, batch_dims, core_dims = read_roles(position.unsafe_data)
+    roles_declared, sequence_dim, batch_dims, core_dims = read_roles(position.as_dataset(copy="none"))
     assert roles_declared is True
     assert sequence_dim == "sample"
     assert batch_dims == ("trial",)
@@ -141,7 +217,7 @@ def test_comp_backbone_core_026_extract_output_var_preserves_component_registry_
         opts=ComponentExtractOptions(names=("position",), output_var="component_value"),
     )
     position = extracted["position"]
-    assert list(position.unsafe_data.data_vars) == ["component_value"]
+    assert list(position.as_dataset(copy="none").data_vars) == ["component_value"]
     assert read_components(position) == {
         "position": ComponentSpec(core_dim="axis", labels=("x", "y"), var="component_value")
     }
@@ -162,7 +238,7 @@ def test_comp_backbone_core_021_patch_functional_and_accessor_parity() -> None:
         opts=ComponentPatchOptions(on_overlap="error"),
         validate=True,
     )
-    xr.testing.assert_identical(functional.unsafe_data, accessor.unsafe_data)
+    xr.testing.assert_identical(functional.as_dataset(copy="none"), accessor.as_dataset(copy="none"))
 
 
 def test_comp_backbone_core_022_patch_unknown_component_name_fail_closed() -> None:
@@ -212,8 +288,8 @@ def test_comp_backbone_core_024_patch_overlap_policy_error_vs_replace_determinis
         opts=ComponentPatchOptions(on_overlap="replace"),
         validate=True,
     )
-    expected = patch_b.unsafe_data["value"]
-    xr.testing.assert_allclose(replaced.unsafe_data["value"].sel(axis=["x", "y"]), expected)
+    expected = patch_b.as_dataset(copy="none")["value"]
+    xr.testing.assert_allclose(replaced.as_dataset(copy="none")["value"].sel(axis=["x", "y"]), expected)
 
 
 def test_comp_backbone_core_025_extract_then_patch_roundtrip_for_selected_components() -> None:
@@ -227,8 +303,8 @@ def test_comp_backbone_core_025_extract_then_patch_roundtrip_for_selected_compon
         opts=ComponentPatchOptions(on_overlap="error", output_var="value_new"),
         validate=True,
     )
-    xr.testing.assert_allclose(patched.unsafe_data["value_new"].sel(axis=["x", "y"]), position_patch.unsafe_data["value"])
-    xr.testing.assert_allclose(patched.unsafe_data["value_new"].sel(axis=["z"]), ao.unsafe_data["value"].sel(axis=["z"]))
+    xr.testing.assert_allclose(patched.as_dataset(copy="none")["value_new"].sel(axis=["x", "y"]), position_patch.as_dataset(copy="none")["value"])
+    xr.testing.assert_allclose(patched.as_dataset(copy="none")["value_new"].sel(axis=["z"]), ao.as_dataset(copy="none")["value"].sel(axis=["z"]))
 
 
 def test_patch_components_output_var_rejects_multi_target_runtime() -> None:
@@ -247,7 +323,7 @@ def test_comp_backbone_core_036_patch_non_dim_core_coord_fails_closed_owner_erro
     """ID: COMP_BACKBONE_CORE_036_patch_non_dim_core_coord_fails_closed_owner_error."""
     ao = _base_ao()
     position_patch = extract_components(ao, opts=ComponentExtractOptions(names=("position",)))["position"]
-    malformed_ds = position_patch.unsafe_data.rename({"axis": "axis_dim"})
+    malformed_ds = position_patch.as_dataset(copy="none").rename({"axis": "axis_dim"})
     malformed_ds = malformed_ds.assign_coords({"axis": ("axis_dim", np.asarray(["x", "y"], dtype=object))})
     malformed_patch = AnalysisObject._from_unvalidated(malformed_ds)
     with pytest.raises(ValueError, match=r"components\.patch: .*axis.*"):
@@ -255,5 +331,155 @@ def test_comp_backbone_core_036_patch_non_dim_core_coord_fails_closed_owner_erro
             ao,
             {"position": malformed_patch},
             opts=ComponentPatchOptions(on_overlap="error"),
+            validate=True,
+        )
+
+
+@pytest.mark.parametrize("validate", (False, True))
+@pytest.mark.parametrize(
+    ("base_chunked", "patch_chunked"),
+    ((False, False), (False, True), (True, False), (True, True)),
+    ids=("numpy-numpy", "numpy-dask", "dask-numpy", "dask-dask"),
+)
+@pytest.mark.parametrize(
+    "patch_mode",
+    ("full", "extract", "extract-renamed"),
+    ids=("full-dataset-patch", "extract-patch", "renamed-extract-patch"),
+)
+def test_comp_backbone_core_037_patch_distinct_core_dimensions_repairs_projection_schema(
+    validate: bool,
+    base_chunked: bool,
+    patch_chunked: bool,
+    patch_mode: str,
+) -> None:
+    """ID: COMP_BACKBONE_CORE_037_patch_distinct_core_dimensions_repairs_projection_schema."""
+    from dask.base import is_dask_collection
+    from dask.callbacks import Callback
+
+    base = _distinct_core_ao(chunked=base_chunked)
+    patch_source = _distinct_core_ao(offset=100.0, chunked=patch_chunked)
+    base_before = base.as_dataset(copy="deep")
+    patch_source_before = patch_source.as_dataset(copy="deep")
+    tasks: list[object] = []
+
+    with Callback(pretask=lambda key, *_: tasks.append(key)):
+        if patch_mode == "full":
+            patch = patch_source
+        else:
+            output_var = "component_value" if patch_mode == "extract-renamed" else None
+            patch = extract_components(
+                patch_source,
+                opts=ComponentExtractOptions(names=("linear",), output_var=output_var),
+                validate=validate,
+            )["linear"]
+        patch_before = patch.as_dataset(copy="deep")
+        result = patch_components(
+            base,
+            {"linear": patch},
+            opts=ComponentPatchOptions(on_overlap="replace"),
+            validate=validate,
+        )
+
+    result_ds = result.as_dataset(copy="none")
+    base_ds = base.as_dataset(copy="none")
+    expected_linear = patch_source.as_dataset(copy="none")["linear"]
+    assert tasks == []
+    xr.testing.assert_identical(result_ds["linear"].compute(), expected_linear.compute())
+    xr.testing.assert_identical(result_ds["angular"].compute(), base_ds["angular"].compute())
+    xr.testing.assert_identical(result_ds.coords["linear_axis"], base_ds.coords["linear_axis"])
+    xr.testing.assert_identical(result_ds.coords["angular_axis"], base_ds.coords["angular_axis"])
+    roles_declared, sequence_dim, batch_dims, core_dims = read_roles(result_ds)
+    assert (roles_declared, sequence_dim, batch_dims, core_dims) == (
+        True,
+        "sample",
+        (),
+        ("linear_axis", "angular_axis"),
+    )
+    assert read_components(result) == read_components(base)
+    if base_chunked or patch_chunked:
+        assert is_dask_collection(result_ds["linear"].data)
+    else:
+        assert not is_dask_collection(result_ds["linear"].data)
+    if base_chunked:
+        assert is_dask_collection(result_ds["angular"].data)
+    else:
+        assert not is_dask_collection(result_ds["angular"].data)
+    if patch_mode == "extract-renamed":
+        assert read_components(patch)["linear"].var == "component_value"
+    xr.testing.assert_identical(base.as_dataset(copy="none"), base_before)
+    xr.testing.assert_identical(patch_source.as_dataset(copy="none"), patch_source_before)
+    xr.testing.assert_identical(patch.as_dataset(copy="none"), patch_before)
+
+
+@pytest.mark.parametrize("explicit_var", (False, True), ids=("implicit-base-spec", "explicit-base-spec"))
+def test_comp_backbone_core_038_patch_prefers_resolved_base_variable(explicit_var: bool) -> None:
+    """ID: COMP_BACKBONE_CORE_038_patch_prefers_resolved_base_variable."""
+    base = _component_selection_base(explicit_var=explicit_var)
+    patch = _component_selection_ao({"v": 100.0, "other": 200.0})
+
+    result = patch_components(
+        base,
+        {"vector": patch},
+        opts=ComponentPatchOptions(on_overlap="replace"),
+        validate=True,
+    )
+
+    xr.testing.assert_identical(
+        result.as_dataset(copy="none")["v"],
+        patch.as_dataset(copy="none")["v"],
+    )
+
+
+def test_comp_backbone_core_039_patch_registry_precedes_base_variable_fallback() -> None:
+    """ID: COMP_BACKBONE_CORE_039_patch_registry_precedes_base_variable_fallback."""
+    base = _component_selection_base(explicit_var=False)
+    patch = define_components(
+        _component_selection_ao({"v": 100.0, "replacement": 200.0}),
+        opts=ComponentRegistryOptions(
+            registry={
+                "vector": ComponentSpec(
+                    core_dim="axis",
+                    labels=("x", "y", "z"),
+                    var="replacement",
+                )
+            }
+        ),
+        validate=True,
+    )
+
+    result = patch_components(
+        base,
+        {"vector": patch},
+        opts=ComponentPatchOptions(on_overlap="replace"),
+        validate=True,
+    )
+
+    xr.testing.assert_identical(
+        result.as_dataset(copy="none")["v"].rename("replacement"),
+        patch.as_dataset(copy="none")["replacement"],
+    )
+
+
+def test_comp_backbone_hard_040_patch_registry_neutral_fallback_is_unambiguous() -> None:
+    """ID: COMP_BACKBONE_HARD_040_patch_registry_neutral_fallback_is_unambiguous."""
+    base = _component_selection_base(explicit_var=False)
+    single = _component_selection_ao({"replacement": 100.0})
+    result = patch_components(
+        base,
+        {"vector": single},
+        opts=ComponentPatchOptions(on_overlap="replace"),
+        validate=True,
+    )
+    xr.testing.assert_identical(
+        result.as_dataset(copy="none")["v"].rename("replacement"),
+        single.as_dataset(copy="none")["replacement"],
+    )
+
+    ambiguous = _component_selection_ao({"left": 100.0, "right": 200.0})
+    with pytest.raises(ValueError, match="requires exactly one data variable"):
+        patch_components(
+            base,
+            {"vector": ambiguous},
+            opts=ComponentPatchOptions(on_overlap="replace"),
             validate=True,
         )

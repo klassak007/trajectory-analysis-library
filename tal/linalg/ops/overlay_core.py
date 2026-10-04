@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from ...core import CoreOverlayOptions
 from ...core import overlay_core as _core_overlay_core
+from ...core.dataset_ownership import analysis_object_dataset
 from ..array import Array
 
 
@@ -17,12 +18,13 @@ def _rewrap_overlay_output(result: "AnalysisObject", *, base: object) -> Array:
     if isinstance(result, Array):
         return result
     base_type = _base_array_type(base)
+    result_ds = analysis_object_dataset(result)
     if base_type is not None:
         try:
-            return base_type._from_validated(result.unsafe_data)
+            return base_type._from_validated(result_ds)
         except (TypeError, ValueError):
             pass
-    return Array._from_validated(result.unsafe_data)
+    return Array._from_validated(result_ds)
 
 
 def overlay_core(

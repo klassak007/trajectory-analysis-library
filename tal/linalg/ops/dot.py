@@ -90,7 +90,7 @@ def dot(
     ...     core_dims=("axis",),
     ...     validate=True,
     ... ))
-    >>> dot(left, right).unsafe_data["datavar"].to_numpy().tolist()
+    >>> dot(left, right).as_dataset()["datavar"].to_numpy().tolist()
     [32.0]
     """
     owner = "linalg.dot"

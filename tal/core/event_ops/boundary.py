@@ -5,8 +5,20 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 
-from .backends import EVENT_BOUNDARY_BACKEND_NUMPY_ROW, boundary_bounded_row_backend
+from tal.utils.numba_support import _numba_available
+from tal.utils.xarray_namespace import (
+    dataarray_namespace_names,
+    dataset_namespace_names,
+    unique_temp_dim,
+)
+
+from ..orchestration.indexing import dimension_coordinates
 from ..orchestration.lazy import fail_if_chunked_boundary, is_chunked_dataarray
+from .backends import (
+    EVENT_BOUNDARY_BACKEND_NUMBA,
+    EVENT_BOUNDARY_BACKEND_NUMPY_BLOCK,
+    boundary_bounded_block_backend,
+)
 from .event_primitives import (
     EDGE_ENTER,
     EDGE_EXIT,
@@ -211,17 +223,12 @@ def _bounded_row_kernel(
 
 
 def _build_dataarray(
-    values: np.ndarray,
-    *,
-    context: EventEvalContext,
-    name: str,
+    values: np.ndarray, *, context: EventEvalContext, name: str, event_dim: str,
 ) -> xr.DataArray:
-    context_batch_dims = batch_dims(context)
-    dims = context_batch_dims + (_INTERNAL_EVENT_DIM,)
-    coords: dict[str, object] = {_INTERNAL_EVENT_DIM: np.arange(values.shape[-1], dtype="int64")}
-    for dim in context_batch_dims:
-        coords[dim] = context.clock.coords[dim]
-    return xr.DataArray(values, dims=dims, coords=coords, name=name)
+    dims = batch_dims(context) + (event_dim,)
+    coords = xr.Dataset(coords=dimension_coordinates(context.clock, dims=batch_dims(context)))
+    coords = coords.assign_coords({event_dim: np.arange(values.shape[-1], dtype="int64")})
+    return xr.DataArray(values, dims=dims, coords=coords.coords, name=name)
 
 
 def _extract_dynamic(
@@ -231,6 +238,7 @@ def _extract_dynamic(
     opts: EventExtractOptions,
     emit_triggers: bool,
     owner: str,
+    event_dim: str,
 ) -> EventBoundaryPayload:
     sequence_dim = context.runtime.sequence_dim
     mask_lanes = lane_data(effective_mask.astype(bool), context=context, core_dim=sequence_dim)
@@ -264,11 +272,37 @@ def _extract_dynamic(
     batch_shape = tuple(context.clock.sizes[dim] for dim in batch_dims(context))
     target_shape = (max_events,) if not batch_shape else batch_shape + (max_events,)
     return EventBoundaryPayload(
-        time=_build_dataarray(times.reshape(target_shape), context=context, name="time"),
-        edge_code=_build_dataarray(edge.reshape(target_shape), context=context, name="edge_code"),
-        sample_index_before=_build_dataarray(before.reshape(target_shape), context=context, name="sample_index_before"),
-        sample_index_after=_build_dataarray(after.reshape(target_shape), context=context, name="sample_index_after"),
+        time=_build_dataarray(times.reshape(target_shape), context=context, event_dim=event_dim, name="time"),
+        edge_code=_build_dataarray(edge.reshape(target_shape), context=context, event_dim=event_dim, name="edge_code"),
+        sample_index_before=_build_dataarray(before.reshape(target_shape), context=context, event_dim=event_dim, name="sample_index_before"),
+        sample_index_after=_build_dataarray(after.reshape(target_shape), context=context, event_dim=event_dim, name="sample_index_after"),
+        event_dim=event_dim,
     )
+
+
+def _select_boundary_normal_backend() -> str:
+    if _numba_available():
+        return EVENT_BOUNDARY_BACKEND_NUMBA
+    return EVENT_BOUNDARY_BACKEND_NUMPY_BLOCK
+
+
+def _empty_bounded_payload(
+    context: EventEvalContext, *, max_events: int, chunked: bool, event_dim: str,
+) -> EventBoundaryPayload:
+    """Allocate known sentinels from topology without evaluating an empty source."""
+    dims = batch_dims(context) + (event_dim,)
+    shape = tuple(context.clock.sizes[dim] for dim in batch_dims(context)) + (max_events,)
+    coords = dimension_coordinates(context.clock, dims=batch_dims(context))
+    arrays = tuple(
+        xr.DataArray(np.full(shape, fill, dtype=dtype), dims=dims, coords=coords, name=name)
+        for name, fill, dtype in (
+            ("time", np.nan, "float64"), ("edge_code", EDGE_INVALID, "int8"),
+            ("sample_index_before", SAMPLE_SENTINEL, "int64"),
+            ("sample_index_after", SAMPLE_SENTINEL, "int64"),
+        )
+    )
+    arrays = tuple(array.chunk() for array in arrays) if chunked else arrays
+    return EventBoundaryPayload(*arrays, event_dim=event_dim)
 
 
 def _extract_bounded(
@@ -278,11 +312,14 @@ def _extract_bounded(
     opts: EventExtractOptions,
     emit_triggers: bool,
     owner: str,
+    event_dim: str,
 ) -> EventBoundaryPayload:
     max_events = int(opts.max_events or 0)
     chunked = any(
         is_chunked_dataarray(da) for da in (effective_mask, context.valid_mask, context.clock)
     )
+    if context.clock.sizes[context.runtime.sequence_dim] == 0:
+        return _empty_bounded_payload(context, max_events=max_events, chunked=chunked, event_dim=event_dim)
     dask_mode = "parallelized" if chunked else "allowed"
     kwargs = {
         "include_initial": bool(opts.include_initial),
@@ -290,34 +327,37 @@ def _extract_bounded(
         "dedupe_atol": float(opts.dedupe_atol),
         "max_events": max_events,
         "owner": owner,
-        "backend": EVENT_BOUNDARY_BACKEND_NUMPY_ROW,
+        "backend": _select_boundary_normal_backend(),
     }
     ufunc_kwargs: dict[str, object] = {}
     if chunked:
         ufunc_kwargs["dask_gufunc_kwargs"] = {
-            "output_sizes": {_INTERNAL_EVENT_DIM: max_events},
+            "output_sizes": {event_dim: max_events},
             "allow_rechunk": True,
         }
     time, edge, before, after = xr.apply_ufunc(
-        boundary_bounded_row_backend,
+        boundary_bounded_block_backend,
         effective_mask.astype(bool),
         context.valid_mask.astype(bool),
         context.clock.astype("float64"),
         input_core_dims=[[context.runtime.sequence_dim]] * 3,
-        output_core_dims=[[_INTERNAL_EVENT_DIM]] * 4,
+        output_core_dims=[[event_dim]] * 4,
         kwargs=kwargs,
-        vectorize=True,
+        vectorize=False,
         dask=dask_mode,
         output_dtypes=[np.float64, np.int8, np.int64, np.int64],
         **ufunc_kwargs,
     )
+    return _bounded_payload((time, edge, before, after), event_dim=event_dim, max_events=max_events)
+
+
+def _bounded_payload(
+    arrays: tuple[xr.DataArray, ...], *, event_dim: str, max_events: int,
+) -> EventBoundaryPayload:
     coord = np.arange(max_events, dtype="int64")
-    return EventBoundaryPayload(
-        time=time.assign_coords({_INTERNAL_EVENT_DIM: coord}).rename("time"),
-        edge_code=edge.assign_coords({_INTERNAL_EVENT_DIM: coord}).rename("edge_code"),
-        sample_index_before=before.assign_coords({_INTERNAL_EVENT_DIM: coord}).rename("sample_index_before"),
-        sample_index_after=after.assign_coords({_INTERNAL_EVENT_DIM: coord}).rename("sample_index_after"),
-    )
+    names = ("time", "edge_code", "sample_index_before", "sample_index_after")
+    outputs = tuple(array.assign_coords({event_dim: coord}).rename(name) for array, name in zip(arrays, names))
+    return EventBoundaryPayload(*outputs, event_dim=event_dim)
 
 
 def _emit_triggers(condition: Condition) -> bool:
@@ -370,6 +410,9 @@ def extract_event_boundaries(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
+    names = set(dataset_namespace_names(context.runtime.ds))
+    names.update(dataarray_namespace_names(effective_mask))
+    event_dim = unique_temp_dim(_INTERNAL_EVENT_DIM, taken_dims=tuple(names))
     emit = _emit_triggers(condition) if emit_triggers is None else bool(emit_triggers)
     can_dynamic = _supports_dynamic_extraction(effective_mask=effective_mask, context=context)
     fail_if_chunked_boundary(
@@ -384,6 +427,7 @@ def extract_event_boundaries(
             opts=opts,
             emit_triggers=emit,
             owner=owner,
+            event_dim=event_dim,
         )
     return _extract_bounded(
         effective_mask=effective_mask,
@@ -391,6 +435,7 @@ def extract_event_boundaries(
         opts=opts,
         emit_triggers=emit,
         owner=owner,
+        event_dim=event_dim,
     )
 
 

@@ -59,7 +59,7 @@ def _base_ao() -> AnalysisObject:
 
 
 def _multi_var_ao() -> AnalysisObject:
-    ds = _base_ao().unsafe_data.copy(deep=True)
+    ds = _base_ao().as_dataset(copy="none").copy(deep=True)
     ds["value_b"] = ds["value"] * -1.0
     ao = AnalysisObject._from_validated(ds)
     return define_components(ao, opts=_multi_registry_options(), validate=True)
@@ -75,8 +75,8 @@ def test_comp_backbone_core_027_compose_registry_order_and_label_order_determini
         opts=ComponentComposeOptions(registry=_registry_options().registry),
         validate=True,
     )
-    assert tuple(composed.unsafe_data.get_index("axis").tolist()) == ("x", "y", "z")
-    xr.testing.assert_allclose(composed.unsafe_data["value"], base.unsafe_data["value"])
+    assert tuple(composed.as_dataset(copy="none").get_index("axis").tolist()) == ("x", "y", "z")
+    xr.testing.assert_allclose(composed.as_dataset(copy="none")["value"], base.as_dataset(copy="none")["value"])
 
 
 def test_comp_backbone_core_028_compose_name_set_must_match_registry_fail_closed() -> None:
@@ -103,7 +103,7 @@ def test_comp_backbone_core_029_compose_requires_shared_declared_roles_and_singl
     base = _base_ao()
     extracted = extract_components(base)
 
-    no_roles_ds = merge_schema(extracted["position"].unsafe_data, patch={"core": {"roles": None}}, validate=False)
+    no_roles_ds = merge_schema(extracted["position"].as_dataset(copy="none"), patch={"core": {"roles": None}}, validate=False)
     no_roles = AnalysisObject._from_unvalidated(no_roles_ds)
     with pytest.raises(ValueError, match="declared roles with sequence_dim are required"):
         _ = compose_components(
@@ -112,7 +112,7 @@ def test_comp_backbone_core_029_compose_requires_shared_declared_roles_and_singl
             validate=True,
         )
 
-    multi_var_ds = extracted["position"].unsafe_data.copy(deep=True)
+    multi_var_ds = extracted["position"].as_dataset(copy="none").copy(deep=True)
     multi_var_ds["value_b"] = multi_var_ds["value"] * 2.0
     multi_var = AnalysisObject._from_unvalidated(multi_var_ds)
     with pytest.raises(ValueError, match="requires exactly one data variable when spec.var is not set"):
@@ -139,7 +139,7 @@ def test_comp_backbone_core_030_compose_requires_exact_component_label_set_and_u
             validate=True,
         )
 
-    dup_ds = position.unsafe_data.copy(deep=True)
+    dup_ds = position.as_dataset(copy="none").copy(deep=True)
     dup_ds = dup_ds.assign_coords({"axis": np.asarray(["x", "x"], dtype=object)})
     duplicate_labels = AnalysisObject._from_unvalidated(dup_ds)
     with pytest.raises(ValueError, match="must be unique"):
@@ -159,7 +159,7 @@ def test_comp_backbone_core_031_compose_functional_and_accessor_parity() -> None
     opts = ComponentComposeOptions(registry=_registry_options().registry)
     functional = compose_components(extracted, opts=opts, validate=True)
     accessor = base.components.compose(extracted, opts=opts, validate=True)
-    xr.testing.assert_identical(functional.unsafe_data, accessor.unsafe_data)
+    xr.testing.assert_identical(functional.as_dataset(copy="none"), accessor.as_dataset(copy="none"))
 
 
 def test_comp_backbone_core_032_extract_then_compose_roundtrip_selected_components() -> None:
@@ -168,8 +168,8 @@ def test_comp_backbone_core_032_extract_then_compose_roundtrip_selected_componen
     registry = {"position": ComponentSpec(core_dim="axis", labels=("x", "y"), var="value")}
     extracted = extract_components(base, opts=ComponentExtractOptions(names=("position",)))
     composed = compose_components(extracted, opts=ComponentComposeOptions(registry=registry), validate=True)
-    assert tuple(composed.unsafe_data.get_index("axis").tolist()) == ("x", "y")
-    xr.testing.assert_allclose(composed.unsafe_data["value"], base.unsafe_data["value"].sel(axis=["x", "y"]))
+    assert tuple(composed.as_dataset(copy="none").get_index("axis").tolist()) == ("x", "y")
+    xr.testing.assert_allclose(composed.as_dataset(copy="none")["value"], base.as_dataset(copy="none")["value"].sel(axis=["x", "y"]))
     assert read_components(composed) == registry
 
 
@@ -184,7 +184,7 @@ def test_comp_backbone_core_033_compose_then_extract_roundtrip_component_equival
     )
     roundtrip = extract_components(composed)
     for name in ("position", "heading"):
-        xr.testing.assert_identical(roundtrip[name].unsafe_data, extracted[name].unsafe_data)
+        xr.testing.assert_identical(roundtrip[name].as_dataset(copy="none"), extracted[name].as_dataset(copy="none"))
 
 
 def test_comp_backbone_core_034_compose_output_var_single_var_policy_and_registry_truthfulness() -> None:
@@ -195,7 +195,7 @@ def test_comp_backbone_core_034_compose_output_var_single_var_policy_and_registr
         opts=ComponentComposeOptions(registry=_registry_options().registry, output_var="component_value"),
         validate=True,
     )
-    assert list(composed.unsafe_data.data_vars) == ["component_value"]
+    assert list(composed.as_dataset(copy="none").data_vars) == ["component_value"]
     assert read_components(composed) == {
         "position": ComponentSpec(core_dim="axis", labels=("x", "y"), var="component_value"),
         "heading": ComponentSpec(core_dim="axis", labels=("z",), var="component_value"),
@@ -214,7 +214,7 @@ def test_comp_backbone_core_035_compose_non_dim_core_coord_fails_closed_owner_er
     """ID: COMP_BACKBONE_CORE_035_compose_non_dim_core_coord_fails_closed_owner_error."""
     base = _base_ao()
     extracted = extract_components(base)
-    malformed_ds = extracted["position"].unsafe_data.rename({"axis": "axis_dim"})
+    malformed_ds = extracted["position"].as_dataset(copy="none").rename({"axis": "axis_dim"})
     malformed_ds = malformed_ds.assign_coords({"axis": ("axis_dim", np.asarray(["x", "y"], dtype=object))})
     malformed = AnalysisObject._from_unvalidated(malformed_ds)
     with pytest.raises(ValueError, match=r"components\.compose: .*axis.*"):

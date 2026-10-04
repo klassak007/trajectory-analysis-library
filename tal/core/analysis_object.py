@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
-from typing import Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
-import numpy as np
 import xarray as xr
 
-from .dataset_utils import dataset_to_dataarray, ensure_dataset
-from .schema import UNSET, UnsetType
-from .schema import _is_bootstrap_schema
+from . import dataset_ownership as _dataset_ownership
+from .dataset_utils import ensure_dataset
+from .schema import (
+    UNSET,
+    UnsetType,
+    _apply_schema_update,
+    _is_bootstrap_schema,
+    _relocate_dataarray_schema,
+    _SchemaUpdatePlan,
+    _validate_existing_schema_envelope,
+)
 from .schema import merge_schema as _merge_schema
 from .schema import repair_schema_after_structure as _repair_schema_after_structure
 from .schema import set_param_coord as _set_param_coord
@@ -18,6 +24,9 @@ from .schema import set_validity as _set_validity
 from .schema import validate_schema as _validate_schema
 from .schema_errors import schema_error
 from .validity_finalize import reconcile_sequence_validity_after_structure
+
+if TYPE_CHECKING:
+    from . import combine_ops, component_ops, event_ops, group_ops, param_ops
 
 
 class AnalysisObject:
@@ -29,11 +38,20 @@ class AnalysisObject:
     label-aware behavior. Alignment is by dimension names and coordinate labels,
     not by positional axis order.
 
+    ``repr(ao)``, ``print(ao)``, and notebook display show stored TAL declarations
+    beside xarray's data preview. Display does not validate the object or execute
+    Dask tasks. Transform-backed coordinate values are explicitly omitted.
+    Notebook display includes a collapsed, bounded ``TAL schema`` detail and
+    honors xarray display options. Opaque schema values show type placeholders.
+
     Operator Families
     -----------------
-    Arithmetic and comparison operators are routed through TAL ufunc owners.
-    This keeps orchestration/finalize behavior consistent with xarray alignment
-    and TAL schema truthfulness.
+    Arithmetic operators route through TAL's AO-aware ufunc owners and return
+    finalized ``AnalysisObject`` results using xarray labeled alignment.
+    Ordering operators (``<``, ``<=``, ``>``, ``>=``) build deferred
+    ``Condition`` expressions for event evaluation. ``==`` and ``!=`` retain
+    object-identity semantics; use ``tal.ufuncs.equal`` and
+    ``tal.ufuncs.not_equal`` for deferred elementwise equality conditions.
 
     See Also
     --------
@@ -55,12 +73,24 @@ class AnalysisObject:
     ...     core_dims=("axis",),
     ...     validate=True,
     ... )
-    >>> ao.unsafe_data.attrs["tal"]["core"]["roles"]["sequence_dim"]
+    >>> ao.as_dataset().attrs["tal"]["core"]["roles"]["sequence_dim"]
     'sample'
     """
 
     _WHERE_OTHER_UNSET = object()
     __hash__ = object.__hash__
+
+    def __repr__(self) -> str:
+        """Show stored TAL declarations alongside the native xarray preview."""
+        from tal.utils.display import analysis_object_repr
+
+        return analysis_object_repr(self)
+
+    def _repr_html_(self) -> str:
+        """Return a lazy notebook preview with bounded stored-schema detail."""
+        from tal.utils.display import analysis_object_html
+
+        return analysis_object_html(self)
 
     @staticmethod
     def _multiindex_dims(ds: xr.Dataset) -> tuple[str, ...]:
@@ -90,29 +120,14 @@ class AnalysisObject:
             return False, None
         return True, data.attrs["tal"]
 
-    @staticmethod
-    def _isolated_ingress_dataset(data: xr.Dataset | xr.DataArray) -> xr.Dataset:
-        return ensure_dataset(data).copy(deep=True)
-
-    @staticmethod
-    def _isolate_coord_buffers(ds: xr.Dataset) -> xr.Dataset:
-        coord_updates: dict[str, xr.DataArray] = {}
-        coord_attrs: dict[str, dict[str, Any]] = {}
-        for name, coord in ds.coords.items():
-            coord_updates[name] = xr.DataArray(np.array(coord.values, copy=True), dims=coord.dims)
-            if coord.attrs:
-                coord_attrs[name] = deepcopy(dict(coord.attrs))
-        if not coord_updates:
-            return ds
-        out = ds.assign_coords(coord_updates)
-        for name, attrs in coord_attrs.items():
-            out.coords[name].attrs = attrs
-        return out
-
-    def __init__(self, data: xr.Dataset | xr.DataArray) -> None:
+    @classmethod
+    def _normalized_ingress_dataset(
+        cls,
+        data: xr.Dataset | xr.DataArray,
+    ) -> xr.Dataset:
         if not isinstance(data, (xr.Dataset, xr.DataArray)):
             ensure_dataset(data)
-        input_had_tal, tal_payload = self._input_tal_payload(data)
+        input_had_tal, tal_payload = cls._input_tal_payload(data)
         if input_had_tal and not isinstance(tal_payload, Mapping):
             raise schema_error(
                 code="schema.not_mapping",
@@ -121,14 +136,42 @@ class AnalysisObject:
                 actual=type(tal_payload).__name__,
                 hint="set ds.attrs['tal'] to a mapping payload",
             )
-        ds = self._isolated_ingress_dataset(data)
-        self._assert_no_multiindex(ds, owner="AnalysisObject")
-        if input_had_tal and isinstance(data, xr.DataArray) and "tal" not in ds.attrs:
-            ds = _merge_schema(ds, deepcopy(dict(tal_payload)), validate=False)
-        candidate = _merge_schema(ds, {"version": 1, "core": {}}, validate=False)
-        if input_had_tal and not _is_bootstrap_schema(tal_payload):
-            candidate = _validate_schema(candidate)
-        self._bind_dataset(candidate)
+        ds = ensure_dataset(data)
+        if input_had_tal and isinstance(data, xr.DataArray):
+            variable_name = next(iter(ds.data_vars))
+            ds = _relocate_dataarray_schema(
+                ds,
+                variable_name=variable_name,
+                tal_schema=tal_payload,
+            )
+        cls._assert_no_multiindex(ds, owner="AnalysisObject")
+        return ds
+
+    def __init__(self, data: xr.Dataset | xr.DataArray) -> None:
+        candidate = self._prepared_ingress_dataset(data)
+        owned = _dataset_ownership.isolate_external_dataset(candidate)
+        self._bind_dataset(owned)
+
+    @classmethod
+    def _prepared_ingress_dataset(cls, data: xr.Dataset | xr.DataArray) -> xr.Dataset:
+        ds = cls._normalized_ingress_dataset(data)
+        input_had_tal = "tal" in data.attrs
+        if input_had_tal:
+            tal_payload = ds.attrs["tal"]
+            return (
+                _apply_schema_update(
+                    _validate_existing_schema_envelope(ds),
+                    _SchemaUpdatePlan(),
+                    validate=False,
+                )
+                if _is_bootstrap_schema(tal_payload)
+                else _validate_schema(ds)
+            )
+        return _apply_schema_update(
+            ds,
+            _SchemaUpdatePlan(),
+            validate=False,
+        )
 
     def _bind_dataset(self, ds: xr.Dataset) -> None:
         self._assert_no_multiindex(ds, owner="AnalysisObject")
@@ -139,7 +182,7 @@ class AnalysisObject:
 
     def _after_bind_dataset(self) -> None:
         """Subclass hook invoked after dataset binding."""
-        return None
+        return
 
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> AnalysisObject:
@@ -148,51 +191,20 @@ class AnalysisObject:
         return obj
 
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> AnalysisObject:
-        candidate = _merge_schema(ensure_dataset(ds), {"version": 1, "core": {}}, validate=False)
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> AnalysisObject:
+        candidate = ensure_dataset(ds)
+        if not schema_prepared:
+            candidate = _merge_schema(
+                candidate,
+                {"version": 1, "core": {}},
+                validate=False,
+            )
         obj = cls.__new__(cls)
         obj._bind_dataset(candidate)
         return obj
 
-    def _safe_public_dataset(self) -> xr.Dataset:
-        """Return an isolated public dataset copy.
-
-        This intentionally performs deep copying for mutation safety. Callers that
-        need direct in-place mutation should use ``unsafe_data`` explicitly.
-        """
-        self._assert_no_multiindex(self._data, owner="AnalysisObject.data")
-        out = self._isolate_coord_buffers(self._data.copy(deep=True))
-        if out.attrs:
-            out.attrs = {
-                key: deepcopy(value) if key == "tal" else value
-                for key, value in out.attrs.items()
-            }
-        return out
-
     @property
-    def data(self) -> xr.Dataset:
-        """Return a mutation-safe deep copy of the underlying dataset.
-
-        Returns
-        -------
-        xr.Dataset
-            Resolved property value.
-        """
-        return self._safe_public_dataset()
-
-    @property
-    def unsafe_data(self) -> xr.Dataset:
-        """Return the internal dataset reference without protective copying.
-
-        Returns
-        -------
-        xr.Dataset
-            Resolved property value.
-        """
-        return self._data
-
-    @property
-    def param(self) -> "ParamAccessor":
+    def param(self) -> param_ops.ParamAccessor:
         """Return the param accessor (``ao.param``).
 
         Returns
@@ -205,7 +217,7 @@ class AnalysisObject:
         return ParamAccessor(self)
 
     @property
-    def combine(self) -> "CombineAccessor":
+    def combine(self) -> combine_ops.CombineAccessor:
         """Return the combine accessor (``ao.combine``).
 
         Returns
@@ -224,7 +236,7 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> stacked = ao.combine.stack_core([ao], core_dim="copy", core_labels=("left", "right"))
-        >>> stacked.unsafe_data.sizes["copy"]
+        >>> stacked.as_dataset().sizes["copy"]
         2
         """
         from .combine_ops import CombineAccessor
@@ -232,7 +244,7 @@ class AnalysisObject:
         return CombineAccessor(self)
 
     @property
-    def events(self) -> "EventsAccessor":
+    def events(self) -> event_ops.EventsAccessor:
         """Return the events accessor (``ao.events``).
 
         Returns
@@ -244,15 +256,18 @@ class AnalysisObject:
         --------
         >>> import xarray as xr
         >>> from tal.core import AnalysisObject
-        >>> from tal.core.event_ops import Condition
         >>> ao = AnalysisObject.from_data(
-        ...     xr.Dataset({"value": ("sample", [0.0, 2.0])}, coords={"sample": [0, 1]}),
+        ...     xr.Dataset(
+        ...         {"value": ("sample", [0.0, 2.0])},
+        ...         coords={"sample": [0, 1], "time": ("sample", [0.0, 1.0])},
+        ...     ),
         ...     sequence_dim="sample",
         ...     core_dims=(),
+        ...     param_coord="time",
         ...     validate=True,
         ... )
-        >>> mask = ao.events.mask(Condition.compare(Condition.var("value"), "gt", 1.0))
-        >>> mask.tolist()
+        >>> mask = ao.events.mask(ao > 1.0)
+        >>> mask.to_numpy().tolist()
         [False, True]
         """
         from .event_ops import EventsAccessor
@@ -260,7 +275,7 @@ class AnalysisObject:
         return EventsAccessor(self)
 
     @property
-    def components(self) -> "ComponentsAccessor":
+    def components(self) -> component_ops.ComponentsAccessor:
         """Return the components accessor (``ao.components``).
 
         Returns
@@ -288,7 +303,7 @@ class AnalysisObject:
         return ComponentsAccessor(self)
 
     @property
-    def group(self) -> "GroupAccessor":
+    def group(self) -> group_ops.GroupAccessor:
         """Return the grouping accessor (``ao.group``).
 
         Returns
@@ -311,27 +326,45 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> grouped = ao.group.groupby("kind")
-        >>> grouped.mean(dim="sample").unsafe_data.sizes["group_key"]
+        >>> grouped.mean(dim="sample").as_dataset().sizes["group_key"]
         2
         """
         from .group_ops import GroupAccessor
 
         return GroupAccessor(self)
 
-    def as_dataset(self) -> xr.Dataset:
-        """Return a mutation-safe deep copy of the underlying dataset.
+    def as_dataset(
+        self,
+        *,
+        copy: Literal["deep", "shallow", "none"] = "deep",
+    ) -> xr.Dataset:
+        """Return the underlying dataset with the requested ownership policy.
+
+        Parameters
+        ----------
+        copy
+            ``"deep"`` isolates eager buffers and metadata, ``"shallow"``
+            shares buffers while isolating wrappers and metadata, and ``"none"``
+            returns the exact backing Dataset.
 
         Returns
         -------
         xr.Dataset
-            Deep copy of the wrapped dataset, including coordinates, variables,
-            and TAL schema metadata.
+            Dataset exposed under the requested ownership policy.
+
+        Raises
+        ------
+        ValueError
+            If ``copy`` is invalid or the backing Dataset has a MultiIndex.
 
         Notes
         -----
-        Mutating the returned dataset does not mutate the AO. Use
-        :attr:`unsafe_data` only at internal boundaries that intentionally need
-        direct access to the backing object.
+        Deep and shallow lazy views remain non-owning and require the AO to stay
+        open until their lazy work completes. Mutating shared eager buffers from
+        a shallow view, or mutating a raw view, can mutate the AO.
+        Indexed coordinate buffers may be read-only according to xarray/pandas.
+        Use xarray coordinate assignment or ``assign_coords`` to replace index
+        labels; deep views retain independent buffers and index wrappers.
 
         Examples
         --------
@@ -344,18 +377,28 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> snapshot = ao.as_dataset()
-        >>> snapshot is ao.unsafe_data
+        >>> snapshot is ao.as_dataset(copy="none")
         False
         """
-        return self._safe_public_dataset()
+        owner = "AnalysisObject.as_dataset"
+        mode = _dataset_ownership.coerce_dataset_copy_mode(copy, owner=owner)
+        self._assert_no_multiindex(self._data, owner=owner)
+        return _dataset_ownership.dataset_view(self._data, copy=mode, owner=owner)
 
-    def to_dataarray(self, *, name: str | None = None) -> xr.DataArray:
+    def to_dataarray(
+        self,
+        *,
+        name: str | None = None,
+        copy: Literal["deep", "shallow", "none"] = "deep",
+    ) -> xr.DataArray:
         """Convert a single-variable AO to ``xarray.DataArray``.
 
         Parameters
         ----------
         name
             Optional output variable name override.
+        copy
+            Ownership policy applied to the selected variable and coordinates.
 
         Returns
         -------
@@ -365,12 +408,15 @@ class AnalysisObject:
         Raises
         ------
         ValueError
-            If this AO contains multiple data variables.
+            If ``copy`` is invalid, this AO contains multiple data variables,
+            or the backing Dataset has a MultiIndex.
 
         Notes
         -----
         This helper is a strict single-variable boundary. Multi-variable payloads
-        remain datasets to avoid accidental data loss.
+        remain datasets to avoid accidental data loss. Dataset-level attrs,
+        including Dataset-level TAL schema, are not projected into the selected
+        variable's attrs. Every returned DataArray is a non-owning facade.
 
         Examples
         --------
@@ -385,12 +431,69 @@ class AnalysisObject:
         --------
         tal.core.dataset_utils.dataset_to_dataarray
         """
-        return dataset_to_dataarray(self._safe_public_dataset(), name=name)
+        owner = "AnalysisObject.to_dataarray"
+        mode = _dataset_ownership.coerce_dataset_copy_mode(copy, owner=owner)
+        self._assert_no_multiindex(self._data, owner=owner)
+        return _dataset_ownership.dataset_to_dataarray_view(
+            self._data,
+            name=name,
+            copy=mode,
+            owner=owner,
+        )
 
-    def _rewrap_dataset(self, ds: xr.Dataset, *, validate: bool) -> AnalysisObject:
+    def close(self) -> None:
+        """Release resources owned by the backing Dataset.
+
+        Notes
+        -----
+        Calling this method repeatedly is safe. Deep and shallow public views
+        are non-owning and must complete lazy work before the AO is closed.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> ao = AnalysisObject(xr.Dataset({"value": ("sample", [1.0])}))
+        >>> ao.close()
+        >>> ao.close()
+        """
+        self._data.close()
+
+    def _rewrap_dataset(
+        self,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+        schema_prepared: bool = False,
+    ) -> AnalysisObject:
         if validate:
             return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self.__class__._from_unvalidated(
+            ds,
+            schema_prepared=schema_prepared,
+        )
+
+    @classmethod
+    def _from_composite_committed(
+        cls,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+    ) -> AnalysisObject:
+        """Construct one wrapper after a composite owner finalized metadata."""
+        if validate:
+            return cls._from_validated(ds)
+        return cls._from_unvalidated(ds, schema_prepared=True)
+
+    def _prepare_result_rewrap_context(self, values: tuple[object, ...], *, owner: str) -> object | None:
+        """Prepare an opaque domain result context for a multi-input operation."""
+        _ = (values, owner)
+        return None
+
+    def _apply_result_rewrap_context(self, result: AnalysisObject, *, context: object | None) -> AnalysisObject:
+        """Apply an opaque domain result context after ordinary finalization."""
+        _ = context
+        return result
 
     def b(self, *, mode: Literal["semantic_broadcast"] = "semantic_broadcast") -> Self:
         """Attach a semantic-broadcast intent to an operand-local AO copy.
@@ -429,15 +532,18 @@ class AnalysisObject:
         --------
         tal.core.orchestration.broadcast_intent.resolve_broadcast_intent
         """
+        from .orchestration.alignment_intent import (
+            read_alignment_intent,
+            set_alignment_intent,
+        )
         from .orchestration.broadcast_intent import (
             resolve_broadcast_intent,
             set_broadcast_intent,
         )
-        from .orchestration.alignment_intent import read_alignment_intent, set_alignment_intent
 
         intent = resolve_broadcast_intent(mode=mode, owner="AnalysisObject.b")
         previous_alignment = read_alignment_intent(self, owner="AnalysisObject.b")
-        out = self.__class__._from_unvalidated(self.unsafe_data)
+        out = self._rewrap_dataset(self._data, validate=False)
         if previous_alignment is not None:
             set_alignment_intent(out, previous_alignment)
         set_broadcast_intent(out, intent)
@@ -497,7 +603,10 @@ class AnalysisObject:
             resolve_alignment_intent,
             set_alignment_intent,
         )
-        from .orchestration.broadcast_intent import read_broadcast_intent, set_broadcast_intent
+        from .orchestration.broadcast_intent import (
+            read_broadcast_intent,
+            set_broadcast_intent,
+        )
 
         intent = resolve_alignment_intent(
             on=on,
@@ -513,7 +622,7 @@ class AnalysisObject:
                 f"existing={previous_alignment!r}, requested={intent!r}."
             )
         previous_broadcast = read_broadcast_intent(self, owner="AnalysisObject.a")
-        out = self.__class__._from_unvalidated(self.unsafe_data)
+        out = self._rewrap_dataset(self._data, validate=False)
         set_alignment_intent(out, previous_alignment if previous_alignment is not None else intent)
         if previous_broadcast is not None:
             set_broadcast_intent(out, previous_broadcast)
@@ -525,6 +634,8 @@ class AnalysisObject:
         *,
         validate: bool,
         rename_map: Mapping[str, str] | None = None,
+        validated_registry: Mapping[str, Any] | None = None,
+        preserve_sequence_topology: bool = False,
     ) -> AnalysisObject:
         from .component_ops.rewrite import rewrite_component_registry_after_structure
 
@@ -534,12 +645,13 @@ class AnalysisObject:
             repaired,
             validate=validate,
             owner=f"{self.__class__.__name__}._finalize_structural",
-            rename_map=rename_map,
+            rename_map=rename_map, preserve_topology=preserve_sequence_topology,
         )
         rewritten = rewrite_component_registry_after_structure(
             reconciled,
             rename_map=rename_map,
             owner="components.rewrite",
+            validated_registry=validated_registry,
         )
         if validate:
             payload = rewritten.attrs.get("tal")
@@ -606,7 +718,7 @@ class AnalysisObject:
         ...     coords={"trial": ["t0"], "axis": ["x", "y", "z"]},
         ... )
         >>> ao = AnalysisObject.from_data(ds, batch_dims=("trial",), core_dims=("axis",), validate=True)
-        >>> read_roles(ao.unsafe_data)[1] is None
+        >>> read_roles(ao.as_dataset())[1] is None
         True
 
         See Also
@@ -615,44 +727,61 @@ class AnalysisObject:
         tal.core.schema.set_param_coord
         tal.core.schema.set_validity
         """
-        sequence_requirements: list[str] = []
-        if param_coord is not None:
-            sequence_requirements.append("param_coord")
-        if sequence_size_coord is not None:
-            sequence_requirements.append("sequence_size_coord")
-        if sequence_dim is None and sequence_requirements:
-            needed = ", ".join(sequence_requirements)
-            raise ValueError(
-                "from_data requires sequence_dim when schema-bearing arguments are provided. "
-                f"Missing sequence_dim with: {needed}."
-            )
-        candidate = cls._isolated_ingress_dataset(data)
-        candidate = _merge_schema(candidate, {"version": 1, "core": {}}, validate=False)
-        if sequence_dim is not None or batch_dims or core_dims:
-            roles_kwargs: dict[str, object] = {
-                "batch_dims": batch_dims,
-                "core_dims": core_dims,
-            }
-            if sequence_dim is not None:
-                roles_kwargs["sequence_dim"] = sequence_dim
-            candidate = _set_roles(
-                candidate,
-                validate=False,
-                **roles_kwargs,
-            )
-        if param_coord is not None:
-            candidate = _set_param_coord(candidate, name=param_coord, validate=False)
-        if sequence_size_coord is not None:
-            candidate = _set_validity(
-                candidate,
-                sequence_size_coord=sequence_size_coord,
-                layout=layout,
-                validate=False,
-            )
-        if validate:
-            candidate = _validate_schema(candidate)
-            return cls._from_validated(candidate)
-        return cls._from_unvalidated(candidate)
+        from .layout_ingress import overlay_ingress
+
+        return overlay_ingress(
+            cls,
+            data,
+            sequence_dim=sequence_dim,
+            batch_dims=batch_dims,
+            core_dims=core_dims,
+            param_coord=param_coord,
+            sequence_size_coord=sequence_size_coord,
+            layout=layout,
+            validate=validate,
+        )
+
+    def select_vars(self, names: str | Sequence[str], *, validate: bool = True) -> Self:
+        """Select ordered data variables without discarding TAL semantics.
+
+        Parameters
+        ----------
+        names
+            One data-variable name or an ordered sequence of unique names.
+        validate
+            Whether to run optional full output schema validation.
+
+        Returns
+        -------
+        AnalysisObject
+            Same-subtype owning alias with selected variables in caller order.
+
+        Raises
+        ------
+        TypeError
+            If ``names`` is not a supported ordered selection.
+        ValueError
+            If a name is absent, repeated, or incompatible with the subtype.
+
+        Notes
+        -----
+        Selected results share eligible eager buffers and Dask graphs while
+        isolating xarray wrappers and nested metadata. Existing lazy resources
+        are coupled to the new owning alias only after selection succeeds.
+
+        Examples
+        --------
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> ds = xr.Dataset({"x": ("sample", [1.0]), "y": ("sample", [2.0])})
+        >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample")
+        >>> list(ao.select_vars(("y", "x")).as_dataset().data_vars)
+        ['y', 'x']
+
+        """
+        from .layout_ingress import select_owned_variables
+
+        return select_owned_variables(self, names, validate=validate)
 
     def isel(
         self,
@@ -700,7 +829,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.isel(sample=slice(0, 2)).unsafe_data.sizes["sample"]
+        >>> ao.isel(sample=slice(0, 2)).as_dataset().sizes["sample"]
         2
         """
         ds = self._data.isel(
@@ -759,7 +888,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.sel(trial="b").unsafe_data["value"].item()
+        >>> ao.sel(trial="b").as_dataset()["value"].item()
         2.0
         """
         ds = self._data.sel(
@@ -814,7 +943,8 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.where(ao.unsafe_data["value"] > 1.0, other=0.0).unsafe_data["value"].to_numpy().tolist()
+        >>> condition = ao.as_dataset()["value"] > 1.0
+        >>> ao.where(condition, other=0.0).as_dataset()["value"].to_numpy().tolist()
         [0.0, 2.0, 3.0]
         """
         if other is self._WHERE_OTHER_UNSET:
@@ -861,7 +991,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> "quality" in ao.drop_vars("quality").unsafe_data
+        >>> "quality" in ao.drop_vars("quality").as_dataset()
         False
         """
         ds = self._data.drop_vars(names, errors=errors)
@@ -907,7 +1037,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> "step" in ao.rename({"sample": "step"}).unsafe_data.dims
+        >>> "step" in ao.rename({"sample": "step"}).as_dataset().dims
         True
         """
         ds = self._data.rename(name_dict=name_dict, **names)
@@ -956,7 +1086,7 @@ class AnalysisObject:
         ...     core_dims=(),
         ...     validate=True,
         ... )
-        >>> ao.transpose("sample", "trial").unsafe_data["value"].dims
+        >>> ao.transpose("sample", "trial").as_dataset()["value"].dims
         ('sample', 'trial')
         """
         ds = self._data.transpose(
@@ -1098,8 +1228,8 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> out = ao.set_roles(sequence_dim=None, batch_dims=("trial",), core_dims=(), validate=True)
-        >>> read_roles(out.unsafe_data)[1]
-        None
+        >>> read_roles(out.as_dataset())[1] is None
+        True
 
         See Also
         --------
@@ -1112,9 +1242,7 @@ class AnalysisObject:
             core_dims=core_dims,
             validate=validate,
         )
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def set_param_coord(
         self,
@@ -1151,7 +1279,7 @@ class AnalysisObject:
         ... )
         >>> ao = AnalysisObject.from_data(ds, sequence_dim="sample", core_dims=(), validate=True)
         >>> out = ao.set_param_coord(name="time", validate=True)
-        >>> read_param_coord_name(out.unsafe_data)
+        >>> read_param_coord_name(out.as_dataset())
         'time'
 
         See Also
@@ -1159,9 +1287,7 @@ class AnalysisObject:
         tal.core.schema.set_param_coord
         """
         ds = _set_param_coord(self._data, name=name, validate=validate)
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def set_validity(
         self,
@@ -1213,7 +1339,7 @@ class AnalysisObject:
         ...     validate=True,
         ... )
         >>> out = ao.set_validity(sequence_size_coord="group_size", validate=True)
-        >>> read_sequence_size_coord_name(out.unsafe_data)
+        >>> read_sequence_size_coord_name(out.as_dataset())
         'group_size'
 
         See Also
@@ -1226,9 +1352,7 @@ class AnalysisObject:
             layout=layout,
             validate=validate,
         )
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def merge_schema(
         self,
@@ -1257,7 +1381,7 @@ class AnalysisObject:
         >>> ds = xr.Dataset({"value": ("axis", [1.0, 2.0, 3.0])}, coords={"axis": ["x", "y", "z"]})
         >>> ao = AnalysisObject.from_data(ds, core_dims=("axis",), validate=True)
         >>> out = ao.merge_schema({"core": {"roles": {"core_dims": ["axis"]}}}, validate=True)
-        >>> out.unsafe_data.attrs["tal"]["core"]["roles"]["core_dims"]
+        >>> out.as_dataset().attrs["tal"]["core"]["roles"]["core_dims"]
         ['axis']
 
         See Also
@@ -1265,9 +1389,7 @@ class AnalysisObject:
         tal.core.schema.merge_schema
         """
         ds = _merge_schema(self._data, patch=patch, validate=validate)
-        if validate:
-            return self.__class__._from_validated(ds)
-        return self.__class__._from_unvalidated(ds)
+        return self._rewrap_dataset(ds, validate=validate)
 
     def validate_schema(self) -> AnalysisObject:
         """Validate schema and return a validated AO instance.
@@ -1296,9 +1418,11 @@ class AnalysisObject:
         >>> isinstance(ao.validate_schema(), AnalysisObject)
         True
         """
-        return self.__class__._from_validated(_validate_schema(self._data))
+        return self._rewrap_dataset(_validate_schema(self._data), validate=True)
 
 
-from .reducer_ops.surface import install_analysis_object_reducers as _install_analysis_object_reducers
+from .reducer_ops.surface import (
+    install_analysis_object_reducers as _install_analysis_object_reducers,
+)
 
 _install_analysis_object_reducers(AnalysisObject)

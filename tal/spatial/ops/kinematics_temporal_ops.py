@@ -12,6 +12,7 @@ from tal.core.orchestration.runtime_checks import require_var_contains_dims, sel
 from tal.core.param_ops.types import ParamRuntimeContext
 from tal.utils.frame_schema import get_frames, set_frames
 
+from ..association import finalize_spatial_from_source
 from ..kernels.kinematics_temporal_kernels import (
     cumulative_simpson_kernel,
     cumulative_trapezoid_kernel,
@@ -36,7 +37,6 @@ from ..metadata import (
     set_position_rep,
 )
 from ..metadata.roles import set_position_intent
-from ..policies.wrap import wrap_as
 from ..temporal.options import (
     KinematicsDerivativeOptions,
     KinematicsIntegralOptions,
@@ -270,7 +270,12 @@ def _run_derivative_request(
     values = _apply_derivative_operator(context, var_name=var_name, core_dim=core_dim, opts=opts)
     out = _replace_payload(context.ds, var_name=var_name, values=values)
     finalized = _apply_output_metadata(out, source_ds=context.ds, spec=spec, owner=request.owner)
-    return wrap_as(spec.target_cls, finalized, validate=request.validate)
+    return finalize_spatial_from_source(
+        request.source,
+        spec.target_cls,
+        finalized,
+        validate=request.validate,
+    )
 
 
 def _run_integral_request(
@@ -296,7 +301,12 @@ def _run_integral_request(
     values = _apply_integral_operator(context, var_name=var_name, core_dim=core_dim, opts=opts)
     out = _replace_payload(context.ds, var_name=var_name, values=values)
     finalized = _apply_output_metadata(out, source_ds=context.ds, spec=spec, owner=request.owner)
-    return wrap_as(spec.target_cls, finalized, validate=request.validate)
+    return finalize_spatial_from_source(
+        request.source,
+        spec.target_cls,
+        finalized,
+        validate=request.validate,
+    )
 
 
 def _position_to_linear_velocity_spec() -> TemporalOutputSpec:

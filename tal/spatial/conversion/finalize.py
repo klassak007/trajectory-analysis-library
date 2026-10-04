@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import xarray as xr
 
+from tal.core.orchestration.finalize import transfer_dataset_attrs
 from tal.core.schema import set_roles
+from tal.utils.xarray_namespace import dataset_namespace_names
 
 RepWriter = Callable[..., xr.Dataset]
 
@@ -26,7 +28,7 @@ def dataset_dim_names(ds: xr.Dataset) -> set[str]:
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    return {str(name) for name in ds.dims} | {str(name) for name in ds.coords}
+    return set(dataset_namespace_names(ds))
 
 
 def allocate_free_dim_name(
@@ -86,9 +88,21 @@ def conversion_dataset_from_array(
     var_name: str,
     source_ds: xr.Dataset,
 ) -> xr.Dataset:
-    out = converted.to_dataset(name=var_name)
-    out.attrs = dict(source_ds.attrs)
-    return out
+    # The payload need not use every declared sequence/batch dimension. Preserve
+    # those coordinates and their xarray indexes while replacing the core layout.
+    core_dims = tuple(dim for dim in source_ds[var_name].dims if dim not in converted.dims)
+    topology = source_ds.drop_dims(core_dims).drop_vars(var_name, errors="ignore")
+    # Retained coordinates already belong to the source. Add only newly
+    # generated core coordinates, then insert the coordinate-free payload;
+    # Dataset.assign(DataArray) may discard part of a shared native index group.
+    generated = tuple(name for name in converted.coords if name not in topology.coords)
+    coordinates = xr.Coordinates(
+        {name: converted.coords[name].variable for name in generated},
+        indexes={name: converted.xindexes[name] for name in generated if name in converted.xindexes},
+    )
+    out = topology.assign_coords(coordinates)
+    out = out.assign({var_name: converted.variable})
+    return transfer_dataset_attrs(source_ds, out, validate=False)
 
 
 def finalize_conversion_dataset(

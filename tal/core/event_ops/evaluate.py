@@ -3,11 +3,24 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
+from tal.utils.xarray_namespace import rename_dims_collision_safe
+
+from ..dataset_ownership import analysis_object_dataset
 from ..orchestration.axis_map import resolve_role_axis_map
+from ..orchestration.indexing import (
+    capture_index_topology,
+    dimension_coordinates,
+    lane_index_groups,
+    require_exact_lane_indexes,
+    without_index_topology,
+)
 from ..orchestration.inputs import coerce_analysis_object_input
 from ..orchestration.resolve import resolve_param_runtime_context
 from ..param_ops import ParamEvalOptions
-from tal.utils.xarray_namespace import rename_dims_collision_safe
+from ..param_ops.query_metadata import (
+    inherited_query_metadata_names,
+    without_inherited_query_metadata,
+)
 from .resolve import EventEvalContext
 from .types import (
     AndNode,
@@ -28,6 +41,23 @@ def _ensure_numeric(da: xr.DataArray, *, owner: str, field: str) -> None:
     raise ValueError(f"{owner}: {field} must be numeric, got dtype {da.dtype!r}.")
 
 
+def _numerical_condition_array(value: xr.DataArray, *, param_name: str) -> xr.DataArray:
+    """Remove generated auxiliaries while retaining labels and ordinary metadata."""
+    out = without_inherited_query_metadata(value)
+    if param_name not in out.coords or param_name in out.xindexes:
+        return out
+    return out.drop_vars(param_name)
+
+
+def _expand_operand_dims(value: xr.DataArray, *, clock: xr.DataArray) -> xr.DataArray:
+    """Expand numerical lanes by sizes without indexing metadata carriers."""
+    out = value
+    for dim in clock.dims:
+        if dim not in out.dims:
+            out = out.expand_dims({dim: clock.sizes[dim]})
+    return out
+
+
 def _align_operand_to_clock(
     operand: xr.DataArray,
     *,
@@ -41,13 +71,17 @@ def _align_operand_to_clock(
     for dim in operand.dims:
         if not operand.get_index(dim).equals(clock.get_index(dim)):
             raise ValueError(f"{owner}: {field} labels for dim {dim!r} must match context clock labels.")
+        if lane_index_groups(operand, lane_dim=dim):
+            require_exact_lane_indexes(operand, clock, lane_dim=dim, owner=owner, what=field)
     try:
-        out, _ = xr.broadcast(operand, clock)
+        numerical_operand = _numerical_condition_array(operand, param_name=str(clock.name))
+        out = _expand_operand_dims(numerical_operand, clock=clock)
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"{owner}: {field} could not be broadcast to context clock dims {clock.dims!r}."
         ) from exc
-    return out.transpose(*clock.dims)
+    projected = without_index_topology(out, dims=tuple(clock.dims))
+    return projected.assign_coords(dimension_coordinates(clock, dims=tuple(clock.dims))).transpose(*clock.dims)
 
 
 def _resolve_named_operand(
@@ -83,7 +117,11 @@ def _resolve_ao_operand(
         source_clock=context.clock,
         owner=owner,
     )
-    query = rename_dims_collision_safe(context.clock, mapping=to_target)
+    numerical = xr.DataArray(
+        context.clock.variable,
+        coords=capture_index_topology(context.runtime.ds, dims=context.runtime.batch_dims).coordinates,
+    )
+    query = rename_dims_collision_safe(numerical, mapping=to_target)
     opts = ParamEvalOptions(method=context.opts.ao_interp)
     try:
         aligned = target.param.at(
@@ -97,14 +135,37 @@ def _resolve_ao_operand(
         )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{owner}: failed to align AO operand on context clock.") from exc
-    data_vars = list(aligned.unsafe_data.data_vars)
+    aligned_ds = analysis_object_dataset(aligned)
+    data_vars = list(aligned_ds.data_vars)
     if len(data_vars) != 1:
         raise ValueError(
             f"{owner}: AO operand must resolve to exactly one numeric data variable, got {len(data_vars)}."
         )
-    resolved = aligned.unsafe_data.data_vars[data_vars[0]]
+    resolved = aligned_ds.data_vars[data_vars[0]]
+    resolved = without_inherited_query_metadata(resolved)
+    if target_runtime.spec.name in resolved.coords and target_runtime.spec.name not in resolved.xindexes:
+        resolved = resolved.drop_vars(target_runtime.spec.name)
     to_context = {dst: src for src, dst in to_target.items()}
-    return rename_dims_collision_safe(resolved, mapping=to_context)
+    restored = rename_dims_collision_safe(resolved, mapping=to_context)
+    projected = without_index_topology(restored, dims=context.dims)
+    return projected.assign_coords(dimension_coordinates(context.runtime.ds, dims=context.dims))
+
+
+def _broadcast_scalar_operand(
+    operand: object,
+    *,
+    clock: xr.DataArray,
+    owner: str,
+    field: str,
+) -> xr.DataArray:
+    scalar_dtype = np.asarray(operand).dtype
+    scalar_is_numeric = np.issubdtype(scalar_dtype, np.number)
+    scalar_is_timedelta = np.issubdtype(scalar_dtype, np.timedelta64)
+    if not scalar_is_numeric or scalar_is_timedelta:
+        raise ValueError(f"{owner}: {field} must be numeric, got dtype {scalar_dtype!r}.")
+    numerical_clock = _numerical_condition_array(clock, param_name=str(clock.name))
+    broadcast = xr.full_like(numerical_clock, operand, dtype=scalar_dtype)
+    return broadcast.drop_attrs(deep=False).rename(None)
 
 
 def _resolve_operand(
@@ -120,7 +181,7 @@ def _resolve_operand(
     if isinstance(operand, xr.DataArray):
         return _align_operand_to_clock(operand, clock=context.clock, owner=owner, field=field)
     if np.isscalar(operand):
-        return xr.full_like(context.clock, operand)
+        return _broadcast_scalar_operand(operand, clock=context.clock, owner=owner, field=field)
     return _align_operand_to_clock(
         _resolve_ao_operand(operand, context=context, owner=owner),
         clock=context.clock,
@@ -211,6 +272,14 @@ def _eval_node(node: ConditionNode, *, context: EventEvalContext, owner: str) ->
     raise TypeError(f"{owner}: unsupported condition node type {type(node).__name__}.")
 
 
+def _restore_condition_metadata(value: xr.DataArray, *, context: EventEvalContext) -> xr.DataArray:
+    ds = context.runtime.ds
+    names = (*inherited_query_metadata_names(ds), context.runtime.spec.name)
+    variables = {name: ds.coords[name].variable for name in names if name not in ds.xindexes}
+    projected = value.drop_vars(tuple(variables), errors="ignore")
+    return projected.assign_coords(xr.Coordinates(variables, indexes={}))
+
+
 def evaluate_mask(
     condition: Condition,
     *,
@@ -240,7 +309,9 @@ def evaluate_mask(
     if not isinstance(condition, Condition):
         raise TypeError(f"{owner}: condition must be Condition.")
     evaluated = _eval_node(condition.node, context=context, owner=owner)
-    return (evaluated.truth & evaluated.determinate & context.valid_mask).astype(bool)
+    valid = _numerical_condition_array(context.valid_mask, param_name=context.runtime.spec.name)
+    effective = (evaluated.truth & evaluated.determinate & valid).astype(bool)
+    return _restore_condition_metadata(effective, context=context).drop_attrs(deep=False)
 
 
 __all__ = ["evaluate_mask"]

@@ -46,7 +46,7 @@ def add(
     ...     validate=True,
     ... ))
     >>> out = add(left, right)
-    >>> out.unsafe_data["datavar"].to_numpy().tolist()
+    >>> out.as_dataset()["datavar"].to_numpy().tolist()
     [4.0, 6.0]
     """
     return run_elementwise_binary(

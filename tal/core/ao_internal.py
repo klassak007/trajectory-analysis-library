@@ -11,6 +11,8 @@ def finalize_structural(
     *,
     validate: bool,
     rename_map: Mapping[str, str] | None = None,
+    validated_registry: Mapping[str, object] | None = None,
+    preserve_sequence_topology: bool = False,
 ):
     """Centralized wrapper for AO structural finalization internals.
 
@@ -34,7 +36,13 @@ def finalize_structural(
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    return ao._finalize_structural(ds, validate=validate, rename_map=rename_map)
+    return ao._finalize_structural(
+        ds,
+        validate=validate,
+        rename_map=rename_map,
+        validated_registry=validated_registry,
+        preserve_sequence_topology=preserve_sequence_topology,
+    )
 
 
 def from_unvalidated_like(ao, ds: xr.Dataset):
@@ -56,7 +64,7 @@ def from_unvalidated_like(ao, ds: xr.Dataset):
     -----
     Raises deterministic fail-closed errors when semantic/layout assumptions are not met.
     """
-    return ao.__class__._from_unvalidated(ds)
+    return ao._rewrap_dataset(ds, validate=False)
 
 
 __all__ = ["finalize_structural", "from_unvalidated_like"]

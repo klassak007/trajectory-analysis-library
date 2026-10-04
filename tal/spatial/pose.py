@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Literal, Self
 
 import numpy as np
 import xarray as xr
@@ -10,71 +11,80 @@ from tal.core.component_ops import (
     ComponentExtractOptions,
     extract_components,
 )
-from tal.core.component_ops.runtime_checks import require_component_numeric_var
+from tal.core.dataset_ownership import analysis_object_dataset
 from tal.core.orchestration.alignment_intent import select_topology_policy_with_intents
 from tal.core.orchestration.inputs import coerce_analysis_object_input
-from tal.core.orchestration.topology import SEMANTIC_NON_CORE_POLICY, STRICT_NON_CORE_POLICY, TopologyPolicy
 from tal.core.orchestration.runtime_checks import (
-    require_exact_labels,
-    require_explicit_unique_dim_labels,
     require_var_contains_dims,
     select_single_numeric_var,
 )
+from tal.core.orchestration.topology import (
+    SEMANTIC_NON_CORE_POLICY,
+    STRICT_NON_CORE_POLICY,
+)
+from tal.core.schema import UNSET, UnsetType
 from tal.core.schema_read import (
     read_param_coord_name,
     read_roles,
     read_sequence_size_coord_name,
     validate_schema_if_needed,
 )
+from tal.frames import FrameGraph
 from tal.utils.frame_schema import get_frames, set_frames
-from tal.utils.topology_operation_families import operation_intent_support_for_operation_family
+from tal.utils.topology_operation_families import (
+    operation_intent_support_for_operation_family,
+)
 
+from .association import (
+    attach_spatial_association,
+    finalize_spatial_from_source,
+)
+from .construction import (
+    SpatialConfigurationConstructionMixin,
+    apply_spatial_construction,
+    finish_spatial_factory_promotion,
+    preflight_spatial_construction,
+    prepare_spatial_construction,
+    prepare_spatial_factory_dataset,
+)
+from .field_recipes import PoseSpatialFieldFactoryMixin
+from .kinematics.paired_components import clear_component_registry
 from .metadata import (
     get_pose_rep,
     normalize_configuration_relation_semantics,
     set_pose_rep,
     set_position_rep,
     set_rotation_rep,
-    validate_spatial_roles,
 )
-from .policies.frame import resolve_components_shared_frames
 from .ops.frame_api_ops import pose_class_solve_path_transform
-from .kinematics.paired_components import (
-    PairAssemblyOptions,
-    align_paired_component_payloads,
-    build_paired_components_dataset,
-    clear_component_registry,
-    component_var_names,
-    resolve_component_spec,
-    resolve_pair_registry,
-    resolve_paired_roles,
-)
-from .kernels.pose_kernels import matrix3_to_quat_kernel
 from .ops.pose_apply_ops import pose_apply
-from .ops.pose_ops import pose_as_components, pose_as_matrix, pose_compose, pose_inverse, pose_to_rep
+from .ops.pose_component_ops import (
+    build_components_pose_dataset,
+    finalize_components_pose_output,
+)
+from .ops.pose_kernel_adapters import apply_matrix_to_components_kernel
+from .ops.pose_layout import enforce_matrix_layout, enforce_pose_layout
+from .ops.pose_matrix_validation import (
+    prepare_pose_matrix_for_conversion,
+    validate_pose_matrix_dataset,
+)
+from .ops.pose_ops import (
+    pose_as_components,
+    pose_as_matrix,
+    pose_compose,
+    pose_inverse,
+    pose_to_rep,
+)
 from .position import Position
 from .rotation import Rotation
-from .policies.wrap import wrap_as
 
 if TYPE_CHECKING:
     from tal.frames import Frame
-    from tal.core.param_ops.types import ParamEvalOptions
+
     from .path_solve import PathSolveOptions
-    from .temporal.options import PoseTemporalOptions
 
 _COMPONENT_NAMES = {"position", "rotation"}
-_XYZ_LABELS: tuple[str, str, str] = ("x", "y", "z")
-_QUAT_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
-_MATRIX_LABELS: tuple[str, str, str, str] = ("x", "y", "z", "w")
-_POSE_PAIR_OPTS = PairAssemblyOptions(
-    left_what="Position",
-    right_what="Rotation",
-    pair_what="pose",
-    left_component_name="position",
-    right_component_name="rotation",
-    left_expected_labels=_XYZ_LABELS,
-    right_expected_labels=_QUAT_LABELS,
-)
+
 
 def _coerce_pose_source(value: object, *, owner: str) -> AnalysisObject:
     return coerce_analysis_object_input(value, owner=owner)
@@ -102,117 +112,6 @@ def _coerce_position_operand(value: object, *, owner: str) -> Position:
         raise ValueError(f"{owner}: position operand is not a valid Position: {exc}") from exc
 
 
-def _required_non_core_dims(sequence_dim: str | None, batch_dims: tuple[str, ...]) -> tuple[str, ...]:
-    if sequence_dim is None:
-        required_non_core_dims = tuple(batch_dims)
-    else:
-        required_non_core_dims = (sequence_dim, *batch_dims)
-    return required_non_core_dims
-
-
-def _resolve_pose_component_specs(
-    ds: xr.Dataset,
-    *,
-    owner: str,
-    core_dims: tuple[str, ...],
-) -> tuple[tuple[str, str], tuple[str, str]]:
-    registry = resolve_pair_registry(
-        ds,
-        owner=owner,
-        pair_what="Pose",
-        left_component_name=_POSE_PAIR_OPTS.left_component_name,
-        right_component_name=_POSE_PAIR_OPTS.right_component_name,
-    )
-    pos_spec = resolve_component_spec(
-        registry[_POSE_PAIR_OPTS.left_component_name],
-        component_name=_POSE_PAIR_OPTS.left_component_name,
-        core_dims=core_dims,
-        expected_labels=_POSE_PAIR_OPTS.left_expected_labels,
-        owner=owner,
-        pair_what="Pose",
-    )
-    rot_spec = resolve_component_spec(
-        registry[_POSE_PAIR_OPTS.right_component_name],
-        component_name=_POSE_PAIR_OPTS.right_component_name,
-        core_dims=core_dims,
-        expected_labels=_POSE_PAIR_OPTS.right_expected_labels,
-        owner=owner,
-        pair_what="Pose",
-    )
-    return pos_spec, rot_spec
-
-
-def _enforce_components_layout_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    declared, sequence_dim, batch_dims, core_dims = read_roles(ds)
-    if not declared:
-        raise ValueError(f"{owner}: Pose requires declared roles.")
-    if len(core_dims) != 2:
-        raise ValueError(f"{owner}: Pose components layout requires exactly two core dims; got {core_dims!r}.")
-    required_non_core_dims = _required_non_core_dims(sequence_dim, batch_dims)
-    (pos_dim, pos_var), (rot_dim, rot_var) = _resolve_pose_component_specs(ds, owner=owner, core_dims=core_dims)
-    if pos_dim == rot_dim:
-        raise ValueError(f"{owner}: Pose position/rotation components must use distinct core dims.")
-    require_component_numeric_var(
-        ds,
-        component_name="position",
-        var_name=pos_var,
-        required_dims=required_non_core_dims + (pos_dim,),
-        owner=owner,
-        operand="Pose",
-    )
-    require_component_numeric_var(
-        ds,
-        component_name="rotation",
-        var_name=rot_var,
-        required_dims=required_non_core_dims + (rot_dim,),
-        owner=owner,
-        operand="Pose",
-    )
-    pos_labels = require_explicit_unique_dim_labels(ds, dim=pos_dim, owner=owner, what="Pose position")
-    rot_labels = require_explicit_unique_dim_labels(ds, dim=rot_dim, owner=owner, what="Pose rotation")
-    require_exact_labels(pos_labels, expected=_XYZ_LABELS, owner=owner, what=f"Pose position core dim {pos_dim!r}")
-    require_exact_labels(rot_labels, expected=_QUAT_LABELS, owner=owner, what=f"Pose rotation core dim {rot_dim!r}")
-
-
-def _enforce_matrix_layout_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    declared, _, _, core_dims = read_roles(ds)
-    if not declared:
-        raise ValueError(f"{owner}: Pose requires declared roles.")
-    if len(core_dims) != 2:
-        raise ValueError(f"{owner}: Pose matrix layout requires exactly two core dims; got {core_dims!r}.")
-    row_dim, col_dim = core_dims
-    if row_dim == col_dim:
-        raise ValueError(f"{owner}: Pose matrix core dims must be distinct; got {core_dims!r}.")
-    var_name = select_single_numeric_var(ds, owner=owner, what="Pose matrix layout")
-    require_var_contains_dims(
-        ds,
-        var_name=var_name,
-        required_dims=(row_dim, col_dim),
-        owner=owner,
-        what="Pose matrix layout",
-    )
-    if int(ds.sizes.get(row_dim, -1)) != 4 or int(ds.sizes.get(col_dim, -1)) != 4:
-        raise ValueError(f"{owner}: Pose matrix core dims must both have length 4.")
-    row_labels = require_explicit_unique_dim_labels(ds, dim=row_dim, owner=owner, what="Pose matrix")
-    col_labels = require_explicit_unique_dim_labels(ds, dim=col_dim, owner=owner, what="Pose matrix")
-    require_exact_labels(row_labels, expected=_MATRIX_LABELS, owner=owner, what=f"Pose matrix row dim {row_dim!r}")
-    require_exact_labels(col_labels, expected=_MATRIX_LABELS, owner=owner, what=f"Pose matrix col dim {col_dim!r}")
-
-
-def _enforce_pose_dataset_invariants(ds: xr.Dataset, *, owner: str) -> None:
-    candidate = validate_schema_if_needed(ds)
-    validate_spatial_roles(candidate, owner=owner)
-    _ = get_frames(candidate)
-    rep = get_pose_rep(candidate, owner=owner)
-    if rep == "components":
-        _enforce_components_layout_invariants(candidate, owner=owner)
-        return
-    if rep == "matrix":
-        _enforce_matrix_layout_invariants(candidate, owner=owner)
-        return
-    raise ValueError(f"{owner}: unsupported pose representation {rep!r}.")
-
-
 def _normalize_pose_metadata(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     rep = get_pose_rep(ds, owner=owner)
     out = set_pose_rep(ds, rep=rep, validate=False, owner=owner)
@@ -223,72 +122,18 @@ def _normalize_pose_metadata(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
     )
 
 
-def _build_components_pose_dataset(
-    rotation_ds: xr.Dataset,
-    position_ds: xr.Dataset,
-    *,
-    owner: str,
-    validate: bool,
-    policy: TopologyPolicy,
-) -> xr.Dataset:
-    pos_dim, rot_dim = resolve_paired_roles(
-        position_ds,
-        rotation_ds,
-        owner=owner,
-        left_what="Position",
-        right_what="Rotation",
-    )
-    pos_var, rot_var = component_var_names(
-        position_ds,
-        rotation_ds,
-        owner=owner,
-        opts=_POSE_PAIR_OPTS,
-    )
-    aligned_position_ds, aligned_rotation_ds, sequence_dim, batch_dims = align_paired_component_payloads(
-        position_ds,
-        rotation_ds,
-        left_var=pos_var,
-        right_var=rot_var,
-        left_dim=pos_dim,
-        right_dim=rot_dim,
-        owner=owner,
-        opts=_POSE_PAIR_OPTS,
-        policy=policy,
-    )
-    return build_paired_components_dataset(
-        left_ds=aligned_position_ds,
-        right_ds=aligned_rotation_ds,
-        sequence_dim=sequence_dim,
-        batch_dims=batch_dims,
-        left_dim=pos_dim,
-        right_dim=rot_dim,
-        left_var=pos_var,
-        right_var=rot_var,
-        owner=owner,
-        validate=validate,
-        opts=_POSE_PAIR_OPTS,
-        policy=policy,
-    )
+def _validate_pose_matrix_if_needed(ds: xr.Dataset, *, owner: str) -> xr.Dataset:
+    if get_pose_rep(ds, owner=owner) != "matrix":
+        return ds
+    return validate_pose_matrix_dataset(ds, owner=owner)
 
 
 def _clear_component_registry_for_matrix_layout(
-    source: AnalysisObject,
+    source: xr.Dataset,
     *,
     owner: str,
 ) -> xr.Dataset:
-    return clear_component_registry(source.unsafe_data, owner=owner)
-
-
-def _wrap_pose_output(ds: xr.Dataset, *, validate: bool) -> "Pose":
-    return wrap_as(Pose, ds, validate=validate)
-
-
-def _wrap_position_output(ds: xr.Dataset, *, validate: bool) -> Position:
-    return wrap_as(Position, ds, validate=validate)
-
-
-def _wrap_rotation_output(ds: xr.Dataset, *, validate: bool) -> Rotation:
-    return wrap_as(Rotation, ds, validate=validate)
+    return clear_component_registry(source, owner=owner)
 
 
 def _resolve_quat_dim_name(ds: xr.Dataset) -> str:
@@ -296,14 +141,6 @@ def _resolve_quat_dim_name(ds: xr.Dataset) -> str:
         if candidate not in ds.dims:
             return candidate
     raise ValueError("spatial.pose.decompose: unable to allocate quaternion output dim name.")
-
-
-def _matrix3_to_quat_decompose_kernel(values: np.ndarray) -> np.ndarray:
-    owner = "spatial.pose.decompose"
-    try:
-        return matrix3_to_quat_kernel(values)
-    except ValueError as exc:
-        raise ValueError(f"{owner}: matrix decomposition quaternion kernel failed.") from exc
 
 
 def _build_matrix_component_outputs(
@@ -348,20 +185,24 @@ def _build_matrix_component_outputs(
         **base_kwargs,
     )
     return pos_ao, rot_ao
-def _finalize_components_pose_output(
-    ds: xr.Dataset,
-    *,
-    parent: str | None,
-    child: str | None,
-    validate: bool,
-    owner: str,
-) -> "Pose":
-    ds = set_pose_rep(ds, rep="components", validate=False, owner=owner)
-    ds = set_frames(ds, parent=parent, child=child, validate=False)
-    return _wrap_pose_output(ds, validate=validate)
 
-class Pose(AnalysisObject):
+class Pose(
+    PoseSpatialFieldFactoryMixin,
+    SpatialConfigurationConstructionMixin,
+    AnalysisObject,
+):
     """Rigid-body pose type (rotation + translation).
+
+    Parameters
+    ----------
+    data : AnalysisObject, xarray.Dataset, or xarray.DataArray
+        Pose payload accepted by the typed ownership boundary.
+    parent, child, expressed_in : str or None, optional
+        Frame declarations to inherit, confirm, add, or explicitly clear. Omitting a
+        declaration inherits it from ``data``.
+    graph : FrameGraph or None, optional
+        Passive wrapper association. Omission inherits any association from ``data``;
+        this does not register the pose.
 
     Notes
     -----
@@ -370,28 +211,66 @@ class Pose(AnalysisObject):
 
     CANONICAL_POSITION_REP: str = "cart"
     CANONICAL_ROTATION_REP: str = "quat"
-    def __init__(self, data: "AnalysisObject | xr.Dataset | xr.DataArray") -> None:
-        source = _coerce_pose_source(data, owner="spatial.pose.__init__")
-        super().__init__(source.unsafe_data)
-        self._normalize_metadata(owner="spatial.pose.__init__")
-        self._enforce_invariants(owner="spatial.pose.__init__")
+    SPATIAL_CONSTRUCTION_OWNER = "spatial.pose.__init__"
+    SPATIAL_SOURCE_COERCER = staticmethod(_coerce_pose_source)
+    SPATIAL_POST_ENFORCE = staticmethod(_validate_pose_matrix_if_needed)
     @classmethod
     def _from_validated(cls, ds: xr.Dataset | xr.DataArray) -> "Pose":
-        obj = super()._from_validated(ds)
-        obj._normalize_metadata(owner=f"{cls.__name__}._from_validated")
-        obj._enforce_invariants(owner=f"{cls.__name__}._from_validated")
+        owner = f"{cls.__name__}._from_validated"
+        obj = cls._from_rigid_validated(ds, owner=owner)
+        obj._bind_dataset(_validate_pose_matrix_if_needed(analysis_object_dataset(obj), owner=owner))
         return obj
     @classmethod
-    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray) -> "Pose":
-        obj = super()._from_unvalidated(ds)
+    def _from_rigid_validated(
+        cls,
+        ds: xr.Dataset | xr.DataArray,
+        *,
+        owner: str,
+    ) -> "Pose":
+        """Wrap data whose matrix payload has already passed rigid validation."""
+        obj = super()._from_validated(ds)
+        obj._normalize_metadata(owner=owner)
+        enforce_pose_layout(
+            analysis_object_dataset(obj),
+            owner=owner,
+            schema_prepared=True,
+        )
+        return obj
+    @classmethod
+    def _from_unvalidated(cls, ds: xr.Dataset | xr.DataArray, *, schema_prepared: bool = False) -> "Pose":
+        obj = super()._from_unvalidated(ds, schema_prepared=schema_prepared)
         obj._normalize_metadata(owner=f"{cls.__name__}._from_unvalidated")
         obj._enforce_invariants(owner=f"{cls.__name__}._from_unvalidated")
         return obj
+    @classmethod
+    def _from_composite_committed(
+        cls,
+        ds: xr.Dataset,
+        *,
+        validate: bool,
+    ) -> Self:
+        owner = f"{cls.__name__}._from_composite_committed"
+        if validate:
+            obj = super()._from_validated(ds)
+        else:
+            obj = super()._from_unvalidated(ds, schema_prepared=True)
+        enforce_pose_layout(
+            analysis_object_dataset(obj),
+            owner=owner,
+            schema_prepared=True,
+            allow_matrix_auxiliary=not validate,
+        )
+        if validate:
+            validated = _validate_pose_matrix_if_needed(
+                analysis_object_dataset(obj), owner=owner
+            )
+            obj._bind_dataset(validated)
+        return obj
     def _normalize_metadata(self, *, owner: str) -> None:
-        normalized = _normalize_pose_metadata(self.unsafe_data, owner=owner)
+        normalized = _normalize_pose_metadata(analysis_object_dataset(self), owner=owner)
         self._bind_dataset(normalized)
     def _enforce_invariants(self, *, owner: str) -> None:
-        _enforce_pose_dataset_invariants(self.unsafe_data, owner=owner)
+        enforce_pose_layout(analysis_object_dataset(self), owner=owner)
     @property
     def preferred_interpolator(self) -> str:
         """Return the default temporal interpolation strategy for poses.
@@ -420,6 +299,10 @@ class Pose(AnalysisObject):
         rotation: object,
         position: object,
         *,
+        parent: str | None | UnsetType = UNSET,
+        child: str | None | UnsetType = UNSET,
+        expressed_in: str | None | UnsetType = UNSET,
+        graph: FrameGraph | None | UnsetType = UNSET,
         validate: bool = True,
     ) -> "Pose":
         """Build a pose from compatible rotation and position components.
@@ -430,6 +313,12 @@ class Pose(AnalysisObject):
             Rotation-like input coercible to :class:`Rotation`.
         position : object
             Position-like input coercible to :class:`Position`.
+        parent, child, expressed_in : str or None, optional
+            Frame declarations to inherit, confirm, add, or explicitly clear. Omission
+            inherits the corresponding declaration from the inputs.
+        graph : FrameGraph or None, optional
+            Passive wrapper association. Omission inherits a compatible input
+            association; it does not mutate graph topology.
         validate : bool, optional
             When ``True``, validate output spatial/schema invariants before
             returning.
@@ -461,13 +350,26 @@ class Pose(AnalysisObject):
         ...     core_dims=("axis",),
         ...     validate=True,
         ... ))
-        >>> sorted(Pose.from_components(rot, pos).unsafe_data.data_vars)
+        >>> sorted(Pose.from_components(rot, pos).as_dataset().data_vars)
         ['position', 'rotation']
         """
         owner = "spatial.pose.from_components"
+        overrides = preflight_spatial_construction(
+            parent=parent,
+            child=child,
+            expressed_in=expressed_in,
+            graph=graph,
+            owner=owner,
+        )
         rot = _coerce_rotation_operand(rotation, owner=owner)
         pos = _coerce_position_operand(position, owner=owner)
-        parent, child = resolve_components_shared_frames(rot.unsafe_data, pos.unsafe_data, owner=owner, left_name="rotation", right_name="position")
+        plan = prepare_spatial_construction(
+            (rot, pos),
+            overrides=overrides,
+            owner=owner,
+        )
+        rot_ds = analysis_object_dataset(rot)
+        pos_ds = analysis_object_dataset(pos)
         selection = select_topology_policy_with_intents(
             (rot, pos),
             owner=owner,
@@ -476,19 +378,29 @@ class Pose(AnalysisObject):
             strict_policy=STRICT_NON_CORE_POLICY,
             semantic_policy=SEMANTIC_NON_CORE_POLICY,
         )
-        ds = _build_components_pose_dataset(
-            rot.unsafe_data,
-            pos.unsafe_data,
+        ds = build_components_pose_dataset(
+            rot_ds,
+            pos_ds,
             owner=owner,
-            validate=validate,
             policy=selection.policy,
         )
-        return _finalize_components_pose_output(ds, parent=parent, child=child, validate=validate, owner=owner)
+        return finalize_components_pose_output(
+            ds,
+            plan=plan,
+            validate=validate,
+            owner=owner,
+            prototype=cls,
+            resource_sources=(rot_ds, pos_ds),
+        )
     @classmethod
     def from_matrix(
         cls,
         matrix: object,
         *,
+        parent: str | None | UnsetType = UNSET,
+        child: str | None | UnsetType = UNSET,
+        expressed_in: str | None | UnsetType = UNSET,
+        graph: FrameGraph | None | UnsetType = UNSET,
         validate: bool = True,
     ) -> "Pose":
         """Construct a pose from a homogeneous matrix layout dataset.
@@ -497,18 +409,32 @@ class Pose(AnalysisObject):
         ----------
         matrix : object
             Operand/component input consumed by this operation.
+        parent, child, expressed_in : str or None, optional
+            Frame declarations to inherit, confirm, add, or explicitly clear. Omission
+            inherits the corresponding declaration from ``matrix``.
+        graph : FrameGraph or None, optional
+            Passive wrapper association. Omission inherits any association from
+            ``matrix``; it does not mutate graph topology.
         validate : bool, optional
-            When ``True``, validate output schema/layout invariants before returning.
+            When ``True``, validate output schema, layout, and rigid-transform
+            invariants before returning.
 
         Returns
         -------
         Pose
             Result of applying this operation with TAL semantic constraints preserved.
 
+        Raises
+        ------
+        ValueError
+            If a structurally valid matrix is non-finite, not a proper rigid
+            transform, or has a malformed homogeneous bottom row.
+
         Notes
         -----
         The input must already declare two 4-element core dimensions containing
-        homogeneous transform matrices.
+        homogeneous transform matrices. Validation is immediate for eager
+        arrays and remains lazy for Dask-backed payloads.
 
         Examples
         --------
@@ -523,14 +449,35 @@ class Pose(AnalysisObject):
         ...     core_dims=("row", "col"),
         ...     validate=True,
         ... )
-        >>> Pose.from_matrix(ao).unsafe_data["pose_matrix"].shape[-2:]
+        >>> Pose.from_matrix(ao).as_dataset()["pose_matrix"].shape[-2:]
         (4, 4)
         """
         owner = "spatial.pose.from_matrix"
-        source = _coerce_pose_source(matrix, owner=owner)
+        overrides = preflight_spatial_construction(
+            parent=parent,
+            child=child,
+            expressed_in=expressed_in,
+            graph=graph,
+            owner=owner,
+        )
+        source_ao = _coerce_pose_source(matrix, owner=owner)
+        plan = prepare_spatial_construction(
+            (source_ao,),
+            overrides=overrides,
+            owner=owner,
+        )
+        source = prepare_spatial_factory_dataset(source_ao, owner=owner)
         ds = _clear_component_registry_for_matrix_layout(source, owner=owner)
         ds = set_pose_rep(ds, rep="matrix", validate=False, owner=owner)
-        return _wrap_pose_output(ds, validate=validate)
+        ds = apply_spatial_construction(ds, plan=plan, owner=owner)
+        if validate:
+            enforce_matrix_layout(ds, owner=owner)
+            ds = validate_pose_matrix_dataset(ds, owner=owner)
+            result = cls._from_rigid_validated(ds, owner=owner)
+        else:
+            result = cls._from_unvalidated(ds)
+        attach_spatial_association(result, plan.association)
+        return finish_spatial_factory_promotion(source_ao, result)
     def decompose(self, *, validate: bool = True) -> tuple[Position, Rotation]:
         """Decompose this pose into ``(Position, Rotation)`` components.
 
@@ -555,7 +502,7 @@ class Pose(AnalysisObject):
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
         >>> position, rotation = pose.decompose()  # doctest: +SKIP
         """
-        rep = get_pose_rep(self.unsafe_data, owner="spatial.pose.decompose")
+        rep = get_pose_rep(analysis_object_dataset(self), owner="spatial.pose.decompose")
         if rep == "components":
             return self._decompose_components(validate=validate)
         return self._decompose_matrix(validate=validate)
@@ -583,7 +530,7 @@ class Pose(AnalysisObject):
         Examples
         --------
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
-        >>> pose.to_rep("matrix").unsafe_data["pose_matrix"].shape[-2:]  # doctest: +SKIP
+        >>> pose.to_rep("matrix").as_dataset()["pose_matrix"].shape[-2:]  # doctest: +SKIP
         (4, 4)
         """
         return pose_to_rep(self, rep=rep, validate=validate)
@@ -608,7 +555,7 @@ class Pose(AnalysisObject):
         Examples
         --------
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
-        >>> sorted(pose.as_components().unsafe_data.data_vars)  # doctest: +SKIP
+        >>> sorted(pose.as_components().as_dataset().data_vars)  # doctest: +SKIP
         ['position', 'rotation']
         """
         return pose_as_components(self, validate=validate)
@@ -633,7 +580,7 @@ class Pose(AnalysisObject):
         Examples
         --------
         >>> pose = Pose.from_components(rot, pos)  # doctest: +SKIP
-        >>> pose.as_matrix().unsafe_data["pose_matrix"].shape[-2:]  # doctest: +SKIP
+        >>> pose.as_matrix().as_dataset()["pose_matrix"].shape[-2:]  # doctest: +SKIP
         (4, 4)
         """
         return pose_as_matrix(self, validate=validate)
@@ -670,6 +617,69 @@ class Pose(AnalysisObject):
         True
         """
         return pose_compose(self, other, validate=validate)
+
+    def register(self, *, on_conflict: str = "error") -> Self:
+        """Register this Pose as its associated graph edge provider.
+
+        Parameters
+        ----------
+        on_conflict : str, optional
+            Defaults to ``"error"``. Use ``"replace"`` to replace an existing
+            provider on the same graph relationship.
+
+        Returns
+        -------
+        Self
+            This exact Pose object after successful registration.
+
+        Raises
+        ------
+        TypeError
+            If ``on_conflict`` has the wrong type.
+        ValueError
+            If ``on_conflict`` has an unsupported value, or if the Pose has no
+            associated graph, lacks a canonical edge declaration, uses
+            unsupported exact sampling, or conflicts with graph topology or an
+            existing provider.
+
+        Notes
+        -----
+        Registration may create missing endpoint frames but never reparents an
+        existing child. Static and parameterized native-rate poses are accepted.
+        Exact unparameterized sequence providers remain available through
+        :func:`tal.spatial.bind_pose`. The graph stores a metadata-isolated,
+        association-free, non-owning provider projection.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import xarray as xr
+        >>> from tal.core import AnalysisObject
+        >>> from tal.frames import FrameGraph
+        >>> from tal.spatial import Pose
+        >>> labels = ["x", "y", "z", "w"]
+        >>> matrix = AnalysisObject.from_data(
+        ...     xr.DataArray(
+        ...         np.eye(4),
+        ...         dims=("row", "col"),
+        ...         coords={"row": labels, "col": labels},
+        ...         name="pose_matrix",
+        ...     ),
+        ...     core_dims=("row", "col"),
+        ... )
+        >>> graph = FrameGraph()
+        >>> pose = Pose.from_matrix(
+        ...     matrix, parent="world", child="body", graph=graph
+        ... )
+        >>> pose.register() is pose
+        True
+        >>> tuple(frame.id for frame in pose.frames.resolve())
+        ('world', 'body')
+        """
+        from .pose_binding import _register_pose
+
+        return _register_pose(self, on_conflict=on_conflict)
+
     def inverse(self, *, validate: bool = True) -> "Pose":
         """Return the inverse rigid transform.
 
@@ -684,10 +694,19 @@ class Pose(AnalysisObject):
         Pose
             Inverse rigid transform.
 
+        Raises
+        ------
+        ValueError
+            If a framed pose is expressed in a basis other than its parent, or
+            if remaining frame metadata has no declared parent. Re-express it
+            in the parent or complete/clear its framing before inversion.
+
         Notes
         -----
         The inverse preserves non-core topology and swaps transform direction
-        according to pose algebra.
+        according to pose algebra. It remains graph-free; for a third-frame
+        value, call ``value.express_in(parent).inverse()``. Only a value with
+        no parent, child, or expression basis is treated as fully unframed.
 
         Examples
         --------
@@ -735,7 +754,9 @@ class Pose(AnalysisObject):
         src: "Frame | str",
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
+        query: xr.DataArray | np.ndarray | Sequence[float] | float | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Pose":
@@ -748,11 +769,18 @@ class Pose(AnalysisObject):
         dst : Frame | str
             Destination frame identifier or ``Frame`` object.
         edge_pose_fn : object, optional
-            Callable resolving edge poses during frame-path traversal.
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
+        query : object, optional
+            Explicit direct query grid. A multidimensional DataArray uses its
+            leading dimensions as output batches and final dimension as the
+            query axis. Required for dynamic providers.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph``
             (override frame graph), ``strict`` (strict path checks), and
-            ``kinematics_support`` for velocity/acceleration transport metadata.
+            ``kinematics_support`` for velocity/acceleration transport metadata,
+            and ``temporal`` for native-rate provider evaluation.
         validate : bool, optional
             When ``True``, validate output schema/layout invariants before returning.
 
@@ -783,6 +811,8 @@ class Pose(AnalysisObject):
             src,
             dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
+            query=query,
             opts=opts,
             validate=validate,
         )
@@ -790,7 +820,8 @@ class Pose(AnalysisObject):
         self,
         dst: "Frame | str",
         *,
-        edge_pose_fn,
+        edge_pose_fn=None,
+        graph: FrameGraph | None = None,
         opts: "PathSolveOptions | None" = None,
         validate: bool = True,
     ) -> "Pose":
@@ -800,8 +831,10 @@ class Pose(AnalysisObject):
         ----------
         dst : Frame | str
             Destination frame id/object.
-        edge_pose_fn : object
-            Callable resolving pose edges for frame-path traversal.
+        edge_pose_fn : object, optional
+            Optional explicit parent-basis pose resolver; omitted calls use bound Pose providers.
+        graph : FrameGraph or None, optional
+            Use this graph with bound providers; cannot accompany non-None ``opts.graph``.
         opts : PathSolveOptions | None, optional
             When ``None``, defaults are used. Key fields are ``graph`` (override graph source), ``strict`` (strict path checks), and ``kinematics_support`` for velocity/acceleration transport metadata.
         validate : bool, optional
@@ -835,44 +868,46 @@ class Pose(AnalysisObject):
             self,
             dst,
             edge_pose_fn=edge_pose_fn,
+            graph=graph,
             opts=opts,
             validate=validate,
         )
     def _decompose_components(self, *, validate: bool) -> tuple[Position, Rotation]:
         owner = "spatial.pose.decompose"
-        source = AnalysisObject._from_validated(self.unsafe_data) if validate else AnalysisObject._from_unvalidated(self.unsafe_data)
+        source_ds = analysis_object_dataset(self)
+        source = AnalysisObject._from_validated(source_ds) if validate else AnalysisObject._from_unvalidated(source_ds)
         extracted = extract_components(source, opts=ComponentExtractOptions(names=("position", "rotation")), validate=validate)
-        parent, child = get_frames(self.unsafe_data)
-        pos_ds = set_position_rep(extracted["position"].unsafe_data, rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
-        rot_ds = set_rotation_rep(extracted["rotation"].unsafe_data, rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
+        parent, child = get_frames(source_ds)
+        pos_ds = set_position_rep(analysis_object_dataset(extracted["position"]), rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
+        rot_ds = set_rotation_rep(analysis_object_dataset(extracted["rotation"]), rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
         pos_ds = set_frames(pos_ds, parent=parent, child=child, validate=False)
         rot_ds = set_frames(rot_ds, parent=parent, child=child, validate=False)
-        return _wrap_position_output(pos_ds, validate=validate), _wrap_rotation_output(rot_ds, validate=validate)
+        return (
+            finalize_spatial_from_source(self, Position, pos_ds, validate=validate),
+            finalize_spatial_from_source(self, Rotation, rot_ds, validate=validate),
+        )
     def _decompose_matrix(self, *, validate: bool) -> tuple[Position, Rotation]:
         owner = "spatial.pose.decompose"
-        candidate = validate_schema_if_needed(self.unsafe_data)
+        candidate = validate_schema_if_needed(analysis_object_dataset(self))
         declared, seq_dim, batch_dims, core_dims = read_roles(candidate)
         if not declared:
             raise ValueError(f"{owner}: Pose requires declared roles.")
         row_dim, col_dim = core_dims
-        var_name = select_single_numeric_var(candidate, owner=owner, what="Pose matrix layout")
-        require_var_contains_dims(candidate, var_name=var_name, required_dims=(row_dim, col_dim), owner=owner, what="Pose matrix layout")
-        matrix = candidate[var_name]
-        rot_matrix = matrix.sel({row_dim: list(_XYZ_LABELS), col_dim: list(_XYZ_LABELS)})
-        translation = matrix.sel({row_dim: list(_XYZ_LABELS), col_dim: "w"})
-
-        quat_dim = _resolve_quat_dim_name(candidate)
-        quat = xr.apply_ufunc(
-            _matrix3_to_quat_decompose_kernel,
-            rot_matrix,
-            input_core_dims=[[row_dim, col_dim]],
-            output_core_dims=[[quat_dim]],
-            vectorize=False,
-            dask="parallelized",
-            output_dtypes=[np.float64],
-            dask_gufunc_kwargs={"output_sizes": {quat_dim: 4}},
+        var_name = select_single_numeric_var(
+            candidate,
+            owner=owner,
+            what="Pose matrix layout",
         )
-        quat = quat.assign_coords({quat_dim: list(_QUAT_LABELS)})
+        require_var_contains_dims(candidate, var_name=var_name, required_dims=(row_dim, col_dim), owner=owner, what="Pose matrix layout")
+        matrix = prepare_pose_matrix_for_conversion(candidate, owner=owner)
+        quat_dim = _resolve_quat_dim_name(candidate)
+        translation, quat = apply_matrix_to_components_kernel(
+            matrix,
+            row_dim=row_dim,
+            col_dim=col_dim,
+            pos_dim=row_dim,
+            quat_dim=quat_dim,
+        )
 
         param_name = read_param_coord_name(candidate)
         size_name = read_sequence_size_coord_name(candidate)
@@ -890,10 +925,13 @@ class Pose(AnalysisObject):
         )
 
         parent, child = get_frames(candidate)
-        pos_ds = set_position_rep(pos_ao.unsafe_data, rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
-        rot_ds = set_rotation_rep(rot_ao.unsafe_data, rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
+        pos_ds = set_position_rep(analysis_object_dataset(pos_ao), rep=self.CANONICAL_POSITION_REP, validate=False, owner=owner)
+        rot_ds = set_rotation_rep(analysis_object_dataset(rot_ao), rep=self.CANONICAL_ROTATION_REP, validate=False, owner=owner)
         pos_ds = set_frames(pos_ds, parent=parent, child=child, validate=False)
         rot_ds = set_frames(rot_ds, parent=parent, child=child, validate=False)
-        return _wrap_position_output(pos_ds, validate=validate), _wrap_rotation_output(rot_ds, validate=validate)
+        return (
+            finalize_spatial_from_source(self, Position, pos_ds, validate=validate),
+            finalize_spatial_from_source(self, Rotation, rot_ds, validate=validate),
+        )
 
 __all__ = ["Pose"]

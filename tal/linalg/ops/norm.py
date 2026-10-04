@@ -92,7 +92,7 @@ def norm(
     ...     core_dims=("axis",),
     ...     validate=True,
     ... ))
-    >>> norm(vec).unsafe_data["datavar"].to_numpy().tolist()
+    >>> norm(vec).as_dataset()["datavar"].to_numpy().tolist()
     [5.0]
     """
     owner = "linalg.norm"

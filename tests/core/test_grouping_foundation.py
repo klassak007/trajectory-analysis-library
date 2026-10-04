@@ -73,7 +73,7 @@ def _windowed_grouping_ao() -> AnalysisObject:
 
 
 def _external_key(ao: AnalysisObject, values: np.ndarray, *, name: str = "ext_key") -> xr.DataArray:
-    ds = ao.unsafe_data
+    ds = ao.as_dataset(copy="none")
     return xr.DataArray(
         values,
         dims=("trial", "sample"),
@@ -83,7 +83,7 @@ def _external_key(ao: AnalysisObject, values: np.ndarray, *, name: str = "ext_ke
 
 
 def _sequence_only_external_key(ao: AnalysisObject, values: np.ndarray, *, name: str = "seq_key") -> xr.DataArray:
-    ds = ao.unsafe_data
+    ds = ao.as_dataset(copy="none")
     return xr.DataArray(
         values,
         dims=("sample",),
@@ -195,7 +195,7 @@ def test_group_hard_p9a_004_grouping_key_alignment_requires_exact_label_match() 
     bad = xr.DataArray(
         np.array([[1.0, 2.0, 3.0], [0.0, 1.0, 2.0]], dtype=float),
         dims=("trial", "sample"),
-        coords={"trial": ao.unsafe_data.coords["trial"], "sample": np.array([0, 1, 99], dtype=int)},
+        coords={"trial": ao.as_dataset(copy="none").coords["trial"], "sample": np.array([0, 1, 99], dtype=int)},
         name="bad_labels",
     )
     with pytest.raises(ValueError, match="exact|aligned|labels"):

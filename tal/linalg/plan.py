@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import xarray as xr
 
 from ..core.analysis_object import AnalysisObject
+from ..core.dataset_ownership import analysis_object_dataset
 from ..core.metadata_optional import shared_optional_name
 from ..core.orchestration.alignment import align_exact_for_plan
 from ..core.orchestration.alignment_intent import (
@@ -121,7 +122,7 @@ def _semantic_topology_for_context(
 ) -> SemanticTopology:
     if context.roles_declared:
         return resolve_semantic_topology_from_dataset(
-            context.ao.unsafe_data,
+            analysis_object_dataset(context.ao),
             var_name=context.var_name,
             core_dims=context.core_dims,
             owner=owner,
